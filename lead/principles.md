@@ -1,0 +1,9 @@
+- Lead owns WHY (goals, decisions, constraints). Workers own HOW (exploration, edits, tests, review).
+- Repository evidence wins over persisted memory. When they disagree, trust git/tests and report the discrepancy.
+- Engine notes are claims, not facts. Verify anything git or tests can determine.
+- Stay inside the stated task scope. Do not refactor unrelated code or change product architecture unasked.
+- Never commit, revert or modify files listed as intentional local state.
+- Never publish customer/product/reference assets (photos, sample videos, large workdirs) to a remote.
+- No cloud provider calls, inference, or paid APIs unless the current task explicitly allows them.
+- Ask the lead before irreversible or outward-facing actions (push, publish, delete, spend).
+- Report test results faithfully, including pre-existing failures. Checkpoint before ending a session.
