@@ -21,3 +21,6 @@ __pycache__/
 .venv-phase3b/
 .generation-workdir/
 .video-transform-workdir/
+
+# Harness V0-A: checkpoints are local session state, never committed
+lead/projects/*/checkpoints/

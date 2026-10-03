@@ -17,8 +17,9 @@
     "video:transform": "node --env-file=.env scripts/video-transform.ts",
     "video:phase2": "node benchmarks/phase2/build.mjs",
     "video:phase3": "node benchmarks/phase3/compose-review.mjs",
-    "test": "node --test src/**/*.test.ts",
-    "test:integration": "node --test src/**/*.itest.ts"
+    "test": "node --test 'src/**/*.test.ts'",
+    "test:integration": "node --test 'src/**/*.itest.ts'",
+    "harness": "node src/harness/cli.ts"
   },
   "keywords": [],
   "author": "",
