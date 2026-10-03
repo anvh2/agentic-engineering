@@ -36,6 +36,13 @@ The agent asks for approval before it changes files or runs commands. When it cr
 
 The local filesystem tools stay inside the project-level `workspace/` directory. Shell commands start in that directory, but `LocalSandbox` does not provide operating-system isolation by default. Review command approvals carefully, and do not expose this template through an unauthenticated public server.
 
+## Local video transformation pipeline
+
+A local, video-to-video character/outfit transformation MVP lives in
+`src/mastra/video/` (CLI: `npm run video:transform`; Mastra workflow:
+`videoTransformationWorkflow`). See [VIDEO_TRANSFORMATION.md](VIDEO_TRANSFORMATION.md)
+for architecture, setup (ffmpeg + ComfyUI), usage, and current limitations.
+
 ## Storage
 
 The default `file:./mastra.db` database stores agent memory, tasks, and schedules locally. To use Turso, set `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` in `.env`.

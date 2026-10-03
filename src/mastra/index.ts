@@ -9,13 +9,17 @@ import {
   SensitiveDataFilter,
 } from '@mastra/observability';
 import { agent } from './agents/agent';
+import { codingWorkerGo, codingWorkerJs } from './agents/coding-worker';
 import { startScheduleTool, stopScheduleTool } from './tools/schedule-tools';
+import { codingTaskWorkflow } from './workflows/coding-task-workflow';
+import { videoTransformationWorkflow } from './workflows/video-transformation-workflow';
 
 export const mastra = new Mastra({
   bundler: {
     externals: ['@duckdb/node-bindings'],
   },
-  agents: { agent },
+  agents: { agent, codingWorkerGo, codingWorkerJs },
+  workflows: { codingTaskWorkflow, videoTransformationWorkflow },
   tools: { startScheduleTool, stopScheduleTool },
   storage: new MastraCompositeStore({
     id: 'composite-storage',

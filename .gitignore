@@ -12,3 +12,12 @@ src/mastra/public/
 .vercel
 *.duckdb
 *.duckdb.wal
+.workdir/
+
+# Recovery 2026-10-03: local runtime/cache output, not source or evidence
+.DS_Store
+__pycache__/
+*.pyc
+.venv-phase3b/
+.generation-workdir/
+.video-transform-workdir/

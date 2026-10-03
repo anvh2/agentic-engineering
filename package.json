@@ -7,7 +7,18 @@
   "scripts": {
     "dev": "mastra dev",
     "build": "mastra build",
-    "start": "mastra start"
+    "start": "mastra start",
+    "worker:demo": "node --env-file=.env scripts/demo-coding-worker.ts",
+    "workflow:demo": "node --env-file=.env scripts/demo-coding-task-workflow.ts",
+    "supervisor:demo": "node --env-file=.env scripts/demo-supervisor.ts",
+    "write-worker:demo": "node --env-file=.env scripts/demo-write-worker.ts",
+    "step16:real-coding-task": "node --env-file=.env scripts/step16-real-coding-task.ts",
+    "eshop:real-coding-task": "node --env-file=.env scripts/eshop-real-coding-task.ts",
+    "video:transform": "node --env-file=.env scripts/video-transform.ts",
+    "video:phase2": "node benchmarks/phase2/build.mjs",
+    "video:phase3": "node benchmarks/phase3/compose-review.mjs",
+    "test": "node --test src/**/*.test.ts",
+    "test:integration": "node --test src/**/*.itest.ts"
   },
   "keywords": [],
   "author": "",
@@ -22,11 +33,13 @@
     "@mastra/libsql": "1.20.0",
     "@mastra/memory": "1.26.2",
     "@mastra/observability": "1.17.0",
+    "diff": "^8.0.4",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "latest",
     "mastra": "1.25.0",
+    "playwright": "^1.63.0",
     "typescript": "^6.0.3"
   }
 }
