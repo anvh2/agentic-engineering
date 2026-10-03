@@ -1,0 +1,185 @@
+{
+  "prompt": [
+    0,
+    "30da585b-0179-4a67-9982-bcc324b59b76",
+    {
+      "1": {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {
+          "ckpt_name": "realisticVisionV60B1.safetensors"
+        }
+      },
+      "2": {
+        "class_type": "LoadImage",
+        "inputs": {
+          "image": "overview_3.png"
+        }
+      },
+      "3": {
+        "class_type": "IPAdapterUnifiedLoader",
+        "inputs": {
+          "model": [
+            "1",
+            0
+          ],
+          "preset": "PLUS (high strength)"
+        }
+      },
+      "4": {
+        "class_type": "IPAdapterAdvanced",
+        "inputs": {
+          "model": [
+            "3",
+            0
+          ],
+          "ipadapter": [
+            "3",
+            1
+          ],
+          "image": [
+            "2",
+            0
+          ],
+          "weight": 0.85,
+          "weight_type": "linear",
+          "combine_embeds": "concat",
+          "start_at": 0.0,
+          "end_at": 1.0,
+          "embeds_scaling": "V only"
+        }
+      },
+      "5": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {
+          "clip": [
+            "1",
+            1
+          ],
+          "text": "a young woman wearing a pale periwinkle short-sleeve babydoll blouse, oversized double-layer rounded Peter Pan collar with ruffle trim at the yoke seam, three flower-shaped buttons and vertical pintuck pleats down the center front, short puffed sleeves with elastic-gathered ruffle cuffs, loose relaxed silhouette, matte woven cotton fabric with soft drape, no print or logo, standing indoors near a window with soft natural light, waist-up vertical portrait, DSLR product marketing photograph, sharp focus on garment, clean neutral background"
+        }
+      },
+      "6": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {
+          "clip": [
+            "1",
+            1
+          ],
+          "text": "extra or missing buttons, wrong collar shape, single-layer collar, fitted or tailored cut, printed pattern, embroidery, logo, glossy satin or silk sheen, deformed hands, extra fingers, distorted face, cropped garment, blurry, lowres, watermark, text, oversaturated colors, changed garment color"
+        }
+      },
+      "7": {
+        "class_type": "EmptyLatentImage",
+        "inputs": {
+          "width": 576,
+          "height": 864,
+          "batch_size": 1
+        }
+      },
+      "8": {
+        "class_type": "KSampler",
+        "inputs": {
+          "model": [
+            "4",
+            0
+          ],
+          "positive": [
+            "5",
+            0
+          ],
+          "negative": [
+            "6",
+            0
+          ],
+          "latent_image": [
+            "7",
+            0
+          ],
+          "seed": 20260927,
+          "steps": 30,
+          "cfg": 6.5,
+          "sampler_name": "dpmpp_2m",
+          "scheduler": "karras",
+          "denoise": 1.0
+        }
+      },
+      "9": {
+        "class_type": "VAEDecode",
+        "inputs": {
+          "samples": [
+            "8",
+            0
+          ],
+          "vae": [
+            "1",
+            2
+          ]
+        }
+      },
+      "10": {
+        "class_type": "SaveImage",
+        "inputs": {
+          "images": [
+            "9",
+            0
+          ],
+          "filename_prefix": "phase3-keyframe-c3983258"
+        }
+      }
+    },
+    {
+      "client_id": "phase3-8ee7a4456cef4daaa24de70f21f0344d",
+      "create_time": 1790521065341
+    },
+    [
+      "10"
+    ]
+  ],
+  "outputs": {
+    "10": {
+      "images": [
+        {
+          "filename": "phase3-keyframe-c3983258_00001_.png",
+          "subfolder": "",
+          "type": "output"
+        }
+      ]
+    }
+  },
+  "status": {
+    "status_str": "success",
+    "completed": true,
+    "messages": [
+      [
+        "execution_start",
+        {
+          "prompt_id": "30da585b-0179-4a67-9982-bcc324b59b76",
+          "timestamp": 1790521065341
+        }
+      ],
+      [
+        "execution_cached",
+        {
+          "nodes": [],
+          "prompt_id": "30da585b-0179-4a67-9982-bcc324b59b76",
+          "timestamp": 1790521065345
+        }
+      ],
+      [
+        "execution_success",
+        {
+          "prompt_id": "30da585b-0179-4a67-9982-bcc324b59b76",
+          "timestamp": 1790521186644
+        }
+      ]
+    ]
+  },
+  "meta": {
+    "10": {
+      "node_id": "10",
+      "display_node": "10",
+      "parent_node": null,
+      "real_node_id": "10"
+    }
+  }
+}

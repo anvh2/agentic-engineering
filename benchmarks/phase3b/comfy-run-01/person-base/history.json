@@ -1,0 +1,146 @@
+{
+  "prompt": [
+    0,
+    "70bc01d2-5705-483d-8924-4913303123d4",
+    {
+      "1": {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {
+          "ckpt_name": "realisticVisionV60B1.safetensors"
+        }
+      },
+      "2": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {
+          "clip": [
+            "1",
+            1
+          ],
+          "text": "full length photograph, entire body visible from head to mid-thigh, wide shot, standing several feet from the camera, a realistic adult woman standing straight, front-facing camera, feet shoulder-width apart, both arms held a few inches out from the sides of the torso with a visible gap between each arm and the torso, elbows straight, hands relaxed at the sides, wearing a plain fitted white crew-neck short-sleeve T-shirt, simple round neckline, sleeves fully covering the shoulders and upper arms and ending above the elbow, plain cotton fabric with no prints, hair tied back away from the shoulders, simple plain neutral background, soft even lighting, normal realistic human body proportions and anatomy, sharp focus, plain e-commerce apparel catalog photograph, fashion lookbook full-body shot"
+        }
+      },
+      "3": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {
+          "clip": [
+            "1",
+            1
+          ],
+          "text": "tank top, camisole, spaghetti straps, strapless, sleeveless, bare shoulders, exposed chest, cleavage, bra strap, lingerie, bralette, choker, neck band, neckband, collar band, arm band, armband, arm cuff, elastic band, crossed arms, arms against torso, arms touching torso, arms hidden behind back, jacket, cardigan, scarf, hood, necklace, jewelry, accessories, long sleeves, sleeves past the elbow, hair covering shoulders or chest, close-up, headshot, bust shot, portrait crop, cropped at chest, cropped at waist, side profile, looking away, extra limbs, deformed hands, extra fingers, distorted anatomy, cluttered background, busy pattern background, blurry, lowres, watermark, text"
+        }
+      },
+      "4": {
+        "class_type": "EmptyLatentImage",
+        "inputs": {
+          "width": 576,
+          "height": 1024,
+          "batch_size": 1
+        }
+      },
+      "5": {
+        "class_type": "KSampler",
+        "inputs": {
+          "model": [
+            "1",
+            0
+          ],
+          "positive": [
+            "2",
+            0
+          ],
+          "negative": [
+            "3",
+            0
+          ],
+          "latent_image": [
+            "4",
+            0
+          ],
+          "seed": 20260927,
+          "steps": 30,
+          "cfg": 6.5,
+          "sampler_name": "dpmpp_2m",
+          "scheduler": "karras",
+          "denoise": 1.0
+        }
+      },
+      "6": {
+        "class_type": "VAEDecode",
+        "inputs": {
+          "samples": [
+            "5",
+            0
+          ],
+          "vae": [
+            "1",
+            2
+          ]
+        }
+      },
+      "7": {
+        "class_type": "SaveImage",
+        "inputs": {
+          "images": [
+            "6",
+            0
+          ],
+          "filename_prefix": "phase3b-person-base-41d95fa8"
+        }
+      }
+    },
+    {
+      "client_id": "phase3b-person-82bcf8c693974acf8a337a6eb49ca78b",
+      "create_time": 1790523106704
+    },
+    [
+      "7"
+    ]
+  ],
+  "outputs": {
+    "7": {
+      "images": [
+        {
+          "filename": "phase3b-person-base-41d95fa8_00001_.png",
+          "subfolder": "",
+          "type": "output"
+        }
+      ]
+    }
+  },
+  "status": {
+    "status_str": "success",
+    "completed": true,
+    "messages": [
+      [
+        "execution_start",
+        {
+          "prompt_id": "70bc01d2-5705-483d-8924-4913303123d4",
+          "timestamp": 1790523106704
+        }
+      ],
+      [
+        "execution_cached",
+        {
+          "nodes": [],
+          "prompt_id": "70bc01d2-5705-483d-8924-4913303123d4",
+          "timestamp": 1790523106705
+        }
+      ],
+      [
+        "execution_success",
+        {
+          "prompt_id": "70bc01d2-5705-483d-8924-4913303123d4",
+          "timestamp": 1790523253253
+        }
+      ]
+    ]
+  },
+  "meta": {
+    "7": {
+      "node_id": "7",
+      "display_node": "7",
+      "parent_node": null,
+      "real_node_id": "7"
+    }
+  }
+}

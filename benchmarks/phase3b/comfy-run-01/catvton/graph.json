@@ -1,0 +1,66 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "phase3b-person.png"
+    }
+  },
+  "2": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "overview_3.png"
+    }
+  },
+  "3": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "phase3b-mask.png"
+    }
+  },
+  "4": {
+    "class_type": "LoadCatVTONPipeline",
+    "inputs": {
+      "sd15_inpaint_path": "runwayml/stable-diffusion-inpainting",
+      "catvton_path": "zhengchong/CatVTON",
+      "mixed_precision": "fp16",
+      "device": "mps",
+      "attn_chunk_size": 512
+    }
+  },
+  "5": {
+    "class_type": "CatVTON",
+    "inputs": {
+      "pipe": [
+        "4",
+        0
+      ],
+      "target_image": [
+        "1",
+        0
+      ],
+      "refer_image": [
+        "2",
+        0
+      ],
+      "mask_image": [
+        "3",
+        0
+      ],
+      "seed": 20260927,
+      "steps": 50,
+      "cfg": 2.5,
+      "width": 512,
+      "height": 768
+    }
+  },
+  "6": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "5",
+        0
+      ],
+      "filename_prefix": "phase3b-catvton-1d6a7695"
+    }
+  }
+}

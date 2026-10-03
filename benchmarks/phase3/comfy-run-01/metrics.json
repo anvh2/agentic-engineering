@@ -1,0 +1,143 @@
+{
+  "phase": 3,
+  "profile": "576x864 txt2img, SD1.5 realisticVisionV60B1 + IPAdapter PLUS (garment reference, weight 0.85), 30 steps, cfg 6.5, dpmpp_2m/karras, seed fixed, denoise 1.0 (no img2img/motion)",
+  "referenceImageSha256": "8c34ef9eaef1bc4178d3f4bcb5a5cf0f04ee0e335de42a57f7196f06fcdeed49",
+  "startedAt": "2026-09-27T14:57:45Z",
+  "timeoutSeconds": 300,
+  "samples": [
+    {
+      "elapsedSeconds": 0.007507333008106798,
+      "ramFreeBytes": 6650265600,
+      "swap": "vm.swapusage: total = 3072.00M  used = 1939.69M  free = 1132.31M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 5.018296708003618,
+      "ramFreeBytes": 3887136768,
+      "swap": "vm.swapusage: total = 3072.00M  used = 1939.69M  free = 1132.31M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 10.09498833300313,
+      "ramFreeBytes": 1775550464,
+      "swap": "vm.swapusage: total = 3072.00M  used = 2464.75M  free = 607.25M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 15.135972375021083,
+      "ramFreeBytes": 1655619584,
+      "swap": "vm.swapusage: total = 4096.00M  used = 3490.44M  free = 605.56M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 20.155838875012705,
+      "ramFreeBytes": 1839906816,
+      "swap": "vm.swapusage: total = 4096.00M  used = 3450.44M  free = 645.56M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 25.17164495799807,
+      "ramFreeBytes": 1853095936,
+      "swap": "vm.swapusage: total = 4096.00M  used = 3442.44M  free = 653.56M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 30.185401082999306,
+      "ramFreeBytes": 1764851712,
+      "swap": "vm.swapusage: total = 4096.00M  used = 3402.44M  free = 693.56M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 35.19883962502354,
+      "ramFreeBytes": 1668235264,
+      "swap": "vm.swapusage: total = 4096.00M  used = 3330.56M  free = 765.44M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 40.21982070800732,
+      "ramFreeBytes": 1735901184,
+      "swap": "vm.swapusage: total = 4096.00M  used = 3364.62M  free = 731.38M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 45.23864433300332,
+      "ramFreeBytes": 1651277824,
+      "swap": "vm.swapusage: total = 4096.00M  used = 3349.19M  free = 746.81M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 50.251179792016046,
+      "ramFreeBytes": 1752793088,
+      "swap": "vm.swapusage: total = 4096.00M  used = 3355.94M  free = 740.06M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 55.26741887500975,
+      "ramFreeBytes": 2220703744,
+      "swap": "vm.swapusage: total = 4096.00M  used = 3171.81M  free = 924.19M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 61.10340454202378,
+      "ramFreeBytes": 1900593152,
+      "swap": "vm.swapusage: total = 4096.00M  used = 3411.00M  free = 685.00M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 66.11638912500348,
+      "ramFreeBytes": 2127052800,
+      "swap": "vm.swapusage: total = 4096.00M  used = 3403.00M  free = 693.00M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 71.13003241701517,
+      "ramFreeBytes": 1903296512,
+      "swap": "vm.swapusage: total = 4096.00M  used = 3395.00M  free = 701.00M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 76.14205445800326,
+      "ramFreeBytes": 1795964928,
+      "swap": "vm.swapusage: total = 4096.00M  used = 3371.00M  free = 725.00M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 81.1555727920204,
+      "ramFreeBytes": 1726726144,
+      "swap": "vm.swapusage: total = 4096.00M  used = 3371.00M  free = 725.00M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 86.16762987500988,
+      "ramFreeBytes": 1797767168,
+      "swap": "vm.swapusage: total = 4096.00M  used = 3347.00M  free = 749.00M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 91.1798969579977,
+      "ramFreeBytes": 1752334336,
+      "swap": "vm.swapusage: total = 4096.00M  used = 3347.00M  free = 749.00M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 96.19260262500029,
+      "ramFreeBytes": 1742520320,
+      "swap": "vm.swapusage: total = 4096.00M  used = 3347.00M  free = 749.00M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 101.20275279201451,
+      "ramFreeBytes": 1732050944,
+      "swap": "vm.swapusage: total = 4096.00M  used = 3323.00M  free = 773.00M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 106.21377737500006,
+      "ramFreeBytes": 1668956160,
+      "swap": "vm.swapusage: total = 4096.00M  used = 3348.94M  free = 747.06M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 111.23162166701513,
+      "ramFreeBytes": 1825669120,
+      "swap": "vm.swapusage: total = 4096.00M  used = 3321.31M  free = 774.69M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 116.24302779202117,
+      "ramFreeBytes": 2267840512,
+      "swap": "vm.swapusage: total = 4096.00M  used = 3288.88M  free = 807.12M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 121.25629770802334,
+      "ramFreeBytes": 4641079296,
+      "swap": "vm.swapusage: total = 5120.00M  used = 3842.38M  free = 1277.62M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 126.27781779202633,
+      "ramFreeBytes": 7010140160,
+      "swap": "vm.swapusage: total = 5120.00M  used = 3818.38M  free = 1301.62M  (encrypted)"
+    }
+  ],
+  "promptId": "30da585b-0179-4a67-9982-bcc324b59b76",
+  "status": "completed",
+  "outputImage": "/Users/anvh/go/src/github.com/anvh2/harness-engineering/benchmarks/phase3/comfy-run-01/phase3-keyframe-c3983258_00001_.png",
+  "elapsedSeconds": 126.29384745800053
+}

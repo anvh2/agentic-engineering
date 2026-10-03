@@ -1,0 +1,118 @@
+{
+  "prompt": [
+    4,
+    "4b1780c8-2167-4140-bf64-be5f87d045ac",
+    {
+      "1": {
+        "class_type": "LoadImage",
+        "inputs": {
+          "image": "phase3b-mask-input-31548b4a.png"
+        }
+      },
+      "2": {
+        "class_type": "GroundingDinoModelLoader (segment anything2)",
+        "inputs": {
+          "model_name": "GroundingDINO_SwinT_OGC (694MB)"
+        }
+      },
+      "3": {
+        "class_type": "SAM2ModelLoader (segment anything2)",
+        "inputs": {
+          "model_name": "sam2_hiera_tiny"
+        }
+      },
+      "4": {
+        "class_type": "GroundingDinoSAM2Segment (segment anything2)",
+        "inputs": {
+          "sam_model": [
+            "3",
+            0
+          ],
+          "grounding_dino_model": [
+            "2",
+            0
+          ],
+          "image": [
+            "1",
+            0
+          ],
+          "prompt": "shirt, t-shirt, blouse, top, upper body clothing",
+          "threshold": 0.3
+        }
+      },
+      "5": {
+        "class_type": "MaskToImage",
+        "inputs": {
+          "mask": [
+            "4",
+            1
+          ]
+        }
+      },
+      "6": {
+        "class_type": "SaveImage",
+        "inputs": {
+          "images": [
+            "5",
+            0
+          ],
+          "filename_prefix": "phase3b-mask-raw-31548b4a"
+        }
+      }
+    },
+    {
+      "client_id": "phase3b-mask-85682f82e1a944a5863c8075d37477fe",
+      "create_time": 1790610729887
+    },
+    [
+      "6"
+    ]
+  ],
+  "outputs": {
+    "6": {
+      "images": [
+        {
+          "filename": "phase3b-mask-raw-31548b4a_00001_.png",
+          "subfolder": "",
+          "type": "output"
+        }
+      ]
+    }
+  },
+  "status": {
+    "status_str": "success",
+    "completed": true,
+    "messages": [
+      [
+        "execution_start",
+        {
+          "prompt_id": "4b1780c8-2167-4140-bf64-be5f87d045ac",
+          "timestamp": 1790610729888
+        }
+      ],
+      [
+        "execution_cached",
+        {
+          "nodes": [],
+          "prompt_id": "4b1780c8-2167-4140-bf64-be5f87d045ac",
+          "timestamp": 1790610729890
+        }
+      ],
+      [
+        "execution_success",
+        {
+          "prompt_id": "4b1780c8-2167-4140-bf64-be5f87d045ac",
+          "timestamp": 1790610736288
+        }
+      ]
+    ]
+  },
+  "meta": {
+    "6": {
+      "node_id": "6",
+      "display_node": "6",
+      "parent_node": null,
+      "real_node_id": "6"
+    }
+  }
+}

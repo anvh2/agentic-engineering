@@ -1,0 +1,56 @@
+{
+  "personImage": "benchmarks/phase3b/comfy-run-01/person-base/phase3b-person-base-41d95fa8_00001_.png",
+  "rawMaskImage": "/Users/anvh/go/src/github.com/anvh2/harness-engineering/benchmarks/phase3b/comfy-run-01/mask/sam2-segmentation-mask.png",
+  "detectionPrompt": "shirt, t-shirt, blouse, top, upper body clothing",
+  "detectionThreshold": 0.3,
+  "imageSize": {
+    "width": 576,
+    "height": 1024
+  },
+  "rawMaskBboxXYXY": [
+    163,
+    235,
+    442,
+    751
+  ],
+  "dilateKernelSize": 9,
+  "neckY": 235,
+  "torsoWidth": 279,
+  "garmentCoreBottom": 516,
+  "headSafetyFloorY": 123,
+  "hipSafetyCeilingY": 870,
+  "waistTaper": {
+    "sampledStripYRange": [
+      496,
+      516
+    ],
+    "measuredLocalX": [
+      218,
+      383
+    ],
+    "resolvedTaperX": [
+      188,
+      417
+    ]
+  },
+  "collarBandXYXY": [
+    141,
+    199,
+    464,
+    235
+  ],
+  "sleeveBandXYXY": [
+    85,
+    235,
+    520,
+    390
+  ],
+  "hemBandXYXY": [
+    188,
+    516,
+    417,
+    696
+  ],
+  "rawMaskCoverage": 0.15909322102864584,
+  "agnosticMaskCoverage": 0.24536302354600695
+}

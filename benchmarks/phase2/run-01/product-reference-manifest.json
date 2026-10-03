@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 1,
+  "phase": 2,
+  "createdAt": "2026-09-27T14:29:14.538Z",
+  "product": {
+    "schemaVersion": 1,
+    "productName": "Pale Periwinkle Ruffle-Collar Blouse",
+    "identity": {
+      "source": "human-authored PRODUCT_REFERENCE.md from the original product-photo session",
+      "facts": [
+        "Short-sleeve loose babydoll blouse in solid pale periwinkle / dusty light blue.",
+        "Oversized double-layer rounded Peter Pan collar with ruffle trim around the yoke seam.",
+        "Three flower-shaped buttons and vertical pintuck pleats at the center front.",
+        "Short puffed sleeves with elastic-gathered ruffle cuffs.",
+        "Lightweight matte cotton/poplin with soft drape; no print, embroidery, or fabric-face logo."
+      ],
+      "mustPreserve": [
+        "pale periwinkle solid color",
+        "double-layer rounded collar and yoke ruffle",
+        "three flower-shaped front buttons and pintuck pleats",
+        "puffed sleeves with ruffle cuffs",
+        "loose babydoll silhouette",
+        "matte woven cotton/poplin texture"
+      ],
+      "mustNotInvent": [
+        "a fabric print, embroidery, or logo",
+        "additional buttons or a fitted/tailored cut",
+        "an interior brand label in a public hero scene",
+        "unseen back-view construction"
+      ]
+    },
+    "sceneIntent": {
+      "primary": "Create new vertical product-marketing keyframes from these references. Prefer a believable person wearing or reviewing the blouse if the garment details remain faithful.",
+      "fallback": "Create premium product-commercial scenes such as a styled rack, ghost-mannequin, or editorial close-up. These are new scenes, not copies of the raw catalog background.",
+      "rejectionCriteria": [
+        "wrong garment color, collar, button count, sleeve/cuff, or silhouette",
+        "invented print/logo or glossy/satin texture",
+        "unbelievable human anatomy, hands, fit, or garment attachment",
+        "raw catalog props/background retained as the claimed generated scene"
+      ]
+    }
+  },
+  "assets": [
+    {
+      "id": "source-1",
+      "originalPath": "/Users/anvh/go/src/github.com/anvh2/harness-engineering/.workdir/quick-video/scratchpad/comfy-affiliate-v1/assets/ref/overview_3.png",
+      "originalFilename": "overview_3.png",
+      "role": "overview",
+      "sha256": "8c34ef9eaef1bc4178d3f4bcb5a5cf0f04ee0e335de42a57f7196f06fcdeed49",
+      "mime": "image/png",
+      "width": 1150,
+      "height": 1532,
+      "orientation": 1,
+      "rendererPreview": "reference-01.jpg"
+    },
+    {
+      "id": "source-2",
+      "originalPath": "/Users/anvh/go/src/github.com/anvh2/harness-engineering/.workdir/quick-video/scratchpad/comfy-affiliate-v1/assets/ref/detail_3.png",
+      "originalFilename": "detail_3.png",
+      "role": "construction-detail",
+      "sha256": "a3e8a5046f2cd2404c93369f92cb59a142ca091419e1ad2e7ef0d49e2562783a",
+      "mime": "image/png",
+      "width": 1146,
+      "height": 1928,
+      "orientation": 1,
+      "rendererPreview": "reference-02.jpg"
+    },
+    {
+      "id": "source-3",
+      "originalPath": "/Users/anvh/go/src/github.com/anvh2/harness-engineering/.workdir/quick-video/scratchpad/comfy-affiliate-v1/assets/ref/overview_1.png",
+      "originalFilename": "overview_1.png",
+      "role": "overview",
+      "sha256": "cb52716e41a1a5e5b5bb18ffa8d4c6b82581e9bd7387e5b0361b45da47b72153",
+      "mime": "image/png",
+      "width": 1156,
+      "height": 1224,
+      "orientation": 1,
+      "rendererPreview": "reference-03.jpg"
+    }
+  ],
+  "timeline": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "totalFrames": 450,
+    "durationSeconds": 15,
+    "scenes": [
+      {
+        "id": "wearer-hero",
+        "durationFrames": 90,
+        "intent": "Believable vertical lifestyle hero: a person wearing the blouse, waist-up, with all protected details readable.",
+        "fallback": "Styled ghost-mannequin or rack hero in a new editorial room."
+      },
+      {
+        "id": "collar-button-review",
+        "durationFrames": 90,
+        "intent": "New close review scene showing the double collar, yoke ruffle, three flower buttons, and pintucks.",
+        "fallback": "Premium macro commercial scene using the construction-detail reference."
+      },
+      {
+        "id": "silhouette",
+        "durationFrames": 90,
+        "intent": "New full-garment scene showing loose babydoll drape and puffed sleeves on a wearer or styled display.",
+        "fallback": "Newly staged full-garment commercial scene; never claim an unseen back view."
+      },
+      {
+        "id": "fabric-cuff",
+        "durationFrames": 90,
+        "intent": "New tactile review scene showing matte cotton/poplin texture and ruffled cuff construction.",
+        "fallback": "Designed macro product-commercial scene based on the detail reference."
+      },
+      {
+        "id": "cta-hero",
+        "durationFrames": 90,
+        "intent": "New hero/reviewer closing scene with clear product presentation and room for CTA.",
+        "fallback": "Premium editorial product hero with source-faithful garment."
+      }
+    ]
+  },
+  "acceptance": {
+    "phase2": "Fallback export must be technically valid and preserve source evidence. It is a control/reference only, not product-goal acceptance.",
+    "phase3": "Accepted generated scenes must satisfy every protected garment detail and look like new marketing content, not animated raw catalog uploads."
+  }
+}

@@ -1,0 +1,294 @@
+{
+  "LoadImage": {
+    "input": {
+      "required": {
+        "image": [
+          [
+            "approved_hero_frame1.png",
+            "clothing_detail_1.png",
+            "clothing_detail_2.png",
+            "clothing_overview_1.png",
+            "clothing_overview_2.png",
+            "clothing_overview_3.png",
+            "detail_1.png",
+            "detail_2.png",
+            "detail_3.png",
+            "example.png",
+            "garment_mask.png",
+            "overview_1.png",
+            "overview_2.png",
+            "overview_3.png",
+            "phase3b-mask-input-32059078.png",
+            "phase3b-mask-input-6f8e64ae.png",
+            "phase3b-mask-input-a1011f5d.png",
+            "phase3b-mask.png",
+            "phase3b-person.png",
+            "source_frame.png",
+            "target_clothing_ref.png"
+          ],
+          {
+            "image_upload": true
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "image"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "IMAGE",
+      "MASK"
+    ],
+    "output_is_list": [
+      false,
+      false
+    ],
+    "output_name": [
+      "IMAGE",
+      "MASK"
+    ],
+    "name": "LoadImage",
+    "display_name": "Load Image",
+    "description": "",
+    "python_module": "nodes",
+    "category": "image",
+    "output_node": false,
+    "has_intermediate_output": false,
+    "search_aliases": [
+      "load image",
+      "open image",
+      "import image",
+      "image input",
+      "upload image",
+      "read image",
+      "image loader"
+    ],
+    "essentials_category": "Basics"
+  },
+  "LoadCatVTONPipeline": {
+    "input": {
+      "required": {
+        "sd15_inpaint_path": [
+          "STRING",
+          {
+            "default": "runwayml/stable-diffusion-inpainting"
+          }
+        ],
+        "catvton_path": [
+          "STRING",
+          {
+            "default": "zhengchong/CatVTON"
+          }
+        ],
+        "mixed_precision": [
+          [
+            "fp32",
+            "fp16",
+            "bf16"
+          ]
+        ],
+        "device": [
+          [
+            "mps",
+            "cpu",
+            "cuda"
+          ],
+          {
+            "default": "mps"
+          }
+        ],
+        "attn_chunk_size": [
+          "INT",
+          {
+            "default": 0,
+            "min": 0,
+            "max": 65536,
+            "step": 32
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "sd15_inpaint_path",
+        "catvton_path",
+        "mixed_precision",
+        "device",
+        "attn_chunk_size"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "MODEL"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "pipe"
+    ],
+    "name": "LoadCatVTONPipeline",
+    "display_name": "Load CatVTON Pipeline",
+    "description": "",
+    "python_module": "custom_nodes.Comfyui-CatVTON",
+    "category": "CatVTON",
+    "output_node": false,
+    "has_intermediate_output": false,
+    "search_aliases": []
+  },
+  "CatVTON": {
+    "input": {
+      "required": {
+        "pipe": [
+          "MODEL"
+        ],
+        "target_image": [
+          "IMAGE"
+        ],
+        "refer_image": [
+          "IMAGE"
+        ],
+        "mask_image": [
+          "IMAGE"
+        ],
+        "seed": [
+          "INT",
+          {
+            "default": 42,
+            "min": 0,
+            "max": 18446744073709551615
+          }
+        ],
+        "steps": [
+          "INT",
+          {
+            "default": 50,
+            "min": 1,
+            "max": 10000
+          }
+        ],
+        "cfg": [
+          "FLOAT",
+          {
+            "default": 2.5,
+            "min": 0.0,
+            "max": 14.0,
+            "step": 0.1,
+            "round": 0.01
+          }
+        ],
+        "width": [
+          "INT",
+          {
+            "default": 768,
+            "min": 64,
+            "max": 1024,
+            "step": 64
+          }
+        ],
+        "height": [
+          "INT",
+          {
+            "default": 1024,
+            "min": 64,
+            "max": 1024,
+            "step": 64
+          }
+        ]
+      }
+    },
+    "input_order": {
+      "required": [
+        "pipe",
+        "target_image",
+        "refer_image",
+        "mask_image",
+        "seed",
+        "steps",
+        "cfg",
+        "width",
+        "height"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "IMAGE"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "image"
+    ],
+    "name": "CatVTON",
+    "display_name": "TryOn by CatVTON",
+    "description": "",
+    "python_module": "custom_nodes.Comfyui-CatVTON",
+    "category": "CatVTON",
+    "output_node": false,
+    "has_intermediate_output": false,
+    "search_aliases": []
+  },
+  "SaveImage": {
+    "input": {
+      "required": {
+        "images": [
+          "IMAGE",
+          {
+            "tooltip": "The images to save."
+          }
+        ],
+        "filename_prefix": [
+          "STRING",
+          {
+            "default": "ComfyUI",
+            "tooltip": "The prefix for the file to save. This may include formatting information such as %date:yyyy-MM-dd% or %Empty Latent Image.width% to include values from nodes."
+          }
+        ]
+      },
+      "hidden": {
+        "prompt": "PROMPT",
+        "extra_pnginfo": "EXTRA_PNGINFO"
+      }
+    },
+    "input_order": {
+      "required": [
+        "images",
+        "filename_prefix"
+      ],
+      "hidden": [
+        "prompt",
+        "extra_pnginfo"
+      ]
+    },
+    "is_input_list": false,
+    "output": [
+      "IMAGE"
+    ],
+    "output_is_list": [
+      false
+    ],
+    "output_name": [
+      "images"
+    ],
+    "name": "SaveImage",
+    "display_name": "Save Image",
+    "description": "Saves the input images to your ComfyUI output directory.",
+    "python_module": "nodes",
+    "category": "image",
+    "output_node": true,
+    "has_intermediate_output": false,
+    "search_aliases": [
+      "save",
+      "save image",
+      "export image",
+      "output image",
+      "write image",
+      "download"
+    ],
+    "essentials_category": "Basics"
+  }
+}

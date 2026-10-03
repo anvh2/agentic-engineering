@@ -1,0 +1,58 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "phase3b-mask-input-31548b4a.png"
+    }
+  },
+  "2": {
+    "class_type": "GroundingDinoModelLoader (segment anything2)",
+    "inputs": {
+      "model_name": "GroundingDINO_SwinT_OGC (694MB)"
+    }
+  },
+  "3": {
+    "class_type": "SAM2ModelLoader (segment anything2)",
+    "inputs": {
+      "model_name": "sam2_hiera_tiny"
+    }
+  },
+  "4": {
+    "class_type": "GroundingDinoSAM2Segment (segment anything2)",
+    "inputs": {
+      "sam_model": [
+        "3",
+        0
+      ],
+      "grounding_dino_model": [
+        "2",
+        0
+      ],
+      "image": [
+        "1",
+        0
+      ],
+      "prompt": "shirt, t-shirt, blouse, top, upper body clothing",
+      "threshold": 0.3
+    }
+  },
+  "5": {
+    "class_type": "MaskToImage",
+    "inputs": {
+      "mask": [
+        "4",
+        1
+      ]
+    }
+  },
+  "6": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "5",
+        0
+      ],
+      "filename_prefix": "phase3b-mask-raw-31548b4a"
+    }
+  }
+}

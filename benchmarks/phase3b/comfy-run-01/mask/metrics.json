@@ -1,0 +1,31 @@
+{
+  "phase": "3B-mask",
+  "profile": "GroundingDINO+SAM2 segmentation, prompt='shirt, t-shirt, blouse, top, upper body clothing', threshold=0.3",
+  "startedAt": "2026-09-28T15:52:09Z",
+  "timeoutSeconds": 180,
+  "samples": [
+    {
+      "elapsedSeconds": 0.0052824169979430735,
+      "ramFreeBytes": 6691880960,
+      "swap": "vm.swapusage: total = 3072.00M  used = 2319.94M  free = 752.06M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 3.0161221669986844,
+      "ramFreeBytes": 6651723776,
+      "swap": "vm.swapusage: total = 3072.00M  used = 2319.94M  free = 752.06M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 6.038363416999346,
+      "ramFreeBytes": 2794356736,
+      "swap": "vm.swapusage: total = 3072.00M  used = 2319.94M  free = 752.06M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 9.064160166977672,
+      "ramFreeBytes": 5029085184,
+      "swap": "vm.swapusage: total = 3072.00M  used = 2319.94M  free = 752.06M  (encrypted)"
+    }
+  ],
+  "promptId": "4b1780c8-2167-4140-bf64-be5f87d045ac",
+  "status": "completed",
+  "elapsedSeconds": 9.078626124974107
+}

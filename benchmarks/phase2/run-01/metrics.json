@@ -1,0 +1,70 @@
+{
+  "phase": 2,
+  "startedAt": "2026-09-27T14:29:14.538Z",
+  "renderer": "phase2-source-photo-fallback-control",
+  "steps": [
+    {
+      "label": "fallback-shot-0",
+      "durationSeconds": 11.231004083,
+      "maxRssBytes": null,
+      "resourceCounterAvailable": false,
+      "exitCode": 0
+    },
+    {
+      "label": "fallback-shot-1",
+      "durationSeconds": 11.082823583,
+      "maxRssBytes": null,
+      "resourceCounterAvailable": false,
+      "exitCode": 0
+    },
+    {
+      "label": "fallback-shot-2",
+      "durationSeconds": 11.149330042,
+      "maxRssBytes": null,
+      "resourceCounterAvailable": false,
+      "exitCode": 0
+    },
+    {
+      "label": "fallback-shot-3",
+      "durationSeconds": 11.205541457999999,
+      "maxRssBytes": null,
+      "resourceCounterAvailable": false,
+      "exitCode": 0
+    },
+    {
+      "label": "fallback-shot-4",
+      "durationSeconds": 11.157084541000003,
+      "maxRssBytes": null,
+      "resourceCounterAvailable": false,
+      "exitCode": 0
+    },
+    {
+      "label": "fallback-compose",
+      "durationSeconds": 15.847167374999998,
+      "maxRssBytes": null,
+      "resourceCounterAvailable": false,
+      "exitCode": 0
+    },
+    {
+      "label": "fallback-decode-check",
+      "durationSeconds": 0.6505312080000003,
+      "maxRssBytes": null,
+      "resourceCounterAvailable": false,
+      "exitCode": 0
+    },
+    {
+      "label": "fallback-contact-sheet",
+      "durationSeconds": 0.6046570409999986,
+      "maxRssBytes": null,
+      "resourceCounterAvailable": false,
+      "exitCode": 0
+    }
+  ],
+  "completedAt": "2026-09-27T14:30:28.933Z",
+  "technicalValidation": "passed: 1080x1920, 450 frames, 15 seconds, full decode",
+  "limitations": [
+    "Source-photo fallback/control only; it does not create new marketing scenes.",
+    "No people, cloud generation, segmentation, music, or local AI inference.",
+    "Phase 3 must use product-reference-manifest.json and its protected identity before any generated scene can be accepted."
+  ]
+}

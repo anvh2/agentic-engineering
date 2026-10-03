@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "productName": "Pale Periwinkle Ruffle-Collar Blouse",
+  "identity": {
+    "source": "human-authored PRODUCT_REFERENCE.md from the original product-photo session",
+    "facts": [
+      "Short-sleeve loose babydoll blouse in solid pale periwinkle / dusty light blue.",
+      "Oversized double-layer rounded Peter Pan collar with ruffle trim around the yoke seam.",
+      "Three flower-shaped buttons and vertical pintuck pleats at the center front.",
+      "Short puffed sleeves with elastic-gathered ruffle cuffs.",
+      "Lightweight matte cotton/poplin with soft drape; no print, embroidery, or fabric-face logo."
+    ],
+    "mustPreserve": [
+      "pale periwinkle solid color",
+      "double-layer rounded collar and yoke ruffle",
+      "three flower-shaped front buttons and pintuck pleats",
+      "puffed sleeves with ruffle cuffs",
+      "loose babydoll silhouette",
+      "matte woven cotton/poplin texture"
+    ],
+    "mustNotInvent": [
+      "a fabric print, embroidery, or logo",
+      "additional buttons or a fitted/tailored cut",
+      "an interior brand label in a public hero scene",
+      "unseen back-view construction"
+    ]
+  },
+  "sceneIntent": {
+    "primary": "Create new vertical product-marketing keyframes from these references. Prefer a believable person wearing or reviewing the blouse if the garment details remain faithful.",
+    "fallback": "Create premium product-commercial scenes such as a styled rack, ghost-mannequin, or editorial close-up. These are new scenes, not copies of the raw catalog background.",
+    "rejectionCriteria": [
+      "wrong garment color, collar, button count, sleeve/cuff, or silhouette",
+      "invented print/logo or glossy/satin texture",
+      "unbelievable human anatomy, hands, fit, or garment attachment",
+      "raw catalog props/background retained as the claimed generated scene"
+    ]
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "startedAt": "2026-09-27T14:09:31Z",
+  "profile": "384x512, 16 frames, 8fps, 16 steps, seed555, denoise0.35, AnimateDiff+IPAdapter; no depth",
+  "sourceSha256": "8c34ef9eaef1bc4178d3f4bcb5a5cf0f04ee0e335de42a57f7196f06fcdeed49",
+  "timeoutSeconds": 480,
+  "samples": [
+    {
+      "elapsedSeconds": 0.003913874999852851,
+      "ramFreeBytes": 6296715264,
+      "swap": "vm.swapusage: total = 3072.00M  used = 2031.00M  free = 1041.00M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 10.043769542011432,
+      "ramFreeBytes": 2431762432,
+      "swap": "vm.swapusage: total = 3072.00M  used = 2461.75M  free = 610.25M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 20.14355800001067,
+      "ramFreeBytes": 3308093440,
+      "swap": "vm.swapusage: total = 6144.00M  used = 4907.31M  free = 1236.69M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 30.158901459013578,
+      "ramFreeBytes": 2094170112,
+      "swap": "vm.swapusage: total = 6144.00M  used = 4795.31M  free = 1348.69M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 40.18204191699624,
+      "ramFreeBytes": 2143191040,
+      "swap": "vm.swapusage: total = 6144.00M  used = 4864.81M  free = 1279.19M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 50.19844516701414,
+      "ramFreeBytes": 2098774016,
+      "swap": "vm.swapusage: total = 6144.00M  used = 4841.62M  free = 1302.38M  (encrypted)"
+    },
+    {
+      "elapsedSeconds": 60.22739183399244,
+      "ramFreeBytes": 4032872448,
+      "swap": "vm.swapusage: total = 6144.00M  used = 5090.69M  free = 1053.31M  (encrypted)"
+    }
+  ],
+  "promptId": "c629d6bb-d4a7-444f-a1f5-f49753a0ac90",
+  "status": "failed",
+  "error": "ComfyUI execution error; see history",
+  "ownPromptStillQueued": false,
+  "elapsedSeconds": 60.45441574999131
+}
