@@ -5,14 +5,14 @@ import { WorkspaceError, type Workspace } from '../worktree/worktree.ts';
 /**
  * Worker-pool scheduler. It ASSIGNS work and RECORDS outcomes; it contains no coding, retry or verification logic:
  * every task executes through the injected `Executor` (production: the registered Mastra `coding-task-workflow`,
- * whose runner owns retries, verification and mutation checks). A harness PASS never completes a task: it creates a
+ * whose runner owns retries, verification and mutation checks). A runtime PASS never completes a task: it creates a
  * review request (REVIEW_PENDING) and stops there.
  */
 
 export interface ExecutorOutcome {
   runId?: string;
   studioUrl?: string;
-  /** Harness verdict, decided by the existing runner. */
+  /** Runtime verdict, decided by the existing runner. */
   status: 'PASS' | 'ESCALATED_TO_CLAUDE' | 'RUNTIME_FAILURE' | 'KEPT_BY_CLAUDE';
   reasons: string[];
   codingAttempts: number;
@@ -346,7 +346,7 @@ export class Scheduler {
     const artifacts = { ...(outcome.artifactDir ? { artifactDir: outcome.artifactDir } : {}), ...(outcome.studioUrl ? { studioUrl: outcome.studioUrl } : {}) };
 
     if (outcome.status === 'PASS') {
-      store.transition(taskId, 'VERIFYING', { actor: fence.owner, reason: 'harness PASS; running post-run change checks', expectFrom: 'CODING', fence, patch: { ...patchBase, artifacts } });
+      store.transition(taskId, 'VERIFYING', { actor: fence.owner, reason: 'runtime PASS; running post-run change checks', expectFrom: 'CODING', fence, patch: { ...patchBase, artifacts } });
       const verifyStart = store.now();
       const task = store.requireTask(taskId);
       let inspection;
@@ -402,7 +402,7 @@ export class Scheduler {
       return;
     }
     const category: FailureCategory = outcome.status === 'KEPT_BY_CLAUDE' ? 'not_eligible' : outcome.failureCategory === 'D_forbidden_mutation' || outcome.reasons.includes('forbidden_mutation') ? 'forbidden_mutation' : 'coding_attempts_exhausted';
-    store.transition(taskId, 'ESCALATED', { actor: fence.owner, reason: outcome.reasons.join('; ') || outcome.status, expectFrom: 'CODING', fence, patch: { ...patchBase, failureCategory: category, artifacts, result: { reasons: outcome.reasons, harnessCategory: outcome.failureCategory ?? null } } });
+    store.transition(taskId, 'ESCALATED', { actor: fence.owner, reason: outcome.reasons.join('; ') || outcome.status, expectFrom: 'CODING', fence, patch: { ...patchBase, failureCategory: category, artifacts, result: { reasons: outcome.reasons, runnerCategory: outcome.failureCategory ?? null } } });
   }
 
   /**

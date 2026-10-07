@@ -15,8 +15,8 @@ import { runSandboxedCommand } from '../../runtime/sandbox/sandbox.ts';
  * execution capabilities are the ones exported below.
  *
  * Everything that executes repository code (go test, jest, and the formatters, which load repo config) runs inside the
- * OS sandbox (../sandbox/sandbox.ts): writes limited to the repository, no network, no harness secrets. If isolation
- * is unavailable these tools refuse to run. git here is the harness's own binary on the harness's own terms.
+ * OS sandbox (../sandbox/sandbox.ts): writes limited to the repository, no network, no runtime secrets. If isolation
+ * is unavailable these tools refuse to run. git here is the runtime's own binary on the runtime's own terms.
  */
 
 const MAX_OUTPUT_BYTES = 4_000;

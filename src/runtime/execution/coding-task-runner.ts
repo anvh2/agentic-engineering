@@ -10,16 +10,16 @@ import { REPOSITORY_ROOT_CONTEXT_KEY } from '../../workers/tools/repository-tool
 import { runSandboxedCommand, sandboxStatus } from '../sandbox/sandbox.ts';
 import { sharedModelCapacity, type ModelCapacity } from '../capacity/model-capacity.ts';
 import { createRepairLoopTracker } from './repair-loop-tracker.ts';
-import { harnessMetrics, type HarnessMetrics } from '../../observability/metrics.ts';
+import { runtimeMetrics, type RuntimeMetrics } from '../../observability/metrics.ts';
 import { createTraceSink, type TraceEvent, type TraceSink } from './coding-task-trace.ts';
 
 /**
- * Harness-owned control loop for ONE bounded coding task.
+ * Runtime-owned control loop for ONE bounded coding task.
  *
  * The worker proposes; this module verifies. Per coding attempt: fresh model
- * context -> worker edits -> harness diffs the filesystem (mutation policy)
- * -> harness formats -> harness runs the verification commands (plus any
- * harness-owned hidden tests) -> PASS only if the verifier exited 0 on the
+ * context -> worker edits -> runtime diffs the filesystem (mutation policy)
+ * -> runtime formats -> runtime runs the verification commands (plus any
+ * runtime-owned hidden tests) -> PASS only if the verifier exited 0 on the
  * exact state that was formatted. Nothing the model says, and nothing it
  * reports from its own tool calls, can produce PASS.
  *
@@ -42,11 +42,11 @@ export const codingTaskSchema = z.object({
   /** Extra files shown to the worker (read-only), e.g. the visible test file. */
   contextFiles: z.array(repoRelativePath).default([]),
   acceptanceCriteria: z.array(z.string()).default([]),
-  /** argv arrays run by the harness from the repository root, in order; the first failing one is the failure fed back. */
+  /** argv arrays run by the runtime from the repository root, in order; the first failing one is the failure fed back. */
   verificationCommands: z.array(z.array(z.string()).min(1)).min(1),
   constraints: z.array(z.string()).default([]),
   /**
-   * Harness-owned verification files (path -> content). Never shown to the worker: written only
+   * Runtime-owned verification files (path -> content). Never shown to the worker: written only
    * for verification, removed afterwards. Their path must not exist in the repository.
    */
   hiddenFiles: z.record(repoRelativePath, z.string()).default({}),
@@ -141,7 +141,7 @@ export interface RunCodingTaskOptions {
   modelLabel?: string;
   trace?: TraceSink;
   /** Operational metrics sink (observability only; never affects a run). Defaults to the process-wide instance. */
-  metrics?: HarnessMetrics;
+  metrics?: RuntimeMetrics;
   /**
    * Cancellation (e.g. the Mastra run was cancelled): aborts the in-flight model call and starts no further attempt.
    * Reported as a runtime failure, so the caller restores the tree exactly as for any non-PASS.
@@ -233,7 +233,7 @@ async function buildPrompt(
   if (task.acceptanceCriteria.length) sections.push(`Acceptance criteria:\n${task.acceptanceCriteria.map((c) => `- ${c}`).join('\n')}`);
   if (task.constraints.length) sections.push(`Constraints:\n${task.constraints.map((c) => `- ${c}`).join('\n')}`);
   sections.push(
-    `The harness will format and run \`${task.verificationCommands.map((c) => c.join(' ')).join('` and `')}\` itself after you finish (possibly with additional checks you cannot see); its result is the only thing that counts.`,
+    `The runtime will format and run \`${task.verificationCommands.map((c) => c.join(' ')).join('` and `')}\` itself after you finish (possibly with additional checks you cannot see); its result is the only thing that counts.`,
   );
   sections.push('The current contents of every relevant file are included below, so no exploration is needed.');
   for (const f of files) {
@@ -250,7 +250,7 @@ function tail(text: string, max: number): string {
   return text.length <= max ? text : `...${text.slice(text.length - max)}`;
 }
 
-/** Per-attempt failure class, judged from harness evidence only. */
+/** Per-attempt failure class, judged from runtime evidence only. */
 export function classifyAttempt(record: AttemptRecord, forbiddenNow: boolean): FailureCategory {
   if (forbiddenNow) return 'D_forbidden_mutation';
   if (record.runtimeError) return 'F_model_runtime';
@@ -272,7 +272,7 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
   const timeoutMs = options.modelTimeoutMs ?? 300_000;
   const modelLabel = options.modelLabel ?? 'worker';
   const trace = options.trace ?? createTraceSink();
-  const metrics = options.metrics ?? harnessMetrics;
+  const metrics = options.metrics ?? runtimeMetrics;
   const taskStart = Date.now();
 
   for (const hidden of Object.keys(task.hiddenFiles)) {
@@ -461,7 +461,7 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
     forbidden = changedPaths(original, afterWorker).filter((f) => !task.allowedFiles.includes(f));
 
     if (forbidden.length === 0) {
-      // ---- harness-owned formatting (itself a mutation), then verification of that exact state ----
+      // ---- runtime-owned formatting (itself a mutation), then verification of that exact state ----
       let formatterOk = true;
       for (const f of task.allowedFiles.filter((p) => p.endsWith('.go'))) {
         if (!(await exists(join(repoRoot, f)))) continue;
@@ -474,7 +474,7 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
           previousFailure = `gofmt failed on ${f}:\n${tail(r.stderr || r.stdout, MAX_FAILURE_CHARS)}`;
         }
       }
-      // Non-Go files have no formatter; the harness only normalizes the EOF newline so a whole-file rewrite
+      // Non-Go files have no formatter; the runtime only normalizes the EOF newline so a whole-file rewrite
       // cannot leave an unrelated one-byte diff. The verifier below then runs on this exact state.
       for (const f of task.allowedFiles.filter((p) => !p.endsWith('.go'))) {
         const target = join(repoRoot, f);
@@ -490,7 +490,7 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
       const stateAfterFormat = await hashFiles(repoRoot, task.allowedFiles);
 
       if (formatterOk) {
-        // Hidden harness-owned tests exist only for the duration of verification.
+        // Hidden runtime-owned tests exist only for the duration of verification.
         for (const [path, content] of Object.entries(task.hiddenFiles)) {
           await mkdir(dirname(join(repoRoot, path)), { recursive: true });
           await writeFile(join(repoRoot, path), content);

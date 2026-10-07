@@ -3,7 +3,7 @@
 // stopped early - or resumed later for other levels into another directory - can still be summarized.
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { aggregate, aggregateByLevel, type Metrics, type RunSummary } from '../tests/bench/metrics.ts';
+import { aggregate, aggregateByLevel, type Metrics, type RunSummary } from './metrics.ts';
 
 const dirs = process.argv.slice(2);
 if (dirs.length === 0) {

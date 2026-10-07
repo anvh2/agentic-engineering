@@ -5,7 +5,7 @@ import { delimiter, isAbsolute, join } from 'node:path';
 import { runControlledCommand, type ControlledCommandResult } from '../../workers/tools/execution-tools.ts';
 
 /**
- * OS-level isolation for every command that executes model-generated code: the harness verifier, the worker's own
+ * OS-level isolation for every command that executes model-generated code: the runtime verifier, the worker's own
  * test/format tools, and integration verification. The model's code runs with the user's privileges otherwise, so the
  * repository-relative checks elsewhere (mutation snapshot, change gate) only see what it did AFTER it ran.
  *
@@ -15,7 +15,7 @@ import { runControlledCommand, type ControlledCommandResult } from '../../worker
  *   - not use the network at all, loopback included (the Mastra API and Ollama listen on loopback);
  *   - not read credential stores or `.env` files outside its root;
  *   - not signal or inspect processes outside its own sandbox (on macOS `ps` exposes other processes' environment);
- *   - see only an allow-listed environment (the harness's own secrets are never passed down).
+ *   - see only an allow-listed environment (the runtime's own secrets are never passed down).
  *
  * Fail closed: if the platform has no supported sandbox, or the self-test cannot prove that a write outside the root is
  * blocked, nothing is executed and the command reports `sandboxUnavailable`. There is deliberately no opt-out.
@@ -71,7 +71,7 @@ const PASS_THROUGH_ENV = ['PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', '
 function sandboxExecutable(): string {
   // Override only for tests that simulate a missing/broken sandbox. A replacement that does not actually isolate
   // cannot pass the self-test below, so this cannot be used to turn isolation off.
-  return process.env.HARNESS_SANDBOX_EXEC ?? '/usr/bin/sandbox-exec';
+  return process.env.AGENTIC_SANDBOX_EXEC ?? '/usr/bin/sandbox-exec';
 }
 
 let statusPromise: Promise<SandboxStatus> | undefined;
@@ -82,7 +82,7 @@ export function sandboxStatus(): Promise<SandboxStatus> {
   return statusPromise;
 }
 
-/** Tests only: forget the cached probe result (e.g. after changing HARNESS_SANDBOX_EXEC). */
+/** Tests only: forget the cached probe result (e.g. after changing AGENTIC_SANDBOX_EXEC). */
 export function resetSandboxStatusForTests(): void {
   statusPromise = undefined;
 }
@@ -98,7 +98,7 @@ async function probe(): Promise<SandboxStatus> {
     return { available: false, mechanism: null, reason: `${exe} is not available` };
   }
   // Functional self-test: the profile must compile, a write inside the root must work and a write outside must not.
-  const dir = await realpath(await mkdtemp(join(tmpdir(), 'harness-sandbox-probe-')));
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'agentic-sandbox-probe-')));
   try {
     const root = join(dir, 'root');
     const outside = join(dir, 'outside');
@@ -170,7 +170,7 @@ export async function runSandboxedCommand(
   }
 
   const root = await realpath(options.root);
-  const tmp = await realpath(await mkdtemp(join(tmpdir(), 'harness-sbx-')));
+  const tmp = await realpath(await mkdtemp(join(tmpdir(), 'agentic-sbx-')));
   try {
     await writeFile(join(tmp, 'npmrc'), '');
     const env: NodeJS.ProcessEnv = {};

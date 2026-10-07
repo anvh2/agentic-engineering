@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
 
 /**
- * Bounded command runner for the harness CLI. Adapted from the private
- * runControlledCommand in src/workers/tools/execution-tools.ts so the harness
+ * Bounded command runner for the runtime CLI. Adapted from the private
+ * runControlledCommand in src/workers/tools/execution-tools.ts so the runtime
  * never imports @mastra/core: fixed argv (never a shell string), hard
  * timeout that kills the whole process group, and a hard cap on captured
  * output so a noisy test run cannot exhaust memory.

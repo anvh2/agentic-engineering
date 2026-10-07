@@ -68,7 +68,7 @@ describe('M5.1 sequential execution through the executor', () => {
     assert.equal(readFileSync(join(repo, 'src/a.js'), 'utf8'), 'uncommitted edit\n');
   });
 
-  it('maps harness outcomes: exhausted -> ESCALATED, forbidden mutation -> ESCALATED/forbidden_mutation, runtime -> RUNTIME_FAILURE, gate refusal -> ESCALATED/not_eligible', async () => {
+  it('maps runner outcomes: exhausted -> ESCALATED, forbidden mutation -> ESCALATED/forbidden_mutation, runtime -> RUNTIME_FAILURE, gate refusal -> ESCALATED/not_eligible', async () => {
     const outcomes: Record<string, ExecutorOutcome> = {
       ex: { status: 'ESCALATED_TO_CLAUDE', reasons: ['coding_attempts_exhausted'], codingAttempts: 3, runtimeRetries: 0, failureCategory: 'C_wrong_implementation' },
       fm: { status: 'ESCALATED_TO_CLAUDE', reasons: ['forbidden_mutation'], codingAttempts: 1, runtimeRetries: 0, failureCategory: 'D_forbidden_mutation' },

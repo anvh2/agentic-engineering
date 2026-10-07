@@ -8,7 +8,7 @@ import type { CodingTask } from '../../src/runtime/execution/coding-task-runner.
  * Deterministic Go difficulty ladder (all single-file). Each level lives in
  * go-ladder/<level>/ as real files:
  *   stub/       the repository the worker starts from (incl. the visible, immutable tests)
- *   hidden/     harness-owned verification tests the worker never sees
+ *   hidden/     runtime-owned verification tests the worker never sees
  *   reference/  a known-good solution, used ONLY by tests to prove the fixture is valid
  *   task.json   the CodingTask contract
  * Every run gets a brand-new temp copy, so runs can never share state.

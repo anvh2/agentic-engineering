@@ -1,5 +1,5 @@
 /**
- * Harness-owned EOF normalization for non-Go files (Go has gofmt). Whole-file `writeFile` edits by a small model
+ * Runtime-owned EOF normalization for non-Go files (Go has gofmt). Whole-file `writeFile` edits by a small model
  * routinely drop (or add) the final newline, producing an unrelated one-byte diff (observed: ESHOP-001, JS).
  *
  *  - existing file: the file's original "ends with a newline / does not" state is preserved exactly.

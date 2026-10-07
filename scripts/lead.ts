@@ -1,5 +1,5 @@
 // M5 persistent engineering scheduler. Claude (Engineering Lead) plans and reviews; local Qwen workers implement through
-// the Mastra `coding-task-workflow` (visible in Studio); the harness verifies; nothing pushes, commits to a user branch,
+// the Mastra `coding-task-workflow` (visible in Studio); the runtime verifies; nothing pushes, commits to a user branch,
 // or calls a paid API. State lives in SQLite (.workdir/scheduler/scheduler.db).
 //
 //   npm run lead:plan -- <plan.json>                       create a batch (tasks start in BACKLOG, then READY when unblocked)
@@ -33,8 +33,8 @@ const has = (name: string) => args.includes(name);
 const positional = rest.filter((a, i) => !a.startsWith('--') && !(rest[i - 1] ?? '').startsWith('--'));
 
 const root = findProjectRoot() ?? process.cwd();
-const workdir = process.env.HARNESS_SCHED_ROOT ?? join(root, '.workdir');
-const store = new SchedulerStore(process.env.HARNESS_SCHED_DB ?? join(workdir, 'scheduler', 'scheduler.db'));
+const workdir = process.env.AGENTIC_SCHED_ROOT ?? join(root, '.workdir');
+const store = new SchedulerStore(process.env.AGENTIC_SCHED_DB ?? join(workdir, 'scheduler', 'scheduler.db'));
 const worktrees = new WorktreeManager(join(workdir, 'worktrees'));
 
 async function loadConfig(): Promise<SchedulerConfig> {

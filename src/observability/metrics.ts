@@ -2,7 +2,7 @@ import { Counter, Gauge, Histogram, Registry } from 'prom-client';
 import { readSchedulerState, resolveSchedulerDbPath, SchedulerStateUnavailable, TASK_STATES } from './scheduler-state.ts';
 
 /**
- * Operational (Prometheus) metrics for the harness. Strictly additive observability: nothing here decides, gates or
+ * Operational (Prometheus) metrics for the runtime. Strictly additive observability: nothing here decides, gates or
  * delays a run.
  *
  *  - Every recorder is synchronous, in-memory and wrapped so it can never throw into the caller; a failure only
@@ -50,7 +50,7 @@ export interface MetricsOptions {
   wallClock?: () => number;
 }
 
-export function createHarnessMetrics(options: MetricsOptions = {}) {
+export function createMetrics(options: MetricsOptions = {}) {
   const registry = options.registry ?? new Registry();
   const now = options.now ?? (() => performance.now());
   const wallClock = options.wallClock ?? Date.now;
@@ -58,11 +58,11 @@ export function createHarnessMetrics(options: MetricsOptions = {}) {
 
   const workflowRuns = new Counter({ name: 'workflow_runs_total', help: 'Workflow runs that reached a terminal or suspended status.', labelNames: ['workflow', 'status'], registers: [registry] });
   const workflowDuration = new Histogram({ name: 'workflow_duration_seconds', help: 'Wall-clock duration of workflow runs.', labelNames: ['workflow'], buckets: [1, 5, 15, 30, 60, 120, 300, 600, 1200, 1800, 3600], registers: [registry] });
-  const workerTasks = new Counter({ name: 'worker_tasks_total', help: 'Coding tasks completed by a worker, by harness-verified outcome.', labelNames: ['worker', 'outcome'], registers: [registry] });
+  const workerTasks = new Counter({ name: 'worker_tasks_total', help: 'Coding tasks completed by a worker, by runtime-verified outcome.', labelNames: ['worker', 'outcome'], registers: [registry] });
   const workerInference = new Histogram({ name: 'worker_inference_seconds', help: 'Duration of one worker model invocation.', labelNames: ['worker', 'outcome'], buckets: [0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600, 900], registers: [registry] });
   const codingAttempts = new Counter({ name: 'coding_attempts_total', help: 'Coding attempts (runtime-failed invocations excluded), by verification outcome.', labelNames: ['outcome'], registers: [registry] });
   const workerRetries = new Counter({ name: 'worker_retries_total', help: 'Retries inside the coding runner: model-runtime retries vs fresh-context coding retries.', labelNames: ['kind'], registers: [registry] });
-  const verificationDuration = new Histogram({ name: 'verification_duration_seconds', help: 'Duration of one harness verification command.', labelNames: ['outcome'], buckets: [0.1, 0.5, 1, 2, 5, 10, 30, 60, 120], registers: [registry] });
+  const verificationDuration = new Histogram({ name: 'verification_duration_seconds', help: 'Duration of one runtime verification command.', labelNames: ['outcome'], buckets: [0.1, 0.5, 1, 2, 5, 10, 30, 60, 120], registers: [registry] });
   // PERSISTED (scheduler SQLite, read at scrape time). Reset and refilled on every scrape; absent when unreadable.
   const reviewDecisions = new Counter({ name: 'review_decisions_total', help: 'PERSISTED. Review decisions recorded in the scheduler database, by decision and reviewer kind (claude = the Claude Engineering Lead).', labelNames: ['decision', 'reviewer'], registers: [registry] });
   const queueDepth = new Gauge({ name: 'task_queue_depth', help: 'PERSISTED. Worker tasks in READY state in the scheduler database, waiting for a worker.', registers: [registry] });
@@ -165,7 +165,7 @@ export function createHarnessMetrics(options: MetricsOptions = {}) {
   };
 }
 
-export type HarnessMetrics = ReturnType<typeof createHarnessMetrics>;
+export type RuntimeMetrics = ReturnType<typeof createMetrics>;
 
-/** Process-wide instance used by the harness; tests build their own with `createHarnessMetrics()`. */
-export const harnessMetrics: HarnessMetrics = createHarnessMetrics();
+/** Process-wide instance used by the runtime; tests build their own with `createMetrics()`. */
+export const runtimeMetrics: RuntimeMetrics = createMetrics();

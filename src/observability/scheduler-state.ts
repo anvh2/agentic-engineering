@@ -29,11 +29,11 @@ export interface SchedulerStateSnapshot {
   reviewDecisions: { decision: string; reviewer: string; count: number }[];
 }
 
-/** Same resolution as scripts/lead.ts: HARNESS_SCHED_DB, else <HARNESS_SCHED_ROOT|project>/.workdir/scheduler/scheduler.db. */
+/** Same resolution as scripts/lead.ts: AGENTIC_SCHED_DB, else <AGENTIC_SCHED_ROOT|project>/.workdir/scheduler/scheduler.db. */
 export function resolveSchedulerDbPath(env: NodeJS.ProcessEnv = process.env, cwd: string = process.cwd()): string {
-  if (env.HARNESS_SCHED_DB) return env.HARNESS_SCHED_DB;
+  if (env.AGENTIC_SCHED_DB) return env.AGENTIC_SCHED_DB;
   const project = findProjectRoot(cwd) ?? cwd;
-  return join(env.HARNESS_SCHED_ROOT ?? join(project, '.workdir'), 'scheduler', 'scheduler.db');
+  return join(env.AGENTIC_SCHED_ROOT ?? join(project, '.workdir'), 'scheduler', 'scheduler.db');
 }
 
 export class SchedulerStateUnavailable extends Error {}

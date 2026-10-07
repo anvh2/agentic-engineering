@@ -13,7 +13,7 @@ export interface Metrics {
   eligibleTasks: number;
   claudeKeptTasks: number;
   tasksDelegated: number;
-  /** Delegated tasks the harness verified (reached post-run checks) / delegated tasks that ran to a harness verdict. */
+  /** Delegated tasks the runtime verified (reached post-run checks) / delegated tasks that ran to a runtime verdict. */
   workerPassRate: number | null;
   reviewsDecided: number;
   reviewAcceptanceRate: number | null;

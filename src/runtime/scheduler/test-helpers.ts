@@ -71,7 +71,7 @@ export interface FakeExecutorOptions {
   content?: (taskId: string) => string;
 }
 
-/** Writes `module.exports = "<id>";` to the task's allowed file inside its worktree and reports a harness PASS. */
+/** Writes `module.exports = "<id>";` to the task's allowed file inside its worktree and reports a runtime PASS. */
 export function fakeExecutor(options: FakeExecutorOptions = {}) {
   const calls: string[] = [];
   let active = 0;

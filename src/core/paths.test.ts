@@ -14,8 +14,8 @@ describe('findProjectRoot', () => {
       writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'agentic-engineering' }));
       writeFileSync(join(root, 'a', 'package.json'), JSON.stringify({ name: 'something-else' }));
       assert.equal(findProjectRoot(join(root, 'a', 'b')), root);
-      writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'harness-engineering' }));
-      assert.equal(findProjectRoot(join(root, 'a', 'b')), root);
+      writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'some-other-project' }));
+      assert.equal(findProjectRoot(join(root, 'a', 'b')), null);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

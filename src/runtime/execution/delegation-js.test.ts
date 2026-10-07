@@ -41,7 +41,7 @@ describe('JS/TS delegation gate (deterministic, no model)', () => {
     assert.deepEqual(await routeTask(good, root), { route: 'qwen' });
   });
 
-  it('clears a JS task whose oracle is a harness-owned hidden test file', async () => {
+  it('clears a JS task whose oracle is a runtime-owned hidden test file', async () => {
     const hidden = 'src/util/tests/unit/double.hidden.test.js';
     const request = withContract({
       verificationCommands: [['npx', '--no-install', 'jest', hidden]],

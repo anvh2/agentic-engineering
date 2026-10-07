@@ -100,9 +100,9 @@ describe('machine-wide model capacity (cross-process leases)', () => {
   });
 
   it('defaults to a machine-wide path outside any checkout, and to a temp file under node --test', () => {
-    assert.match(defaultModelCapacityPath({}), /\.harness-engineering\/model-capacity\.db$/);
-    assert.equal(defaultModelCapacityPath({ HARNESS_MODEL_LOCK_DB: '/x/y.db' }), '/x/y.db');
-    assert.match(defaultModelCapacityPath({ NODE_TEST_CONTEXT: 'child' }), /harness-test-model-capacity\.db$/);
+    assert.match(defaultModelCapacityPath({}), /\.agentic-engineering\/model-capacity\.db$/);
+    assert.equal(defaultModelCapacityPath({ AGENTIC_MODEL_LOCK_DB: '/x/y.db' }), '/x/y.db');
+    assert.match(defaultModelCapacityPath({ NODE_TEST_CONTEXT: 'child' }), /agentic-test-model-capacity\.db$/);
   });
 });
 

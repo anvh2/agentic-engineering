@@ -13,7 +13,7 @@ import { taskBranch, type WorktreeManager } from '../worktree/worktree.ts';
  * Safe integration coordinator. Only APPROVED tasks integrate, one at a time per repository (an expiring DB lock),
  * and only ever into the batch's dedicated integration BRANCH inside a dedicated integration WORKTREE:
  *
- *   recheck reviewed commit untouched -> recheck scope -> merge (--no-ff) -> commit harness-owned oracles as permanent
+ *   recheck reviewed commit untouched -> recheck scope -> merge (--no-ff) -> commit runtime-owned oracles as permanent
  *   tests -> run integration verification (this task's oracle, earlier integrated tasks' oracles, batch commands)
  *   -> pass: DONE | any failure: roll the integration branch back to the recorded pre-merge SHA, task -> ESCALATED,
  *   task worktree and artifacts preserved.
@@ -44,9 +44,9 @@ export interface IntegrationReport {
   commands?: { command: string[]; exitCode: number | null; tail: string }[];
 }
 
-const IDENTITY = ['-c', 'user.name=harness-integrator', '-c', 'user.email=integrator@localhost', '-c', 'commit.gpgsign=false'];
+const IDENTITY = ['-c', 'user.name=agentic-integrator', '-c', 'user.email=integrator@localhost', '-c', 'commit.gpgsign=false'];
 
-/** The permanent location of a harness-owned oracle: `*.hidden.test.js` becomes `*.test.js`. */
+/** The permanent location of a runtime-owned oracle: `*.hidden.test.js` becomes `*.test.js`. */
 export function permanentOraclePath(hiddenPath: string): string {
   return hiddenPath.replace(/\.hidden\.test\.([cm]?[jt]sx?)$/, '.test.$1');
 }
@@ -182,7 +182,7 @@ async function integrateOne(ctx: Ctx, task: TaskRow): Promise<IntegrationReport>
     return escalate('integration_conflict', `merge conflict${conflicted.length ? ` in ${conflicted.join(', ')}` : ''}: ${(merge.stderr || merge.stdout).trim().slice(0, 300)}`, undefined, preSha);
   }
 
-  // 4. materialize this task's harness-owned oracles as permanent tests (Lead-authored content, committed separately)
+  // 4. materialize this task's runtime-owned oracles as permanent tests (Lead-authored content, committed separately)
   const contract = task.spec.request?.contract;
   const remapped = new Map<string, string>();
   for (const hidden of Object.keys(contract?.hiddenFiles ?? {})) remapped.set(hidden, permanentOraclePath(hidden));

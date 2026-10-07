@@ -165,7 +165,7 @@ export async function resolveWritablePathWithinRepository(
   const literalRel = relative(root, target);
   const realRel = relative(realRoot, realTarget);
   if (isProtectedPath(literalRel) || isProtectedPath(realRel)) {
-    throw new Error(`Path "${requestedPath}" is protected (git metadata, installed dependencies or harness temp files) and cannot be modified.`);
+    throw new Error(`Path "${requestedPath}" is protected (git metadata, installed dependencies or runtime temp files) and cannot be modified.`);
   }
   if (literalRel !== realRel) {
     throw new Error(
@@ -177,9 +177,9 @@ export async function resolveWritablePathWithinRepository(
 }
 
 /**
- * Paths the harness's mutation snapshot deliberately skips (coding-task-runner `snapshotRepo`), so a write there would be
+ * Paths the runtime's mutation snapshot deliberately skips (coding-task-runner `snapshotRepo`), so a write there would be
  * invisible to the forbidden-mutation check and to the restore: `.git` (a directory, or a worktree's `.git` pointer file
- * whose rewrite redirects every later harness git command to another repository), `node_modules` (the JS verifier runs
+ * whose rewrite redirects every later runtime git command to another repository), `node_modules` (the JS verifier runs
  * code from it) and the atomic-write temp prefix. Compared case-insensitively: the default macOS filesystem is.
  */
 function isProtectedPath(repoRelative: string): boolean {

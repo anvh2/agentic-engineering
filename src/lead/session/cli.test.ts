@@ -13,7 +13,7 @@ beforeEach(async () => {
 });
 afterEach(() => f.cleanup());
 
-const checkpointsDir = () => join(f.harnessRoot, 'projects', 'demo', 'checkpoints');
+const checkpointsDir = () => join(f.projectRoot, '.workdir', 'projects', 'demo', 'checkpoints');
 
 async function latestCheckpoint(): Promise<Checkpoint> {
   const files = (await readdir(checkpointsDir())).filter((x) => x.endsWith('.json')).sort();
@@ -24,14 +24,14 @@ const resume = (...extra: string[]) => f.cli(['resume', 'demo', ...extra]);
 const findingCodes = (out: string) => [...out.matchAll(/^- (CRITICAL|WARN|INFO) \[([\w-]+)\]/gm)].map((m) => `${m[1]}:${m[2]}`);
 
 describe('checkpoint', () => {
-  it('captures objective state and parsed notes, resolving repo relative to the harness root', async () => {
+  it('captures objective state and parsed notes, resolving repo relative to the runtime root', async () => {
     await f.write('src/widget.js', 'export const w = 1;\n');
     await f.write('config/default.json', '{"db":"local-secret"}\n');
     const out = await checkpoint(f);
     assert.match(out, /Checkpoint .* written/);
 
     const cp = await latestCheckpoint();
-    assert.equal(cp.schema, 'harness.checkpoint/1');
+    assert.equal(cp.schema, 'agentic.checkpoint/1');
     assert.equal(cp.engine, 'engine-a');
     assert.equal(cp.repo.path, f.repo);
     assert.equal(cp.repo.head, f.git('rev-parse', 'HEAD').trim());
@@ -229,7 +229,7 @@ describe('resume', () => {
   it('warns about an oversized packet without truncating STATE.md', async () => {
     await checkpoint(f);
     const big = `# demo\n${'decision line that matters. '.repeat(400)}END-OF-STATE\n`;
-    await writeFile(join(f.harnessRoot, 'projects', 'demo', 'STATE.md'), big);
+    await writeFile(join(f.projectRoot, '.workdir', 'projects', 'demo', 'STATE.md'), big);
     const { out } = await resume('--no-test');
     assert.match(out, /END-OF-STATE/);
     assert.match(out, /WARNING: packet is ~\d+ tokens/);

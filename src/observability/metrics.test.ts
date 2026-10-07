@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createHarnessMetrics, sanitizeLabel } from './metrics.ts';
+import { createMetrics, sanitizeLabel } from './metrics.ts';
 import { createMetricsRoute } from '../integrations/mastra/metrics-route.ts';
 import { runCodingTask, type WorkerLike } from '../runtime/execution/coding-task-runner.ts';
 
-const sample = async (m: ReturnType<typeof createHarnessMetrics>, name: string, labels: Record<string, string> = {}) => {
+const sample = async (m: ReturnType<typeof createMetrics>, name: string, labels: Record<string, string> = {}) => {
   const base = name.replace(/_(sum|count|bucket)$/, '');
   const metric = (await m.registry.getMetricsAsJSON()).find((x) => x.name === base);
   const hit = (metric?.values as { value: number; labels: Record<string, string>; metricName?: string }[] | undefined)?.find(
@@ -16,10 +16,10 @@ const sample = async (m: ReturnType<typeof createHarnessMetrics>, name: string, 
   return hit?.value;
 };
 
-describe('harness metrics', () => {
+describe('runtime metrics', () => {
   it('counts workflow runs by status and times them with the injected clock', async () => {
     let t = 0;
-    const m = createHarnessMetrics({ now: () => t });
+    const m = createMetrics({ now: () => t });
     m.workflowStarted('wf', 'run-1');
     t = 12_000;
     m.workflowFinished('wf', 'run-1', 'success');
@@ -31,7 +31,7 @@ describe('harness metrics', () => {
   });
 
   it('records worker, attempt, retry and verification metrics', async () => {
-    const m = createHarnessMetrics();
+    const m = createMetrics();
     m.workerTask('qwen3:8b', 'pass');
     m.workerInference('qwen3:8b', 2.5, 'ok');
     m.codingAttempt('fail');
@@ -47,7 +47,7 @@ describe('harness metrics', () => {
   });
 
   it('keeps label cardinality bounded: unknown enum values collapse, free-form labels are sanitized', async () => {
-    const m = createHarnessMetrics();
+    const m = createMetrics();
     m.workflowFinished('wf', 'r', 'weird-status-123');
     m.workerTask('/Users/me/secret repo/path with spaces and a very long name '.repeat(5), 'pass');
     assert.equal(await sample(m, 'workflow_runs_total', { status: 'other' }), 1);
@@ -58,7 +58,7 @@ describe('harness metrics', () => {
   });
 
   it('never throws into the caller when a metric update fails, and counts the failure', async () => {
-    const m = createHarnessMetrics();
+    const m = createMetrics();
     assert.doesNotThrow(() => m.verification(Number.NaN, 'pass'));
     assert.doesNotThrow(() => m.workerInference('w', 1, 'ok'));
     // A broken registry entry: invalid label value type forces prom-client to throw inside the recorder.
@@ -66,7 +66,7 @@ describe('harness metrics', () => {
   });
 
   it('bounds tracked workflow starts so a run that never finishes cannot leak', async () => {
-    const m = createHarnessMetrics();
+    const m = createMetrics();
     for (let i = 0; i < 1_500; i += 1) m.workflowStarted('wf', `r${i}`);
     m.workflowFinished('wf', 'r0', 'success'); // evicted: counted without duration
     m.workflowFinished('wf', 'r1499', 'success');
@@ -75,7 +75,7 @@ describe('harness metrics', () => {
   });
 
   it('renders valid Prometheus exposition text with no task content', async () => {
-    const m = createHarnessMetrics();
+    const m = createMetrics();
     m.workerTask('qwen3:8b', 'fail');
     m.workflowFinished('wf', 'r', 'success');
     const text = await m.render();
@@ -85,7 +85,7 @@ describe('harness metrics', () => {
   });
 
   it('/metrics route serves exposition format, and a render failure is a 500, not a crash', async () => {
-    const m = createHarnessMetrics();
+    const m = createMetrics();
     m.codingAttempt('pass');
     const route = createMetricsRoute(m) as unknown as { handler: (c: unknown) => Promise<Response> };
     const ctx = {
@@ -119,7 +119,7 @@ describe('runner instrumentation', () => {
         allowedFiles: ['src/a.txt'],
         verificationCommands: [['node', '-e', "process.exit(require('fs').readFileSync('src/a.txt','utf8')==='new\\n'?0:1)"]],
       };
-      const m = createHarnessMetrics();
+      const m = createMetrics();
       const result = await runCodingTask(task, { repoRoot: root, worker, metrics: m, modelLabel: 'test-model' });
       assert.equal(result.verdict, 'PASS');
       assert.equal(await sample(m, 'worker_tasks_total', { worker: 'test-model', outcome: 'pass' }), 1);

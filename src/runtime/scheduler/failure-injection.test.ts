@@ -371,7 +371,7 @@ describe('corrupt scheduler rows are quarantined, not fatal', () => {
     corrupt(store, 'b', 'artifacts');
     store.close();
     const script = join(import.meta.dirname, '..', '..', '..', 'scripts', 'lead.ts');
-    const env = { ...process.env, HARNESS_SCHED_DB: dbFile, HARNESS_SCHED_ROOT: dir };
+    const env = { ...process.env, AGENTIC_SCHED_DB: dbFile, AGENTIC_SCHED_ROOT: dir };
     const cli = (...a: string[]) => execFileSync(process.execPath, ['--disable-warning=ExperimentalWarning', script, ...a], { env, encoding: 'utf8', cwd: dir });
     assert.match(cli('tasks'), /READY\s+p50 a/);
     assert.match(cli('status'), /ISSUE corrupt_row b: tasks row quarantined \(state READY\): task b: column artifacts is not valid JSON/);

@@ -88,7 +88,7 @@ describe('lead CLI', () => {
     const planFile = join(dir, 'plan.json');
     writeFileSync(planFile, JSON.stringify(plan(repo, [workerTask('a'), workerTask('b', { dependsOn: ['a'] })])));
     const script = join(fileURLToPath(new URL('.', import.meta.url)), '../../../scripts/lead.ts');
-    const env = { ...process.env, HARNESS_SCHED_DB: join(dir, 'db', 's.db'), HARNESS_SCHED_ROOT: dir };
+    const env = { ...process.env, AGENTIC_SCHED_DB: join(dir, 'db', 's.db'), AGENTIC_SCHED_ROOT: dir };
     const run = (...a: string[]) => execFileSync(process.execPath, ['--disable-warning=ExperimentalWarning', script, ...a], { env, encoding: 'utf8', cwd: dir });
     assert.match(run('plan', planFile), /READY: a/);
     assert.match(run('tasks'), /READY\s+p50 a/);

@@ -19,6 +19,4 @@ __pycache__/
 *.pyc
 .venv-phase3b/
 
-# Harness V0-A: checkpoints are local session state, never committed
-projects/*/checkpoints/
 docs/audits/**/pre-restructure-backup.tgz

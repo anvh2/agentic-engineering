@@ -41,7 +41,7 @@ export function baseRefName(batchId: string): string {
   return `refs/lead/base/${batchId}`;
 }
 
-const IDENTITY = ['-c', 'user.name=agentic-engineering', '-c', 'user.email=harness@localhost', '-c', 'commit.gpgsign=false'];
+const IDENTITY = ['-c', 'user.name=agentic-engineering', '-c', 'user.email=agentic@localhost', '-c', 'commit.gpgsign=false'];
 
 export function taskBranch(batchId: string, taskId: string): string {
   return `lead-task/${batchId}/${taskId}`;

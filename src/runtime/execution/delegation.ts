@@ -21,7 +21,7 @@ import { createTraceSink, redact, type TraceSink } from './coding-task-trace.ts'
  *   Lead writes a DelegationRequest (contract + its own assessment)
  *     -> deterministic gate decides route: qwen | claude   (no model involved)
  *     -> qwen route: bounded runCodingTask (max 3 coding attempts, fresh context each)
- *     -> harness verifier owns PASS/FAIL
+ *     -> runtime verifier owns PASS/FAIL
  *     -> PASS: verified change is left UNCOMMITTED in the working tree for the Lead to review
  *     -> anything else: the tree is restored and the task is handed back to Claude with evidence
  *
@@ -104,7 +104,7 @@ const JS_VERIFY_FLAGS = new Set(['--runInBand', '--ci']);
  *  - `--no-install`: npx may never fetch and run a package from the network.
  *  - flags are an allow-list: `--config`, `--setupFiles`, `--runner`, `--testEnvironment`... all execute arbitrary files.
  *  - at least one test path (no whole-suite runs); each is repo-relative, free of `..`, looks like a test file, and is
- *    either an existing file or a harness-owned hiddenFiles entry.
+ *    either an existing file or a runtime-owned hiddenFiles entry.
  */
 export async function validateJsVerification(command: string[], contract: CodingTask, repoRoot: string): Promise<string[]> {
   const label = command.join(' ');
@@ -215,7 +215,7 @@ export interface EscalationReport {
 }
 
 export type EngineeringStatus =
-  | 'PASS' // verified by the harness; change left uncommitted in the working tree
+  | 'PASS' // verified by the runtime; change left uncommitted in the working tree
   | 'ESCALATED_TO_CLAUDE' // worker exhausted its coding attempts (or broke the mutation policy)
   | 'RUNTIME_FAILURE' // model runtime unavailable; not a coding failure, not auto-escalated
   | 'KEPT_BY_CLAUDE'; // gate refused delegation; worker never invoked
@@ -228,7 +228,7 @@ export interface EngineeringResult {
   escalation?: EscalationReport;
   /** The verified diff on PASS. */
   diff: string;
-  /** True if the harness had to restore the working tree. */
+  /** True if the runtime had to restore the working tree. */
   restored: boolean;
   artifactDir?: string;
 }
@@ -271,7 +271,7 @@ export interface DelegateOptions {
 }
 
 /**
- * Runs an already-cleared delegation through the harness-owned runner (the ONE source of coding execution
+ * Runs an already-cleared delegation through the runtime-owned runner (the ONE source of coding execution
  * semantics), restores the tree on anything but PASS, and builds the result/escalation. Does not re-gate:
  * callers route first (routeTask). Used by delegateCodingTask and by the Mastra coding-task-workflow.
  */

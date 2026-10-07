@@ -1,8 +1,0 @@
-{
-  "$comment": "repo is resolved against the harness repository root. identity.rootCommit is authoritative: a mismatch refuses every command.",
-  "schema": "harness.project/1",
-  "repo": "../eshop",
-  "identity": { "rootCommit": "9519213b45f826cfe350bd55bc3c36ea4531116a" },
-  "test": { "command": ["npx", "jest", "--ci"], "timeoutMs": 300000 },
-  "expectedLocal": ["config/default.json", "config/production.json", "AGENTS.md", "docs/"]
-}

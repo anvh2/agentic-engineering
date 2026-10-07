@@ -8,12 +8,12 @@ import { DatabaseSync } from 'node:sqlite';
  * One machine-wide limit on concurrent local-model (Ollama) calls, shared by every process that can start one:
  * the Mastra server's coding-task workflow (reached through the lead CLI scheduler), in-process runners
  * (bench), and any second server or checkout. The model is a single machine resource, so the lease database lives
- * outside any checkout: ~/.harness-engineering/model-capacity.db (override: HARNESS_MODEL_LOCK_DB). The directory name is a persisted compatibility name: it predates the rename to agentic-engineering and is kept so existing leases stay valid.
+ * outside any checkout: ~/.agentic-engineering/model-capacity.db (override: AGENTIC_MODEL_LOCK_DB). The directory name is a persisted compatibility name: it predates the rename to agentic-engineering and is kept so existing leases stay valid.
  *
  * A permit is a row in `leases` with an expiry. Holders renew while their call runs; a crashed holder stops renewing
  * and its permit expires after `leaseMs`, or immediately once its pid is known dead on this host. Acquisition is one
  * IMMEDIATE transaction (reap expired/dead -> count -> insert), so two processes can never both take the last permit.
- * The permit count is stored in the database (first writer sets it from HARNESS_MODEL_CONCURRENCY, default 1), so every
+ * The permit count is stored in the database (first writer sets it from AGENTIC_MODEL_CONCURRENCY, default 1), so every
  * process enforces the same limit even if their environments differ.
  */
 
@@ -76,7 +76,7 @@ export class ModelCapacity {
     this.db.exec(`PRAGMA busy_timeout = ${options.busyTimeoutMs ?? 10_000};`);
     if (path !== ':memory:') this.db.exec('PRAGMA journal_mode = WAL;');
     this.db.exec(SCHEMA);
-    const permits = options.permits ?? (Number(process.env.HARNESS_MODEL_CONCURRENCY) || 1);
+    const permits = options.permits ?? (Number(process.env.AGENTIC_MODEL_CONCURRENCY) || 1);
     if (!Number.isInteger(permits) || permits < 1) throw new Error('model capacity permits must be a positive integer');
     this.db.prepare('INSERT OR IGNORE INTO capacity (resource, permits) VALUES (?, ?)').run(this.resource, permits);
   }
@@ -188,9 +188,9 @@ export class ModelCapacity {
 
 /** Where the machine-wide lease database lives. Under `node --test`, a temp file, so test runs never wait on real model work. */
 export function defaultModelCapacityPath(env: NodeJS.ProcessEnv = process.env): string {
-  if (env.HARNESS_MODEL_LOCK_DB) return env.HARNESS_MODEL_LOCK_DB;
-  if (env.NODE_TEST_CONTEXT) return join(tmpdir(), 'harness-test-model-capacity.db');
-  return join(homedir(), '.harness-engineering', 'model-capacity.db');
+  if (env.AGENTIC_MODEL_LOCK_DB) return env.AGENTIC_MODEL_LOCK_DB;
+  if (env.NODE_TEST_CONTEXT) return join(tmpdir(), 'agentic-test-model-capacity.db');
+  return join(homedir(), '.agentic-engineering', 'model-capacity.db');
 }
 
 let shared: ModelCapacity | undefined;

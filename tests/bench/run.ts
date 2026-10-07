@@ -2,17 +2,17 @@
 // Usage: npm run bench:go -- [runsPerLevel=10] [levels=L1,L2,L3,L4,L5]
 // Every run builds a fresh fixture, streams a human-readable trace, and persists artifacts under
 // .workdir/go-bench/<timestamp>/<level>/run-NN/ (trace.jsonl, contract.json, attempts.json, final.diff, summary.json).
-// No prompt/config changes happen between runs. PASS/FAIL is decided only by the harness verifier.
+// No prompt/config changes happen between runs. PASS/FAIL is decided only by the runtime verifier.
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { codingWorkerGo } from '../src/workers/coding-worker.ts';
-import { asStreamingWorker } from '../src/workers/streaming-worker.ts';
-import { resolveEditMode } from '../src/workers/coding-worker.ts';
-import { runCodingTask } from '../src/runtime/execution/coding-task-runner.ts';
-import { createTraceSink } from '../src/runtime/execution/coding-task-trace.ts';
-import { LEVELS, buildFixture, type Level } from '../tests/bench/go-ladder.ts';
-import { aggregate, aggregateByLevel, summarizeRun, type Metrics, type RunSummary } from '../tests/bench/metrics.ts';
-import { persistRun } from '../src/runtime/execution/coding-task-artifacts.ts';
+import { codingWorkerGo } from '../../src/workers/coding-worker.ts';
+import { asStreamingWorker } from '../../src/workers/streaming-worker.ts';
+import { resolveEditMode } from '../../src/workers/coding-worker.ts';
+import { runCodingTask } from '../../src/runtime/execution/coding-task-runner.ts';
+import { createTraceSink } from '../../src/runtime/execution/coding-task-trace.ts';
+import { LEVELS, buildFixture, type Level } from './go-ladder.ts';
+import { aggregate, aggregateByLevel, summarizeRun, type Metrics, type RunSummary } from './metrics.ts';
+import { persistRun } from '../../src/runtime/execution/coding-task-artifacts.ts';
 
 const runsPerLevel = Number(process.argv[2]) || 10;
 const levels = (process.argv[3]?.split(',') ?? [...LEVELS]) as Level[];

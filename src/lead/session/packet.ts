@@ -56,14 +56,14 @@ export interface PacketInput {
   state: string | null;
   expectedLocal: string[];
   cliPath: string;
-  harnessRoot: string;
+  projectRoot: string;
   date?: Date;
 }
 
 export function renderResume(p: PacketInput): string {
   const c = p.checkpoint;
   const notes = NOTE_SECTIONS.map(([key, title]) => `**${title}:** ${c.notes[key]}`).join('\n');
-  const rel = (path: string) => relative(p.harnessRoot, path);
+  const rel = (path: string) => relative(p.projectRoot, path);
   const inspect = [
     `- checkpoint record: ${p.checkpointPath}`,
     `- work since checkpoint: \`git log --oneline ${c.repo.head?.slice(0, 10)}..HEAD\`, \`git diff ${c.repo.head?.slice(0, 10)}\``,
@@ -77,8 +77,8 @@ export function renderResume(p: PacketInput): string {
     `## Verdict: ${verdict(p.findings)}`,
     p.findings.length ? `## Reconciliation — repository evidence wins over everything below\n${renderFindings(p.findings)}` : '',
     `## Repository now\n${renderRepoNow(p.now, p.test, c)}`,
-    `## Principles (${rel(`${p.harnessRoot}/docs/operations/lead-principles.md`)})\n${p.principles?.trim() ?? '(missing)'}`,
-    `## Project state (lead-owned WHY; projects/${p.project}/STATE.md)\n${p.state?.trim() ?? '(missing)'}`,
+    `## Principles (${rel(`${p.projectRoot}/docs/operations/lead-principles.md`)})\n${p.principles?.trim() ?? '(missing)'}`,
+    `## Project state (lead-owned WHY; .workdir/projects/${p.project}/STATE.md)\n${p.state?.trim() ?? '(missing)'}`,
     `## Last session — engine claims; verify against the sections above\n${notes}`,
     `## Inspect if needed\n${inspect.join('\n')}`,
     [

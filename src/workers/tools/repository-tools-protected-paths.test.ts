@@ -11,10 +11,10 @@ import { contextFor } from './__testing__/context-for.ts';
 import { runCodingTask, type CodingTask } from '../../runtime/execution/coding-task-runner.ts';
 
 /**
- * Regression tests for paths the harness's mutation policy cannot see. The runner's filesystem snapshot skips `.git`,
+ * Regression tests for paths the runtime's mutation policy cannot see. The runner's filesystem snapshot skips `.git`,
  * `node_modules` and `.applypatch-*` entries, so a worker write there is invisible to the forbidden-mutation check AND to
  * the restore. Such writes must therefore be refused at the tool boundary:
- *   - `.git` (dir, or a worktree's `.git` pointer FILE): repointing it redirects every later harness git command
+ *   - `.git` (dir, or a worktree's `.git` pointer FILE): repointing it redirects every later runtime git command
  *     (commit, `reset --hard`) to another repository; `.git/config` / hooks give code execution on the next git call.
  *   - `node_modules`: the JS verifier (`npx --no-install jest`) executes code from there; editing it forges a PASS.
  *   - `.applypatch-*`: the atomic-write temp prefix, ignored by the snapshot.
@@ -73,10 +73,10 @@ describe('a git worktree pointer file cannot be repointed by the worker', () => 
   });
   after(() => rm(join(main, '..'), { recursive: true, force: true }));
 
-  it('refuses to overwrite the worktree .git file (which would redirect harness git commands to the user repository)', async () => {
+  it('refuses to overwrite the worktree .git file (which would redirect runtime git commands to the user repository)', async () => {
     assert.equal(git(worktree, 'rev-parse', '--abbrev-ref', 'HEAD'), 'lead-task/B/t');
     await assert.rejects(writeFile.execute!({ path: '.git', content: `gitdir: ${join(main, '.git')}\n` }, contextFor(worktree)), /protected/i);
-    // Still on the task branch: harness commits / resets keep targeting the task worktree, never the user's branch.
+    // Still on the task branch: runtime commits / resets keep targeting the task worktree, never the user's branch.
     assert.equal(git(worktree, 'rev-parse', '--abbrev-ref', 'HEAD'), 'lead-task/B/t');
   });
 });

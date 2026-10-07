@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runCodingTask, type CodingTask, type WorkerLike } from './coding-task-runner.ts';
 
-// The oracle fails unless the file ends with a newline AND has the right logic: it can only pass if the harness
+// The oracle fails unless the file ends with a newline AND has the right logic: it can only pass if the runtime
 // restored the EOF newline the "worker" dropped, and the resulting diff must contain no EOF-newline noise.
 const ORACLE = `const fs = require('fs');
 const src = fs.readFileSync('f.js', 'utf8');
@@ -23,7 +23,7 @@ const task: CodingTask = {
   hiddenFiles: { 'check.hidden.js': ORACLE },
 };
 
-describe('runCodingTask: harness-owned EOF newline normalization (non-Go files)', () => {
+describe('runCodingTask: runtime-owned EOF newline normalization (non-Go files)', () => {
   let root: string;
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'runner-eof-'));

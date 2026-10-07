@@ -5,7 +5,7 @@ import type { ReviewRow, SchedulerStore, TaskRow } from '../runtime/scheduler/st
 import { taskSpecSchema, type SchedulerConfig, type TaskSpec } from '../runtime/scheduler/types.ts';
 
 /**
- * Engineering Lead review queue. A harness PASS only creates a review request; the decision is the Lead's, recorded
+ * Engineering Lead review queue. A runtime PASS only creates a review request; the decision is the Lead's, recorded
  * once, and it is the only way a task reaches APPROVED. No unattended Claude invocation exists here: review is an
  * explicit command (`lead review ...`) over persisted requests, optionally batched into one pack to save tokens.
  * Each task still gets its own decision.
@@ -17,7 +17,7 @@ export const REVIEW_CHECKLIST = [
   'Diff minimality: no unrelated changes, no whitespace-only edits',
   'EOF newline preserved',
   'Security (injection, secrets, unsafe I/O, new network or process access)',
-  'Test coverage of the behavior (the oracle is harness-owned; is it sufficient?)',
+  'Test coverage of the behavior (the oracle is runtime-owned; is it sufficient?)',
   'Maintainability and integration risk (conflicts with other pending tasks)',
 ] as const;
 

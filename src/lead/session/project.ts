@@ -5,12 +5,12 @@ import { findProjectRoot } from '../../core/paths.ts';
 import type { Checkpoint, ProjectConfig } from './types.ts';
 
 /**
- * File-based project brain under <project root>/projects/<name>. No database: a
+ * File-based project brain under <project root>/.workdir/projects/<name> (local state, never committed). No database: a
  * project is a directory, a checkpoint is a write-once JSON file, and the
  * latest checkpoint is simply the lexicographically greatest file name.
  */
 
-export const HARNESS_ROOT = findProjectRoot(import.meta.dirname) ?? resolve(import.meta.dirname, '..', '..', '..');
+export const PROJECT_ROOT = findProjectRoot(import.meta.dirname) ?? resolve(import.meta.dirname, '..', '..', '..');
 
 /** Engineering principles injected into every resume packet, relative to the project root. */
 export const PRINCIPLES_PATH = join('docs', 'operations', 'lead-principles.md');
@@ -21,14 +21,14 @@ export interface ProjectPaths {
   checkpointsDir: string;
 }
 
-export function projectPaths(name: string, harnessRoot = HARNESS_ROOT): ProjectPaths {
+export function projectPaths(name: string, projectRoot = PROJECT_ROOT): ProjectPaths {
   if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) throw new Error(`Invalid project name "${name}".`);
-  const projectDir = join(harnessRoot, 'projects', name);
-  return { principlesFile: join(harnessRoot, PRINCIPLES_PATH), projectDir, checkpointsDir: join(projectDir, 'checkpoints') };
+  const projectDir = join(projectRoot, '.workdir', 'projects', name);
+  return { principlesFile: join(projectRoot, PRINCIPLES_PATH), projectDir, checkpointsDir: join(projectDir, 'checkpoints') };
 }
 
-export async function loadProject(name: string, harnessRoot = HARNESS_ROOT): Promise<{ config: ProjectConfig; repoPath: string }> {
-  const { projectDir } = projectPaths(name, harnessRoot);
+export async function loadProject(name: string, projectRoot = PROJECT_ROOT): Promise<{ config: ProjectConfig; repoPath: string }> {
+  const { projectDir } = projectPaths(name, projectRoot);
   let raw: string;
   try {
     raw = await readFile(join(projectDir, 'project.json'), 'utf8');
@@ -37,15 +37,15 @@ export async function loadProject(name: string, harnessRoot = HARNESS_ROOT): Pro
   }
   const config = JSON.parse(raw) as ProjectConfig;
   const problems: string[] = [];
-  if (config.schema !== 'harness.project/1') problems.push('schema must be "harness.project/1"');
-  if (typeof config.repo !== 'string' || config.repo === '') problems.push('repo must be a path relative to the harness root');
+  if (config.schema !== 'agentic.project/1') problems.push('schema must be "agentic.project/1"');
+  if (typeof config.repo !== 'string' || config.repo === '') problems.push('repo must be a path relative to the runtime root');
   if (typeof config.identity?.rootCommit !== 'string') problems.push('identity.rootCommit is required');
   if (!Array.isArray(config.test?.command) || config.test.command.length === 0) problems.push('test.command must be a non-empty argv array');
   if (typeof config.test?.timeoutMs !== 'number') problems.push('test.timeoutMs must be a number');
   if (!Array.isArray(config.expectedLocal)) problems.push('expectedLocal must be an array');
   if (problems.length) throw new Error(`Invalid project.json for "${name}": ${problems.join('; ')}.`);
-  // Resolved against the harness repository root, never the caller's cwd.
-  return { config, repoPath: resolve(harnessRoot, config.repo) };
+  // Resolved against the runtime repository root, never the caller's cwd.
+  return { config, repoPath: resolve(projectRoot, config.repo) };
 }
 
 export async function readOptional(path: string): Promise<string | null> {
@@ -84,6 +84,6 @@ export async function loadCheckpoint(checkpointsDir: string, id?: string): Promi
   } catch (err) {
     throw new Error(`Checkpoint ${path} is not valid JSON: ${(err as Error).message}`);
   }
-  if (checkpoint.schema !== 'harness.checkpoint/1') throw new Error(`Checkpoint ${path} has unsupported schema "${checkpoint.schema}".`);
+  if (checkpoint.schema !== 'agentic.checkpoint/1') throw new Error(`Checkpoint ${path} has unsupported schema "${checkpoint.schema}".`);
   return { checkpoint, path };
 }

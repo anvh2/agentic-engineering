@@ -9,7 +9,7 @@ import { asStreamingWorker } from '../../../workers/streaming-worker.ts';
 import { delegationRequestSchema, executeDelegation, languageOf, routeTask, workerAgentIdFor, type EngineeringResult } from '../../../runtime/execution/delegation.ts';
 import type { RunCodingTaskOptions, WorkerLike } from '../../../runtime/execution/coding-task-runner.ts';
 import { phaseOf, type CodingPhase, type PhaseUpdate } from '../../../runtime/execution/coding-task-status.ts';
-import { harnessMetrics } from '../../../observability/metrics.ts';
+import { runtimeMetrics } from '../../../observability/metrics.ts';
 import { createTraceSink } from '../../../runtime/execution/coding-task-trace.ts';
 
 /**
@@ -17,7 +17,7 @@ import { createTraceSink } from '../../../runtime/execution/coding-task-trace.ts
  * visibility boundary visible in Mastra Studio.
  *
  *   prepare-coding-task        validate the CodingTask contract + deterministic routing gate (qwen | claude)
- *   run-qwen-worker-harness    the existing harness-owned runner: worker -> mutation policy -> format -> verify,
+ *   run-coding-worker    the existing runtime-owned runner: worker -> mutation policy -> format -> verify,
  *                              fresh-context coding retry (max 3), separate runtime retry. PASS/FAIL is decided
  *                              there and nowhere else.
  *   finalize-result            map the runner's outcome to an explicit result for the Engineering Lead
@@ -53,7 +53,7 @@ const attemptSummarySchema = z.object({
 
 export const codingTaskResultSchema = z.object({
   taskId: z.string(),
-  /** PASS | ESCALATED_TO_CLAUDE | RUNTIME_FAILURE | KEPT_BY_CLAUDE. Decided by the harness verifier, never by the worker. */
+  /** PASS | ESCALATED_TO_CLAUDE | RUNTIME_FAILURE | KEPT_BY_CLAUDE. Decided by the runtime verifier, never by the worker. */
   status: z.enum(['PASS', 'ESCALATED_TO_CLAUDE', 'RUNTIME_FAILURE', 'KEPT_BY_CLAUDE']),
   phase: phaseSchema,
   reasons: z.array(z.string()),
@@ -126,7 +126,7 @@ function summarize(result: EngineeringResult): Omit<CodingTaskWorkflowResult, 'p
 }
 
 /**
- * The harness step mutates a real repository, so it must run AT MOST ONCE per workflow run. Mastra re-executes the
+ * The runtime step mutates a real repository, so it must run AT MOST ONCE per workflow run. Mastra re-executes the
  * active step of every still-"running" run on server boot (`mastra dev` does this after every hot reload): for this step
  * that means re-running the worker against a tree that its earlier execution left half-edited, after the client may
  * already have given up on the run and restored or reused that tree. Claims `runId` with an exclusive-create marker;
@@ -146,7 +146,7 @@ async function claimExecution(root: string, runId: string, info: Record<string, 
 
 /** `mastra dev` runs with its cwd inside its own build output, so walk up to the project root. */
 function defaultArtifactRoot(): string {
-  if (process.env.HARNESS_ARTIFACT_ROOT) return process.env.HARNESS_ARTIFACT_ROOT;
+  if (process.env.AGENTIC_ARTIFACT_ROOT) return process.env.AGENTIC_ARTIFACT_ROOT;
   return join(findProjectRoot() ?? process.cwd(), '.workdir', 'lead-delegations');
 }
 
@@ -187,8 +187,8 @@ export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
   });
 
   const runWorker = createStep({
-    id: 'run-qwen-worker-harness',
-    description: 'Runs the existing harness-owned runner: Qwen edits only the allowed files, the harness checks the file hashes, formats, and runs the verification commands. PASS/FAIL comes only from the verifier. Fresh-context coding retries (max 3) and the separate runtime retry live inside the runner.',
+    id: 'run-coding-worker',
+    description: 'Runs the existing runtime-owned runner: Qwen edits only the allowed files, the runtime checks the file hashes, formats, and runs the verification commands. PASS/FAIL comes only from the verifier. Fresh-context coding retries (max 3) and the separate runtime retry live inside the runner.',
     inputSchema: prepareOutputSchema,
     outputSchema: codingTaskResultSchema.omit({ phase: true, nextAction: true, report: true }),
     stateSchema,
@@ -269,15 +269,15 @@ export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
 
   return createWorkflow({
     id: 'coding-task-workflow',
-    description: 'Engineering Lead -> local Qwen coding worker. Validates and routes a scoped CodingTask, runs it through the harness-owned runner (verification owns PASS/FAIL, max 3 coding attempts, fresh context per retry), and returns PASS or an explicit escalation.',
+    description: 'Engineering Lead -> local Qwen coding worker. Validates and routes a scoped CodingTask, runs it through the runtime-owned runner (verification owns PASS/FAIL, max 3 coding attempts, fresh context per retry), and returns PASS or an explicit escalation.',
     inputSchema: codingTaskInputSchema,
     outputSchema: codingTaskResultSchema,
     stateSchema,
     options: {
       validateInputs: true,
       // Operational metrics only; the recorders never throw and Mastra swallows callback errors.
-      onStart: ({ workflowId, runId }) => harnessMetrics.workflowStarted(workflowId, runId),
-      onFinish: ({ workflowId, runId, status }) => harnessMetrics.workflowFinished(workflowId, runId, status),
+      onStart: ({ workflowId, runId }) => runtimeMetrics.workflowStarted(workflowId, runId),
+      onFinish: ({ workflowId, runId, status }) => runtimeMetrics.workflowFinished(workflowId, runId, status),
     },
   })
     .then(prepare)

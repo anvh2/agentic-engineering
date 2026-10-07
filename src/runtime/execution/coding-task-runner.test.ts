@@ -8,7 +8,7 @@ import { runCodingTask, type CodingTask, type WorkerLike } from './coding-task-r
 const STUB = 'package calc\n\nfunc Double(n int) int {\n\treturn 0\n}\n';
 const WRONG = 'package calc\n\nfunc Double(n int) int {\n\treturn n + 1\n}\n';
 const RIGHT = 'package calc\n\nfunc Double(n int) int {\n\treturn n * 2\n}\n';
-// Deliberately badly formatted but correct: the harness formatter must fix it.
+// Deliberately badly formatted but correct: the runtime formatter must fix it.
 const RIGHT_UNFORMATTED = 'package calc\nfunc Double(n int) int {\nreturn n*2\n}\n';
 const TEST_SRC =
   'package calc\n\nimport "testing"\n\nfunc TestDouble(t *testing.T) {\n\tif got := Double(3); got != 6 {\n\t\tt.Fatalf("Double(3) = %d, want 6", got)\n\t}\n}\n';
@@ -25,7 +25,7 @@ const task: CodingTask = {
 
 type Script = (ctx: { call: number; prompt: string; root: string }) => Promise<void> | void;
 
-describe('runCodingTask (harness-owned control loop, model boundary stubbed)', () => {
+describe('runCodingTask (runtime-owned control loop, model boundary stubbed)', () => {
   let root: string;
   const prompts: string[] = [];
 
@@ -52,7 +52,7 @@ describe('runCodingTask (harness-owned control loop, model boundary stubbed)', (
   }
   const writeImpl = (src: string) => writeFile(join(root, 'calc', 'calc.go'), src);
 
-  it('PASS on first attempt when the harness-run test passes; harness formats the result', async () => {
+  it('PASS on first attempt when the runtime-run test passes; the runtime formats the result', async () => {
     const result = await runCodingTask(task, { repoRoot: root, worker: workerFrom(() => writeImpl(RIGHT_UNFORMATTED)) });
     assert.equal(result.verdict, 'PASS');
     assert.equal(result.attempts, 1);

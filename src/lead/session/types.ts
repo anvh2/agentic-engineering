@@ -4,8 +4,8 @@
  */
 
 export interface ProjectConfig {
-  schema: 'harness.project/1';
-  /** Repository path, relative to the harness repository root. */
+  schema: 'agentic.project/1';
+  /** Repository path, relative to the runtime repository root. */
   repo: string;
   identity: { rootCommit: string };
   test: { command: string[]; timeoutMs: number };
@@ -73,7 +73,7 @@ export type NoteKey = (typeof NOTE_SECTIONS)[number][0];
 export type EngineNotes = Record<NoteKey, string>;
 
 export interface Checkpoint {
-  schema: 'harness.checkpoint/1';
+  schema: 'agentic.checkpoint/1';
   id: string;
   project: string;
   createdAt: string;

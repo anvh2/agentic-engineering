@@ -67,7 +67,7 @@ describe('sandbox: isolation properties', { skip: !darwin && 'macOS only' }, () 
     const r = await sh(root, 'echo x > "$TMPDIR/t" && echo "$TMPDIR"');
     assert.equal(r.exitCode, 0, r.stderr);
     const dir = r.stdout.trim();
-    assert.match(dir, /harness-sbx-/);
+    assert.match(dir, /agentic-sbx-/);
     assert.equal(existsSync(dir), false, 'temp dir cleaned up');
   });
 
@@ -99,16 +99,16 @@ describe('sandbox: isolation properties', { skip: !darwin && 'macOS only' }, () 
     assert.equal(insideRead.stdout, 'LOCAL=ok\n', 'the repository under test may read its own .env');
   });
 
-  it('does not inherit the harness environment (secrets are not passed down)', async () => {
-    process.env.HARNESS_TEST_SECRET_TOKEN = 'super-secret-value-123';
+  it('does not inherit the runtime environment (secrets are not passed down)', async () => {
+    process.env.AGENTIC_TEST_SECRET_TOKEN = 'super-secret-value-123';
     process.env.NODE_OPTIONS = '--require /nonexistent-hook.js';
     try {
       const r = await sh(root, 'env');
       assert.equal(r.exitCode, 0, r.stderr);
-      assert.doesNotMatch(r.stdout, /super-secret-value-123|HARNESS_TEST_SECRET_TOKEN|NODE_OPTIONS/);
+      assert.doesNotMatch(r.stdout, /super-secret-value-123|AGENTIC_TEST_SECRET_TOKEN|NODE_OPTIONS/);
       assert.match(r.stdout, /^PATH=/m);
     } finally {
-      delete process.env.HARNESS_TEST_SECRET_TOKEN;
+      delete process.env.AGENTIC_TEST_SECRET_TOKEN;
       delete process.env.NODE_OPTIONS;
     }
   });
@@ -173,13 +173,13 @@ describe('sandbox: fail closed', { skip: !darwin && 'macOS only' }, () => {
     base = realpathSync(await mkdtemp(join(tmpdir(), 'sbx-failclosed-')));
   });
   afterEach(() => {
-    delete process.env.HARNESS_SANDBOX_EXEC;
+    delete process.env.AGENTIC_SANDBOX_EXEC;
     resetSandboxStatusForTests();
   });
   after(() => rm(base, { recursive: true, force: true }));
 
   it('a missing sandbox binary means nothing runs', async () => {
-    process.env.HARNESS_SANDBOX_EXEC = join(base, 'does-not-exist');
+    process.env.AGENTIC_SANDBOX_EXEC = join(base, 'does-not-exist');
     resetSandboxStatusForTests();
     const r = await sh(base, 'echo ran > ran.txt');
     assert.equal(r.sandboxUnavailable, true);
@@ -193,7 +193,7 @@ describe('sandbox: fail closed', { skip: !darwin && 'macOS only' }, () => {
     const fake = join(base, 'fake-sandbox-exec');
     await writeFile(fake, '#!/bin/sh\nwhile [ "$1" = "-D" ]; do shift 2; done\n[ "$1" = "-p" ] && shift 2\nexec "$@"\n');
     await chmod(fake, 0o755);
-    process.env.HARNESS_SANDBOX_EXEC = fake;
+    process.env.AGENTIC_SANDBOX_EXEC = fake;
     resetSandboxStatusForTests();
     const status = await sandboxStatus();
     assert.equal(status.available, false);

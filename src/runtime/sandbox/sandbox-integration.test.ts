@@ -31,7 +31,7 @@ describe('sandbox integration', { skip: !darwin && 'macOS only' }, () => {
     git(root, 'commit', '-q', '-m', 'init');
   });
   afterEach(() => {
-    delete process.env.HARNESS_SANDBOX_EXEC;
+    delete process.env.AGENTIC_SANDBOX_EXEC;
     resetSandboxStatusForTests();
   });
   after(() => rm(base, { recursive: true, force: true }));
@@ -58,21 +58,21 @@ describe('sandbox integration', { skip: !darwin && 'macOS only' }, () => {
     git(root, 'checkout', '--', '.');
   });
 
-  it('the worker tool runGoTest runs sandboxed (no harness secrets in its environment)', async () => {
-    await writeFile(join(root, 'calc', 'env_test.go'), 'package calc\n\nimport (\n\t"os"\n\t"testing"\n)\n\nfunc TestEnv(t *testing.T) {\n\tif os.Getenv("HARNESS_TEST_SECRET_TOKEN") != "" {\n\t\tt.Fatal("secret leaked")\n\t}\n}\n');
-    process.env.HARNESS_TEST_SECRET_TOKEN = 'leak-me-123456';
+  it('the worker tool runGoTest runs sandboxed (no runtime secrets in its environment)', async () => {
+    await writeFile(join(root, 'calc', 'env_test.go'), 'package calc\n\nimport (\n\t"os"\n\t"testing"\n)\n\nfunc TestEnv(t *testing.T) {\n\tif os.Getenv("AGENTIC_TEST_SECRET_TOKEN") != "" {\n\t\tt.Fatal("secret leaked")\n\t}\n}\n');
+    process.env.AGENTIC_TEST_SECRET_TOKEN = 'leak-me-123456';
     try {
       const r = (await runGoTest.execute!({ package: './calc' }, contextFor(root))) as { exitCode: number | null; stdout: string };
       assert.match(r.stdout, /secret leaked|FAIL/, 'calc test still fails (Double returns 0), but not because of the secret');
       assert.doesNotMatch(r.stdout, /secret leaked/);
     } finally {
-      delete process.env.HARNESS_TEST_SECRET_TOKEN;
+      delete process.env.AGENTIC_TEST_SECRET_TOKEN;
       await rm(join(root, 'calc', 'env_test.go'));
     }
   });
 
   it('fail closed: without isolation the worker is never invoked and delegation reports RUNTIME_FAILURE sandbox_unavailable', async () => {
-    process.env.HARNESS_SANDBOX_EXEC = join(base, 'missing-sandbox-exec');
+    process.env.AGENTIC_SANDBOX_EXEC = join(base, 'missing-sandbox-exec');
     resetSandboxStatusForTests();
     let calls = 0;
     const worker: WorkerLike = { async generate() { calls++; return { text: '', finishReason: 'stop', steps: [{}] }; } };

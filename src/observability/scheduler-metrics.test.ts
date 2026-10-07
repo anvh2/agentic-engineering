@@ -4,7 +4,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { createHarnessMetrics } from './metrics.ts';
+import { createMetrics } from './metrics.ts';
 import { LEASED_STATES, readSchedulerState, resolveSchedulerDbPath, TASK_STATES } from './scheduler-state.ts';
 import * as scheduler from '../runtime/scheduler/types.ts';
 import { tempDir } from '../runtime/scheduler/test-helpers.ts';
@@ -27,7 +27,7 @@ describe('persisted scheduler metrics (read-only SQLite at scrape time)', () => 
         child.stdout.on('data', (b) => String(b).includes('CLAIMED') && resolve());
         child.on('exit', (code) => reject(new Error(`child exited early (${code})`)));
       });
-      const m1 = createHarnessMetrics({ schedulerDbPath: db });
+      const m1 = createMetrics({ schedulerDbPath: db });
       m1.workerTask('qwen3:8b', 'pass'); // a LIVE counter, lost on restart by design
       const t1 = await m1.render();
       assert.equal(series(t1, 'active_workers'), 1);
@@ -37,7 +37,7 @@ describe('persisted scheduler metrics (read-only SQLite at scrape time)', () => 
       assert.equal(series(t1, 'worker_tasks_total', 'worker="qwen3:8b",outcome="pass"'), 1);
 
       // "Mastra server restart": a brand-new metrics instance. Persisted series are intact; live counters start over.
-      const t2 = await createHarnessMetrics({ schedulerDbPath: db }).render();
+      const t2 = await createMetrics({ schedulerDbPath: db }).render();
       assert.equal(series(t2, 'active_workers'), 1);
       assert.equal(series(t2, 'worker_tasks_total', 'worker="qwen3:8b",outcome="pass"'), undefined);
     } finally {
@@ -53,7 +53,7 @@ describe('persisted scheduler metrics (read-only SQLite at scrape time)', () => 
     await new Promise((r) => child.on('exit', r));
 
     let wall = Date.now();
-    const m = createHarnessMetrics({ schedulerDbPath: db, wallClock: () => wall });
+    const m = createMetrics({ schedulerDbPath: db, wallClock: () => wall });
     assert.equal(series(await m.render(), 'active_workers'), 1); // lease (60s) still valid
     wall += 120_000;
     const expired = await m.render();
@@ -72,13 +72,13 @@ describe('persisted scheduler metrics (read-only SQLite at scrape time)', () => 
   it('exposes Claude review decisions written by another process, counted from the persisted reviews table', async () => {
     const db = join(tempDir('sched-metrics-'), 'sched.db');
     runChild('decide', db);
-    const text = await createHarnessMetrics({ schedulerDbPath: db }).render();
+    const text = await createMetrics({ schedulerDbPath: db }).render();
     assert.equal(series(text, 'review_decisions_total', 'decision="APPROVED",reviewer="claude"'), 1);
     assert.equal(series(text, 'review_decisions_total', 'decision="ESCALATED_TO_HUMAN",reviewer="claude"'), 1);
     assert.equal(series(text, 'scheduler_tasks', 'state="ESCALATED"'), 1);
     assert.equal(series(text, 'scheduler_tasks', 'state="APPROVED"'), 1);
     // Monotonic across scrapes: reading never mutates anything.
-    const again = await createHarnessMetrics({ schedulerDbPath: db }).render();
+    const again = await createMetrics({ schedulerDbPath: db }).render();
     assert.equal(series(again, 'review_decisions_total', 'decision="APPROVED",reviewer="claude"'), 1);
   });
 
@@ -104,7 +104,7 @@ describe('persisted scheduler metrics (read-only SQLite at scrape time)', () => 
 
   it('unavailable database: series are absent (not stale, not zero), up=0, the scrape still succeeds', async () => {
     const dir = tempDir('sched-metrics-');
-    const m = createHarnessMetrics({ schedulerDbPath: join(dir, 'missing.db') });
+    const m = createMetrics({ schedulerDbPath: join(dir, 'missing.db') });
     const text = await m.render();
     assert.equal(series(text, 'scheduler_state_up'), 0);
     assert.equal(series(text, 'task_queue_depth'), undefined);
@@ -121,7 +121,7 @@ describe('persisted scheduler metrics (read-only SQLite at scrape time)', () => 
     const empty = join(dir, 'empty.db');
     new DatabaseSync(empty).close();
     for (const path of [corrupt, empty]) {
-      const m = createHarnessMetrics({ schedulerDbPath: path });
+      const m = createMetrics({ schedulerDbPath: path });
       const text = await m.render();
       assert.equal(series(text, 'scheduler_state_up'), 0);
       assert.equal(series(text, 'scheduler_state_read_errors_total'), 1);
@@ -134,7 +134,7 @@ describe('persisted scheduler metrics (read-only SQLite at scrape time)', () => 
     const writer = new DatabaseSync(db);
     writer.exec('PRAGMA journal_mode = DELETE; CREATE TABLE tasks (id TEXT); BEGIN EXCLUSIVE;'); // rollback-journal mode: readers are blocked
     try {
-      const m = createHarnessMetrics({ schedulerDbPath: db });
+      const m = createMetrics({ schedulerDbPath: db });
       const started = Date.now();
       const text = await m.render();
       assert.ok(Date.now() - started < 3_000);
@@ -149,7 +149,7 @@ describe('persisted scheduler metrics (read-only SQLite at scrape time)', () => 
   it('recovers on the next scrape once the database is readable again, with no stale values in between', async () => {
     const dir = tempDir('sched-metrics-');
     const db = join(dir, 'late.db');
-    const m = createHarnessMetrics({ schedulerDbPath: db });
+    const m = createMetrics({ schedulerDbPath: db });
     assert.equal(series(await m.render(), 'scheduler_state_up'), 0);
     runChild('decide', db);
     const text = await m.render();
@@ -162,9 +162,9 @@ describe('persisted scheduler metrics (read-only SQLite at scrape time)', () => 
     assert.deepEqual([...LEASED_STATES], [...scheduler.LEASED_STATES]);
   });
 
-  it('resolves the database path like lead: HARNESS_SCHED_DB, then HARNESS_SCHED_ROOT, then <project>/.workdir', () => {
-    assert.equal(resolveSchedulerDbPath({ HARNESS_SCHED_DB: '/x/y.db' }, '/'), '/x/y.db');
-    assert.equal(resolveSchedulerDbPath({ HARNESS_SCHED_ROOT: '/r' }, '/'), '/r/scheduler/scheduler.db');
+  it('resolves the database path like lead: AGENTIC_SCHED_DB, then AGENTIC_SCHED_ROOT, then <project>/.workdir', () => {
+    assert.equal(resolveSchedulerDbPath({ AGENTIC_SCHED_DB: '/x/y.db' }, '/'), '/x/y.db');
+    assert.equal(resolveSchedulerDbPath({ AGENTIC_SCHED_ROOT: '/r' }, '/'), '/r/scheduler/scheduler.db');
     // from a nested cwd (mastra dev runs inside its own build output) it still finds the project root
     const projectRoot = join(import.meta.dirname, '..', '..'); // independent of the checkout's directory name
     assert.equal(resolveSchedulerDbPath({}, join(projectRoot, '.mastra', 'output')), join(projectRoot, '.workdir', 'scheduler', 'scheduler.db'));

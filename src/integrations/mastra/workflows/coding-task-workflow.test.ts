@@ -70,7 +70,7 @@ describe('coding-task-workflow (Mastra boundary; model stubbed, runner + verifie
   it('is registered under the id coding-task-workflow with the three coarse steps', () => {
     assert.equal(codingTaskWorkflow.id, 'coding-task-workflow');
     const steps = Object.keys((codingTaskWorkflow as unknown as { steps: Record<string, unknown> }).steps);
-    assert.deepEqual(steps, ['prepare-coding-task', 'run-qwen-worker-harness', 'finalize-result']);
+    assert.deepEqual(steps, ['prepare-coding-task', 'run-coding-worker', 'finalize-result']);
   });
 
   it('a real CodingTask enters the workflow and PASS propagates; the verified change is left uncommitted', async () => {
@@ -81,7 +81,7 @@ describe('coding-task-workflow (Mastra boundary; model stubbed, runner + verifie
     assert.equal(r.result.codingAttempts, 1);
     assert.match(r.result.diff, /\+\treturn n \* 2/);
     assert.equal(git(root, 'rev-parse', 'HEAD').trim(), head, 'workflow must not commit');
-    for (const id of ['prepare-coding-task', 'run-qwen-worker-harness', 'finalize-result']) {
+    for (const id of ['prepare-coding-task', 'run-coding-worker', 'finalize-result']) {
       assert.equal((r.steps as Record<string, { status: string }>)[id].status, 'success');
     }
   });

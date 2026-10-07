@@ -25,7 +25,7 @@ Enforced in one place, `SchedulerStore.transition`:
 Exits: `BLOCKED`, `REVIEW_REJECTED` (spawns a bounded correction task), `ESCALATED`, `RUNTIME_FAILURE`, `CANCELLED`.
 A worker PASS ends at `REVIEW_PENDING`. Only a recorded Lead decision reaches `APPROVED`; only a verified integration reaches `DONE`.
 
-State: SQLite at `.workdir/scheduler/scheduler.db` (tasks, audit events, reviews, locks). Markdown (`lead tasks --markdown`) is a generated view only. Optional overrides: `.workdir/scheduler.config.json`, `HARNESS_SCHED_DB`, `HARNESS_SCHED_ROOT`.
+State: SQLite at `.workdir/scheduler/scheduler.db` (tasks, audit events, reviews, locks). Markdown (`npm run lead -- tasks --markdown`) is a generated view only. Optional overrides: `.workdir/scheduler.config.json`, `AGENTIC_SCHED_DB`, `AGENTIC_SCHED_ROOT`.
 
 ## Guarantees
 
@@ -37,7 +37,7 @@ State: SQLite at `.workdir/scheduler/scheduler.db` (tasks, audit events, reviews
 - **Sandbox**: all model-generated code runs under macOS `sandbox-exec`: writes only inside the task root and a private temp dir, no network (loopback included), no credential reads, allow-listed environment. If no sandbox can be proven, nothing runs (fail closed; no opt-out).
 - **Protected paths and mutation policy**: worker tools refuse protected repository paths; the runner diffs the filesystem after every attempt and rejects forbidden mutations, including side effects of verification commands. `npx` runs with `--no-install`.
 - **Integration**: per-repository lock; reviewed commit re-checked; merge `--no-ff` into `lead-integration/<batch>` in the `_integration` worktree; the task's oracle is committed as a permanent test; this and earlier tasks' oracles plus batch commands must pass. Any failure rolls back to the recorded pre-merge SHA and escalates the task (worktree kept). Never pushes, never touches main.
-- **Model capacity**: one machine-wide limit on concurrent Ollama calls (`src/runtime/capacity`), lease database at `~/.harness-engineering/model-capacity.db` (`HARNESS_MODEL_LOCK_DB`, `HARNESS_MODEL_CONCURRENCY`). The path is a persisted compatibility name.
+- **Model capacity**: one machine-wide limit on concurrent Ollama calls (`src/runtime/capacity`), lease database at `~/.agentic-engineering/model-capacity.db` (`AGENTIC_MODEL_LOCK_DB`, `AGENTIC_MODEL_CONCURRENCY`). The path is a persisted compatibility name.
 
 ## Delegation eligibility (`routeTask`, src/runtime/execution/delegation.ts)
 
@@ -46,7 +46,7 @@ assessment small / low risk / no ambiguity; one allowed source file; never a tes
 
 Outcomes: `PASS` (verifier passed on the exact final state), `ESCALATED_TO_CLAUDE` (attempts exhausted or forbidden mutation; tree restored; `escalation.json`), `RUNTIME_FAILURE` (model unavailable after one retry; not a coding failure), `KEPT_BY_CLAUDE` (refused by the gate).
 
-Per-run artifacts: `.workdir/lead-delegations/<taskId>-<timestamp>/` (`trace.jsonl`, `attempts.json`, `contract.json`, `final.diff`, `result.json`; override with `HARNESS_ARTIFACT_ROOT`). No raw chain-of-thought is recorded.
+Per-run artifacts: `.workdir/lead-delegations/<taskId>-<timestamp>/` (`trace.jsonl`, `attempts.json`, `contract.json`, `final.diff`, `result.json`; override with `AGENTIC_ARTIFACT_ROOT`). No raw chain-of-thought is recorded.
 
 ## Review
 
@@ -58,8 +58,31 @@ No unattended Claude invocation exists. `lead review pack` writes one Markdown p
 
 ## What Studio shows and does not
 
-Studio shows the three-step workflow graph per run and one trace per run (workflow → step → agent → model → tool call). Intra-step phases are emitted as `coding-phase` events and not persisted mid-step; the harness's own checks (hash mutation checks, gofmt, `go test`) are not spans. The complete record is the artifact directory above.
+Studio shows the three-step workflow graph per run and one trace per run (workflow → step → agent → model → tool call). Intra-step phases are emitted as `coding-phase` events and not persisted mid-step; the runtime's own checks (hash mutation checks, gofmt, `go test`) are not spans. The complete record is the artifact directory above.
 
-## Persisted compatibility names
+## Persistence
 
-Kept on purpose so existing state keeps working; migrate separately: `HARNESS_*` environment variables, project schema `harness.project/1`, `~/.harness-engineering/model-capacity.db`.
+| Store | Location | Tables / content |
+| --- | --- | --- |
+| Scheduler | `.workdir/scheduler/scheduler.db` (`AGENTIC_SCHED_DB`, `AGENTIC_SCHED_ROOT`) | `batches`, `tasks` (state, lease owner/expiry, `claim_epoch`, attempts, result JSON), `events` (audit trail of every transition), `reviews` (Lead decisions), `locks` (per-repository integration lock) |
+| Model capacity | `~/.agentic-engineering/model-capacity.db` (`AGENTIC_MODEL_LOCK_DB`, `AGENTIC_MODEL_CONCURRENCY`) | `capacity` (permit count per resource), `leases` (holder pid, expiry; renewed while a call runs) |
+| Run artifacts | `.workdir/lead-delegations/<task>-<ts>/` (`AGENTIC_ARTIFACT_ROOT`) | trace, attempts, contract, final diff, result |
+| Worktrees | `.workdir/worktrees/<batch>/<task>`, `_integration` | git worktrees |
+| Session projects | `.workdir/projects/<name>/` | `project.json` (`agentic.project/1`), `STATE.md`, `checkpoints/*.json` (`agentic.checkpoint/1`) |
+| Mastra storage | libSQL + DuckDB under `.mastra/` (framework-owned) | run snapshots, traces |
+
+No table or column carries the old project name, so the SQLite schemas needed no migration. `tasks.result` JSON written before the rename may contain a `harnessCategory` key; nothing reads it, and new rows write `runnerCategory`.
+
+### Identity migration (harness-engineering → agentic-engineering)
+
+| Old | New | How migrated |
+| --- | --- | --- |
+| env `HARNESS_*` | env `AGENTIC_*` | rename only; no aliases (set the new names in your shell/.env) |
+| `~/.harness-engineering/model-capacity.db` | `~/.agentic-engineering/model-capacity.db` | not copied: it holds only expiring leases and a permit count that is re-derived from env. The old directory can be deleted once no old process is running |
+| `lead/projects/<name>/` (tracked) | `.workdir/projects/<name>/` (local) | files moved; schema strings rewritten in `project.json` and every checkpoint |
+| schema `harness.project/1`, `harness.checkpoint/1` | `agentic.project/1`, `agentic.checkpoint/1` | rewritten in place; the loader now rejects the old strings |
+| `lead/principles.md` | `docs/operations/lead-principles.md` | moved |
+| workflow step `run-qwen-worker-harness` | `run-coding-worker` | rename; in-flight runs of the old server are not resumable across the rename |
+| git author `harness-engineering` / `harness-integrator` | `agentic-engineering` / `agentic-integrator` | affects new commits only |
+
+No compatibility aliases remain. The word "harness" no longer appears in active code or docs; the runtime-side verifier is called the *runtime verifier* / *coding runner*.

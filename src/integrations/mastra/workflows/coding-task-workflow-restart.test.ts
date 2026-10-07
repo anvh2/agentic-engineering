@@ -8,7 +8,7 @@ import { createCodingTaskWorkflow, type CodingTaskWorkflowInput } from './coding
 import type { WorkerLike } from '../../../runtime/execution/coding-task-runner.ts';
 
 /**
- * Observed on 2026-10-06: every `mastra dev` hot reload re-executed the harness step of every run still marked
+ * Observed on 2026-10-06: every `mastra dev` hot reload re-executed the runtime step of every run still marked
  * "running" (Mastra's restartAllActiveWorkflowRuns), including runs the Lead had already abandoned and whose files it had
  * restored. One resurrected run wrote into the user's real checkout 4 minutes after the restore and made an unrelated
  * task fail its scope gate. The step must run at most once per run id, and a cancelled run must actually stop.

@@ -112,7 +112,7 @@ describe('runCodingTask control semantics', () => {
     assert.equal(types.filter((t) => t === 'runtime_retry').length, 1);
   });
 
-  it('hidden harness-owned tests are never visible to the worker, decide PASS, and are removed afterwards', async () => {
+  it('hidden runtime-owned tests are never visible to the worker, decide PASS, and are removed afterwards', async () => {
     const seen: { hiddenPresentDuringRun: boolean; promptMentionsHidden: boolean }[] = [];
     const worker: WorkerLike = {
       async generate(prompt) {

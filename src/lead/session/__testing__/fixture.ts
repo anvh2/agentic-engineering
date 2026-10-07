@@ -6,7 +6,7 @@ import { main } from '../cli.ts';
 
 /**
  * Throwaway layout mirroring the real one:
- *   <parent>/harness/projects/demo/project.json   (repo: "../repo")
+ *   <parent>/root/.workdir/projects/demo/project.json   (repo: "../repo")
  *   <parent>/repo/                                     (git repo under test)
  *   <parent>/tools/fake-test.mjs + testout.json        (controllable test command)
  */
@@ -55,7 +55,7 @@ export function jestOutput(failing: string[], passing: string[], failedTests = f
 
 export interface Fixture {
   parent: string;
-  harnessRoot: string;
+  projectRoot: string;
   repo: string;
   git: (...args: string[]) => string;
   write: (rel: string, content: string) => Promise<void>;
@@ -66,12 +66,12 @@ export interface Fixture {
 }
 
 export async function createFixture(): Promise<Fixture> {
-  const parent = await mkdtemp(join(tmpdir(), 'harness-v0a-'));
-  const harnessRoot = join(parent, 'harness');
+  const parent = await mkdtemp(join(tmpdir(), 'agentic-session-'));
+  const projectRoot = join(parent, 'root');
   const repo = join(parent, 'repo');
   const tools = join(parent, 'tools');
-  await mkdir(join(harnessRoot, 'projects', 'demo'), { recursive: true });
-  await mkdir(join(harnessRoot, 'docs', 'operations'), { recursive: true });
+  await mkdir(join(projectRoot, '.workdir', 'projects', 'demo'), { recursive: true });
+  await mkdir(join(projectRoot, 'docs', 'operations'), { recursive: true });
   await mkdir(join(repo, 'src'), { recursive: true });
   await mkdir(join(repo, 'config'), { recursive: true });
   await mkdir(tools, { recursive: true });
@@ -92,7 +92,7 @@ export async function createFixture(): Promise<Fixture> {
   await setTest({ exit: 0, out: jestOutput([], ['src/app.test.js']) });
 
   let project: Record<string, unknown> = {
-    schema: 'harness.project/1',
+    schema: 'agentic.project/1',
     repo: '../repo',
     identity: { rootCommit },
     test: { command: ['node', join(tools, 'fake-test.mjs')], timeoutMs: 10_000 },
@@ -100,11 +100,11 @@ export async function createFixture(): Promise<Fixture> {
   };
   const setProject = async (patch: Record<string, unknown>) => {
     project = { ...project, ...patch };
-    await writeFile(join(harnessRoot, 'projects', 'demo', 'project.json'), JSON.stringify(project, null, 2));
+    await writeFile(join(projectRoot, '.workdir', 'projects', 'demo', 'project.json'), JSON.stringify(project, null, 2));
   };
   await setProject({});
-  await writeFile(join(harnessRoot, 'docs', 'operations', 'lead-principles.md'), '- Repository evidence wins.\n');
-  await writeFile(join(harnessRoot, 'projects', 'demo', 'STATE.md'), '# demo\nGoal: ship widgets.\n');
+  await writeFile(join(projectRoot, 'docs', 'operations', 'lead-principles.md'), '- Repository evidence wins.\n');
+  await writeFile(join(projectRoot, '.workdir', 'projects', 'demo', 'STATE.md'), '# demo\nGoal: ship widgets.\n');
 
   const cli = async (argv: string[], stdin = '') => {
     let out = '';
@@ -113,12 +113,12 @@ export async function createFixture(): Promise<Fixture> {
       out: (t) => (out += t),
       err: (t) => (err += t),
       readStdin: async () => stdin,
-      harnessRoot,
+      projectRoot,
     });
     return { code, out, err };
   };
 
-  return { parent, harnessRoot, repo, git, write, setTest, setProject, cli, cleanup: () => rm(parent, { recursive: true, force: true }) };
+  return { parent, projectRoot, repo, git, write, setTest, setProject, cli, cleanup: () => rm(parent, { recursive: true, force: true }) };
 }
 
 /** Takes a checkpoint with VALID_NOTES and asserts success. */

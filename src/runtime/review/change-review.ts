@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { runControlledCommand } from '../../workers/tools/execution-tools.ts';
 
 /**
- * Deterministic quality gates over a worker's PASSED change, run by the harness before the Lead reviews the diff.
+ * Deterministic quality gates over a worker's PASSED change, run by the runtime before the Lead reviews the diff.
  * `block` findings reject the change automatically (the tree is restored); `warn` findings are shown to the
  * Lead's review and must be acknowledged there. A PASS from the verifier is necessary, never sufficient.
  */

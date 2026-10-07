@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existingReferences, missingReferences, notesTemplate, parseNotes } from './notes.ts';
 import { renderResume, renderStatus } from './packet.ts';
-import { HARNESS_ROOT, loadCheckpoint, loadProject, newCheckpointId, projectPaths, readOptional, writeCheckpoint } from './project.ts';
+import { PROJECT_ROOT, loadCheckpoint, loadProject, newCheckpointId, projectPaths, readOptional, writeCheckpoint } from './project.ts';
 import { reconcile } from './reconcile.ts';
 import { emptiedFiles, relateHeads, takeSnapshot } from './snapshot.ts';
 import { describeTest, runTests } from './tests.ts';
@@ -27,7 +27,7 @@ export interface Io {
   out: (text: string) => void;
   err: (text: string) => void;
   readStdin: () => Promise<string>;
-  harnessRoot?: string;
+  projectRoot?: string;
 }
 
 class UsageError extends Error {}
@@ -63,8 +63,8 @@ function parseArgs(argv: string[]): Args {
   return { command, project, flags, testArgv };
 }
 
-async function snapshotChecked(name: string, harnessRoot: string) {
-  const { config, repoPath } = await loadProject(name, harnessRoot);
+async function snapshotChecked(name: string, projectRoot: string) {
+  const { config, repoPath } = await loadProject(name, projectRoot);
   let now: RepoSnapshot;
   try {
     now = await takeSnapshot(repoPath, config.expectedLocal);
@@ -79,7 +79,7 @@ async function snapshotChecked(name: string, harnessRoot: string) {
   return { config, repoPath, now };
 }
 
-async function checkpointCommand(args: Args, io: Io, harnessRoot: string): Promise<number> {
+async function checkpointCommand(args: Args, io: Io, projectRoot: string): Promise<number> {
   if (args.flags.has('--template')) {
     io.out(notesTemplate());
     return 0;
@@ -95,13 +95,13 @@ async function checkpointCommand(args: Args, io: Io, harnessRoot: string): Promi
   const parsed = parseNotes(markdown);
   if ('errors' in parsed) throw new UsageError(`Notes rejected; no checkpoint written:\n- ${parsed.errors.join('\n- ')}`);
 
-  const { config, repoPath, now } = await snapshotChecked(args.project, harnessRoot);
+  const { config, repoPath, now } = await snapshotChecked(args.project, projectRoot);
   const test: TestResult | { skipped: true } = args.flags.has('--no-test')
     ? { skipped: true }
     : await runTests(args.testArgv ?? config.test.command, repoPath, config.test.timeoutMs);
 
   const checkpoint: Checkpoint = {
-    schema: 'harness.checkpoint/1',
+    schema: 'agentic.checkpoint/1',
     id: newCheckpointId(),
     project: args.project,
     createdAt: new Date().toISOString(),
@@ -112,7 +112,7 @@ async function checkpointCommand(args: Args, io: Io, harnessRoot: string): Promi
     notes: parsed.notes,
     referencedPaths: await existingReferences(repoPath, parsed.notes),
   };
-  const path = await writeCheckpoint(projectPaths(args.project, harnessRoot).checkpointsDir, checkpoint);
+  const path = await writeCheckpoint(projectPaths(args.project, projectRoot).checkpointsDir, checkpoint);
 
   io.out(`Checkpoint ${checkpoint.id} written: ${path}\n`);
   io.out(`- HEAD ${now.head?.slice(0, 10)} on ${now.branch ?? '(detached)'}; ${now.entries.length} dirty entries\n`);
@@ -122,9 +122,9 @@ async function checkpointCommand(args: Args, io: Io, harnessRoot: string): Promi
   return 0;
 }
 
-async function reconcileCommand(args: Args, io: Io, harnessRoot: string, mode: 'resume' | 'status'): Promise<number> {
-  const { config, repoPath, now } = await snapshotChecked(args.project, harnessRoot);
-  const paths = projectPaths(args.project, harnessRoot);
+async function reconcileCommand(args: Args, io: Io, projectRoot: string, mode: 'resume' | 'status'): Promise<number> {
+  const { config, repoPath, now } = await snapshotChecked(args.project, projectRoot);
+  const paths = projectPaths(args.project, projectRoot);
   const checkpointId = args.flags.get('--checkpoint');
   const loaded = await loadCheckpoint(paths.checkpointsDir, typeof checkpointId === 'string' ? checkpointId : undefined);
 
@@ -162,28 +162,28 @@ async function reconcileCommand(args: Args, io: Io, harnessRoot: string, mode: '
       state: await readOptional(join(paths.projectDir, 'STATE.md')),
       expectedLocal: config.expectedLocal,
       cliPath: CLI_PATH,
-      harnessRoot,
+      projectRoot,
     }),
   );
   return 0;
 }
 
 export async function main(argv: string[], io: Io): Promise<number> {
-  const harnessRoot = io.harnessRoot ?? HARNESS_ROOT;
+  const projectRoot = io.projectRoot ?? PROJECT_ROOT;
   try {
     const args = parseArgs(argv);
     switch (args.command) {
       case 'checkpoint':
-        return await checkpointCommand(args, io, harnessRoot);
+        return await checkpointCommand(args, io, projectRoot);
       case 'resume':
-        return await reconcileCommand(args, io, harnessRoot, 'resume');
+        return await reconcileCommand(args, io, projectRoot, 'resume');
       case 'status':
-        return await reconcileCommand(args, io, harnessRoot, 'status');
+        return await reconcileCommand(args, io, projectRoot, 'status');
       default:
         throw new UsageError(`Unknown command "${args.command}".\n${USAGE}`);
     }
   } catch (err) {
-    io.err(`harness: ${(err as Error).message}\n`);
+    io.err(`session: ${(err as Error).message}\n`);
     return err instanceof IdentityError ? 3 : 2;
   }
 }

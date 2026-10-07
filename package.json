@@ -9,12 +9,10 @@
     "start": "mastra start",
     "typecheck": "tsc --noEmit -p .",
     "test": "node --disable-warning=ExperimentalWarning --test 'src/**/*.test.ts' 'tests/**/*.test.ts'",
-    "test:integration": "node --test 'src/**/*.itest.ts'",
     "lead": "node --disable-warning=ExperimentalWarning --env-file=.env scripts/lead.ts",
     "session": "node src/lead/session/cli.ts",
-    "bench:go": "node --env-file=.env scripts/bench-go-ladder.ts",
-    "bench:summarize": "node scripts/bench-go-summarize.ts",
-    "video:transform": "node --env-file=.env scripts/video-transform.ts",
+    "bench:go": "node --env-file=.env tests/bench/run.ts",
+    "bench:summarize": "node tests/bench/summarize.ts",
     "lead:plan": "node --disable-warning=ExperimentalWarning --env-file=.env scripts/lead.ts plan",
     "lead:tasks": "node --disable-warning=ExperimentalWarning --env-file=.env scripts/lead.ts tasks",
     "lead:run": "node --disable-warning=ExperimentalWarning --env-file=.env scripts/lead.ts run",
@@ -43,7 +41,6 @@
   "devDependencies": {
     "@types/node": "latest",
     "mastra": "1.25.0",
-    "playwright": "^1.63.0",
     "typescript": "^6.0.3"
   }
 }

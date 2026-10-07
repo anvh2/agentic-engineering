@@ -11,7 +11,6 @@ import {
 import { createMetricsRoute } from './metrics-route';
 import { codingWorkerGo, codingWorkerJs } from '../../workers/coding-worker';
 import { codingTaskWorkflow } from './workflows/coding-task-workflow';
-import { videoTransformationWorkflow } from '../video/mastra-workflow';
 
 export const mastra = new Mastra({
   bundler: {
@@ -19,7 +18,7 @@ export const mastra = new Mastra({
   },
   server: { apiRoutes: [createMetricsRoute()] },
   agents: { codingWorkerGo, codingWorkerJs },
-  workflows: { codingTaskWorkflow, videoTransformationWorkflow },
+  workflows: { codingTaskWorkflow },
   storage: new MastraCompositeStore({
     id: 'composite-storage',
     default: new LibSQLStore({

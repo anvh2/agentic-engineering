@@ -107,7 +107,7 @@ describe('Engineering Lead delegation', () => {
   });
 
   describe('delegated runs', () => {
-    it('PASS: harness-verified change is left uncommitted for the Lead; nothing is committed', async () => {
+    it('PASS: runtime-verified change is left uncommitted for the Lead; nothing is committed', async () => {
       const headBefore = git(root, 'rev-parse', 'HEAD').trim();
       const result = await delegateCodingTask(good, { repoRoot: root, worker: { generate: async () => (await impl(RIGHT), ok) }, runOptions: fast });
       assert.equal(result.status, 'PASS');
