@@ -2,7 +2,6 @@ output.txt
 node_modules
 dist
 .mastra
-src/mastra/public/
 .env.development
 .env
 .env.local
@@ -19,8 +18,7 @@ src/mastra/public/
 __pycache__/
 *.pyc
 .venv-phase3b/
-.generation-workdir/
-.video-transform-workdir/
 
 # Harness V0-A: checkpoints are local session state, never committed
-lead/projects/*/checkpoints/
+projects/*/checkpoints/
+docs/audits/**/pre-restructure-backup.tgz

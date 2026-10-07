@@ -14,7 +14,7 @@ import { dirname } from 'node:path';
  *
  * It does NOT run the ComfyUI product-fidelity pipeline validated
  * separately under
- *   harness-engineering/.workdir/quick-video/scratchpad/comfy-affiliate-v1
+ *   .workdir/quick-video/scratchpad/comfy-affiliate-v1
  * (img2img-from-real-photo + depth-ControlNet + IPAdapter for stills,
  * AnimateDiff for the short video test). Wiring that recipe in here -
  * reading --images/--sample-video/--prompt below and driving the comfy CLI

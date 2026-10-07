@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { GenerationService } from '../src/mastra/generation/service.ts';
-import { ProviderRouter } from '../src/mastra/generation/provider-router.ts';
-import { resolveFalKey } from '../src/mastra/generation/config.ts';
-import type { GenerateImageRequest, GenerationCapability } from '../src/mastra/generation/types.ts';
+import { GenerationService } from '../src/integrations/video/generation/service.ts';
+import { ProviderRouter } from '../src/integrations/video/generation/provider-router.ts';
+import { resolveFalKey } from '../src/integrations/video/generation/config.ts';
+import type { GenerateImageRequest } from '../src/integrations/video/generation/types.ts';
 
 /**
  * Manual test CLI for ONE cloud image generation (MVP keyframe step).
@@ -57,7 +57,7 @@ function usage(): string {
     'Options:',
     '  --product <path>      Path to product reference image (required)',
     '  --person <path>       Path to person/model reference image (optional)',
-    '  --output <path>       Path where resulting keyframe should be saved (default: .generation-workdir/keyframe-<id>.png)',
+    '  --output <path>       Path where resulting keyframe should be saved (default: .workdir/generation/keyframe-<id>.png)',
     '  --provider <name>     Provider name (default: fal)',
     '  --model <id>          Model ID override (default: auto from capability)',
     '  --capability <cap>    Capability: virtual_try_on | image_edit (default: virtual_try_on if person given)',
@@ -112,10 +112,10 @@ async function main(): Promise<void> {
 
   const providerName = isDryRun ? 'mock' : ((flags.provider as string) || 'fal');
   const modelOverride = flags.model ? (flags.model as string) : undefined;
-  const capabilityOverride = flags.capability as GenerationCapability | undefined;
+  const capabilityOverride = flags.capability as 'virtual_try_on' | 'image_edit' | undefined;
   const prompt = flags.prompt ? (flags.prompt as string) : undefined;
 
-  const defaultDest = resolve(`.generation-workdir/keyframe-${Date.now()}.png`);
+  const defaultDest = resolve(`.workdir/generation/keyframe-${Date.now()}.png`);
   const outputPath = flags.output ? resolve(flags.output as string) : defaultDest;
   mkdirSync(dirname(outputPath), { recursive: true });
 

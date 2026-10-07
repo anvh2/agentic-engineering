@@ -1,6 +1,6 @@
-import { runVideoTransformationPipeline } from '../src/mastra/video/pipeline.ts';
-import type { AppearanceVariation, VideoTransformationInput } from '../src/mastra/video/types.ts';
-import { VideoTransformError } from '../src/mastra/video/types.ts';
+import { runVideoTransformationPipeline } from '../src/integrations/video/pipeline.ts';
+import type { AppearanceVariation, VideoTransformationInput } from '../src/integrations/video/types.ts';
+import { VideoTransformError } from '../src/integrations/video/types.ts';
 
 /**
  * Developer CLI for the local video transformation pipeline.

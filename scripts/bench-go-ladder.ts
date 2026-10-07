@@ -5,14 +5,14 @@
 // No prompt/config changes happen between runs. PASS/FAIL is decided only by the harness verifier.
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { codingWorkerGo } from '../src/mastra/agents/coding-worker.ts';
-import { asStreamingWorker } from '../src/mastra/agents/streaming-worker.ts';
-import { resolveEditMode } from '../src/mastra/agents/coding-worker.ts';
-import { runCodingTask } from '../src/mastra/workflows/coding-task-runner.ts';
-import { createTraceSink } from '../src/mastra/workflows/coding-task-trace.ts';
-import { LEVELS, buildFixture, type Level } from '../src/bench/go-ladder.ts';
-import { aggregate, aggregateByLevel, summarizeRun, type Metrics, type RunSummary } from '../src/bench/metrics.ts';
-import { persistRun } from '../src/mastra/workflows/coding-task-artifacts.ts';
+import { codingWorkerGo } from '../src/workers/coding-worker.ts';
+import { asStreamingWorker } from '../src/workers/streaming-worker.ts';
+import { resolveEditMode } from '../src/workers/coding-worker.ts';
+import { runCodingTask } from '../src/runtime/execution/coding-task-runner.ts';
+import { createTraceSink } from '../src/runtime/execution/coding-task-trace.ts';
+import { LEVELS, buildFixture, type Level } from '../tests/bench/go-ladder.ts';
+import { aggregate, aggregateByLevel, summarizeRun, type Metrics, type RunSummary } from '../tests/bench/metrics.ts';
+import { persistRun } from '../src/runtime/execution/coding-task-artifacts.ts';
 
 const runsPerLevel = Number(process.argv[2]) || 10;
 const levels = (process.argv[3]?.split(',') ?? [...LEVELS]) as Level[];

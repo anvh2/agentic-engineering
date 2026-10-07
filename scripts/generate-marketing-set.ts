@@ -1,15 +1,15 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { GenerationService } from '../src/mastra/generation/service.ts';
-import { ProviderRouter } from '../src/mastra/generation/provider-router.ts';
-import { resolveFalKey } from '../src/mastra/generation/config.ts';
+import { GenerationService } from '../src/integrations/video/generation/service.ts';
+import { ProviderRouter } from '../src/integrations/video/generation/provider-router.ts';
+import { resolveFalKey } from '../src/integrations/video/generation/config.ts';
 import {
   BENCHMARK_BLOUSE_SPEC,
   renderShotPrompt,
   type MarketingShotType,
   type ProductSpec,
-} from '../src/mastra/generation/product-spec.ts';
-import { evaluateFidelity } from '../src/mastra/generation/fidelity-gate.ts';
+} from '../src/integrations/video/generation/product-spec.ts';
+import { evaluateFidelity } from '../src/integrations/video/generation/fidelity-gate.ts';
 
 /**
  * Marketing Asset Set Generator (First Cloud Experiment CLI).
