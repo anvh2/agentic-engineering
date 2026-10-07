@@ -1,0 +1,172 @@
+{
+  "batchId": "M4-SMOKE-1",
+  "repository": "/Users/anvh/go/src/github.com/anvh2/harness-engineering/.workdir/fixtures/js-batch",
+  "description": "Stage A smoke: 3 real Qwen tasks with a dependency, 1 Claude-kept task, integration verification (isolated fixture)",
+  "maxDelegated": 5,
+  "integrationCommands": [
+    [
+      "npx",
+      "--no-install",
+      "jest",
+      "--runInBand",
+      "tests/clamp.test.js",
+      "tests/percent.test.js",
+      "tests/sum.test.js"
+    ]
+  ],
+  "tasks": [
+    {
+      "id": "S1-clamp",
+      "title": "clamp()",
+      "dependsOn": [],
+      "executor": "qwen",
+      "request": {
+        "contract": {
+          "taskId": "S1-clamp",
+          "objective": "Implement clamp(n, min, max) in src/clamp.js: return min when n < min, max when n > max, otherwise n.",
+          "allowedFiles": [
+            "src/clamp.js"
+          ],
+          "contextFiles": [],
+          "acceptanceCriteria": [
+            "clamp(-5,0,10)===0",
+            "clamp(15,0,10)===10",
+            "clamp(5,0,10)===5"
+          ],
+          "verificationCommands": [
+            [
+              "npx",
+              "--no-install",
+              "jest",
+              "--runInBand",
+              "tests/clamp.hidden.test.js"
+            ]
+          ],
+          "constraints": [
+            "tests are immutable",
+            "CommonJS only, no new dependencies",
+            "do not change the exported name or the function signature"
+          ],
+          "hiddenFiles": {
+            "tests/clamp.hidden.test.js": "const { clamp } = require('../src/clamp');\ntest('below', () => { expect(clamp(-5, 0, 10)).toBe(0); });\ntest('above', () => { expect(clamp(15, 0, 10)).toBe(10); });\ntest('inside', () => { expect(clamp(5, 0, 10)).toBe(5); });\ntest('edges', () => { expect(clamp(0, 0, 10)).toBe(0); expect(clamp(10, 0, 10)).toBe(10); });\n"
+          }
+        },
+        "assessment": {
+          "complexity": "small",
+          "risk": "low",
+          "ambiguity": "none",
+          "rationale": "One pure function in one file, fully specified, hermetic hidden oracle."
+        }
+      },
+      "expectedOutput": "src/clamp.js implements clamp"
+    },
+    {
+      "id": "S2-percent",
+      "title": "percent() built on clamp()",
+      "dependsOn": [
+        "S1-clamp"
+      ],
+      "executor": "qwen",
+      "request": {
+        "contract": {
+          "taskId": "S2-percent",
+          "objective": "Implement percent(value, min, max) in src/percent.js: the position of value between min and max as a whole percentage 0..100, rounded with Math.round and clamped to 0..100. It MUST use the clamp function exported by ./clamp (already implemented). Assume max > min.",
+          "allowedFiles": [
+            "src/percent.js"
+          ],
+          "contextFiles": [
+            "src/clamp.js"
+          ],
+          "acceptanceCriteria": [
+            "percent(5,0,10)===50",
+            "percent(-5,0,10)===0",
+            "percent(15,0,10)===100",
+            "percent(1,0,3)===33"
+          ],
+          "verificationCommands": [
+            [
+              "npx",
+              "--no-install",
+              "jest",
+              "--runInBand",
+              "tests/percent.hidden.test.js"
+            ]
+          ],
+          "constraints": [
+            "require clamp from './clamp' and do not reimplement it",
+            "tests are immutable",
+            "CommonJS only, no new dependencies",
+            "do not change the exported name or the function signature"
+          ],
+          "hiddenFiles": {
+            "tests/percent.hidden.test.js": "const { percent } = require('../src/percent');\ntest('middle', () => { expect(percent(5, 0, 10)).toBe(50); });\ntest('below clamps to 0', () => { expect(percent(-5, 0, 10)).toBe(0); });\ntest('above clamps to 100', () => { expect(percent(15, 0, 10)).toBe(100); });\ntest('rounds', () => { expect(percent(1, 0, 3)).toBe(33); });\n"
+          }
+        },
+        "assessment": {
+          "complexity": "small",
+          "risk": "low",
+          "ambiguity": "none",
+          "rationale": "One pure function in one file, fully specified, hermetic hidden oracle."
+        }
+      },
+      "expectedOutput": "src/percent.js implements percent using clamp"
+    },
+    {
+      "id": "S3-sum",
+      "title": "sum()",
+      "dependsOn": [],
+      "executor": "qwen",
+      "request": {
+        "contract": {
+          "taskId": "S3-sum",
+          "objective": "Implement sum(values) in src/sum.js: the sum of an array of numbers, 0 for an empty array.",
+          "allowedFiles": [
+            "src/sum.js"
+          ],
+          "contextFiles": [],
+          "acceptanceCriteria": [
+            "sum([1,2,3])===6",
+            "sum([])===0",
+            "sum([-1,1])===0"
+          ],
+          "verificationCommands": [
+            [
+              "npx",
+              "--no-install",
+              "jest",
+              "--runInBand",
+              "tests/sum.hidden.test.js"
+            ]
+          ],
+          "constraints": [
+            "tests are immutable",
+            "CommonJS only, no new dependencies",
+            "do not change the exported name or the function signature"
+          ],
+          "hiddenFiles": {
+            "tests/sum.hidden.test.js": "const { sum } = require('../src/sum');\ntest('adds', () => { expect(sum([1, 2, 3])).toBe(6); });\ntest('empty', () => { expect(sum([])).toBe(0); });\ntest('negatives', () => { expect(sum([-1, 1])).toBe(0); });\n"
+          }
+        },
+        "assessment": {
+          "complexity": "small",
+          "risk": "low",
+          "ambiguity": "none",
+          "rationale": "One pure function in one file, fully specified, hermetic hidden oracle."
+        }
+      },
+      "expectedOutput": "src/sum.js implements sum"
+    },
+    {
+      "id": "S4-types",
+      "title": "TypeScript declaration file for the three helpers",
+      "dependsOn": [
+        "S1-clamp",
+        "S2-percent",
+        "S3-sum"
+      ],
+      "executor": "claude",
+      "keptReason": "TypeScript is not eligible for the local worker (gate allows .js only)",
+      "expectedOutput": "src/index.d.ts"
+    }
+  ]
+}

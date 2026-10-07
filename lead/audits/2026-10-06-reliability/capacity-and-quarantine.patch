@@ -1,0 +1,714 @@
+--- a/src/mastra/scheduler/store.ts
++++ b/src/mastra/scheduler/store.ts
+@@ -26,7 +26,7 @@
+  */
+ 
+ export class StoreError extends Error {
+-  code: 'not_found' | 'illegal_transition' | 'state_mismatch' | 'stale_owner' | 'duplicate' | 'invalid';
++  code: 'not_found' | 'illegal_transition' | 'state_mismatch' | 'stale_owner' | 'duplicate' | 'invalid' | 'corrupt';
+   constructor(code: StoreError['code'], message: string) {
+     super(message);
+     this.name = 'StoreError';
+@@ -180,6 +180,28 @@
+ 
+ const json = (v: unknown) => JSON.stringify(v);
+ 
++/**
++ * Parses a JSON column. Malformed data raises StoreError('corrupt') naming the row and column: list reads skip
++ * (quarantine) such rows and report them via corruptRows(), so one damaged row can no longer take down every command.
++ * Nothing rewrites the row; repairing it is a human decision.
++ */
++function parseJson(table: string, id: unknown, column: string, text: unknown): any {
++  try {
++    return JSON.parse(String(text));
++  } catch (err) {
++    throw new StoreError('corrupt', `${table} ${String(id)}: column ${column} is not valid JSON (${(err as Error).message})`);
++  }
++}
++
++const isCorrupt = (err: unknown): err is StoreError => err instanceof StoreError && err.code === 'corrupt';
++
++export interface CorruptRow {
++  table: 'tasks' | 'batches' | 'reviews';
++  id: string;
++  state?: string;
++  error: string;
++}
++
+ function rowToTask(r: Record<string, any>): TaskRow {
+   return {
+     id: r.id,
+@@ -189,7 +211,7 @@
+     priority: r.priority,
+     language: r.language,
+     repository: r.repository,
+-    spec: JSON.parse(r.spec),
++    spec: parseJson('task', r.id, 'spec', r.spec),
+     state: r.state,
+     stateReason: r.state_reason,
+     assignedWorker: r.assigned_worker,
+@@ -197,13 +219,13 @@
+     leaseExpiresAt: r.lease_expires_at,
+     claimEpoch: r.claim_epoch,
+     runId: r.run_id,
+-    runIds: JSON.parse(r.run_ids),
++    runIds: parseJson('task', r.id, 'run_ids', r.run_ids),
+     attempts: r.attempts,
+     claims: r.claims,
+     runtimeRequeues: r.runtime_requeues,
+     runtimeRetries: r.runtime_retries,
+     reviewOutcome: r.review_outcome,
+-    artifacts: JSON.parse(r.artifacts),
++    artifacts: parseJson('task', r.id, 'artifacts', r.artifacts),
+     worktreePath: r.worktree_path,
+     branch: r.branch,
+     baseCommit: r.base_commit,
+@@ -215,7 +237,7 @@
+     executor: r.executor,
+     implementedBy: r.implemented_by,
+     failureCategory: r.failure_category,
+-    result: r.result ? JSON.parse(r.result) : null,
++    result: r.result ? parseJson('task', r.id, 'result', r.result) : null,
+     createdAt: r.created_at,
+     updatedAt: r.updated_at,
+     claimedAt: r.claimed_at,
+@@ -234,9 +256,9 @@
+     baseRef: r.base_ref,
+     baseCommit: r.base_commit,
+     integrationBranch: r.integration_branch,
+-    integrationCommands: JSON.parse(r.integration_commands),
+-    linkPaths: JSON.parse(r.link_paths),
+-    snapshotPaths: JSON.parse(r.snapshot_paths),
++    integrationCommands: parseJson('batch', r.id, 'integration_commands', r.integration_commands),
++    linkPaths: parseJson('batch', r.id, 'link_paths', r.link_paths),
++    snapshotPaths: parseJson('batch', r.id, 'snapshot_paths', r.snapshot_paths),
+     createdAt: r.created_at,
+   };
+ }
+@@ -312,9 +334,38 @@
+     return t;
+   }
+ 
++  /** Parseable task rows only: a corrupt row is quarantined (skipped here, reported by corruptRows()). */
+   listTasks(filter: { batchId?: string; states?: readonly TaskState[] } = {}): TaskRow[] {
+-    const rows = this.db.prepare('SELECT * FROM tasks ORDER BY priority DESC, created_at ASC, id ASC').all().map(rowToTask);
++    const rows = this.db.prepare('SELECT * FROM tasks ORDER BY priority DESC, created_at ASC, id ASC').all().flatMap((r) => this.parseOrSkip(rowToTask, r));
+     return rows.filter((t) => (!filter.batchId || t.batchId === filter.batchId) && (!filter.states || filter.states.includes(t.state)));
++  }
++
++  private parseOrSkip<T>(parse: (r: Record<string, any>) => T, row: Record<string, any>): T[] {
++    try {
++      return [parse(row)];
++    } catch (err) {
++      if (isCorrupt(err)) return [];
++      throw err;
++    }
++  }
++
++  /** Every row that cannot be parsed, with the reason. Read-only: repairing or deleting a row is left to a human. */
++  corruptRows(): CorruptRow[] {
++    const out: CorruptRow[] = [];
++    const check = (table: CorruptRow['table'], parse: (r: Record<string, any>) => unknown, sql: string) => {
++      for (const r of this.db.prepare(sql).all() as Record<string, any>[]) {
++        try {
++          parse(r);
++        } catch (err) {
++          if (isCorrupt(err)) out.push({ table, id: String(r.id), state: r.state, error: err.message });
++          else throw err;
++        }
++      }
++    };
++    check('tasks', rowToTask, 'SELECT * FROM tasks ORDER BY id');
++    check('batches', rowToBatch, 'SELECT * FROM batches ORDER BY id');
++    check('reviews', rowToReview, 'SELECT * FROM reviews ORDER BY id');
++    return out;
+   }
+ 
+   getBatch(id: string): BatchRow | undefined {
+@@ -323,7 +374,7 @@
+   }
+ 
+   listBatches(): BatchRow[] {
+-    return this.db.prepare('SELECT * FROM batches ORDER BY created_at ASC').all().map(rowToBatch);
++    return this.db.prepare('SELECT * FROM batches ORDER BY created_at ASC').all().flatMap((r) => this.parseOrSkip(rowToBatch, r));
+   }
+ 
+   events(taskId?: string): EventRow[] {
+@@ -338,7 +389,7 @@
+       to: r.to_state,
+       actor: r.actor,
+       reason: r.reason,
+-      detail: r.detail ? JSON.parse(r.detail) : null,
++      detail: r.detail ? (() => { try { return JSON.parse(r.detail); } catch { return { corrupt: true }; } })() : null,
+     }));
+   }
+ 
+@@ -404,7 +455,14 @@
+   /** 'ready' (all deps DONE) | 'waiting' | 'failed' (a dependency can never complete without human action). */
+   dependencyStatus(task: TaskRow): { status: 'ready' | 'waiting' | 'failed'; reason?: string } {
+     for (const depId of task.spec.dependsOn) {
+-      const dep = this.resolveDependency(depId);
++      let dep: TaskRow | undefined;
++      try {
++        dep = this.resolveDependency(depId);
++      } catch (err) {
++        // never treat an unreadable dependency as done or as failed: wait until a human repairs the row
++        if (isCorrupt(err)) return { status: 'waiting', reason: err.message };
++        throw err;
++      }
+       if (!dep) return { status: 'failed', reason: `dependency ${depId} does not exist` };
+       if (dep.state === 'DONE') continue;
+       if (['ESCALATED', 'CANCELLED', 'BLOCKED'].includes(dep.state) || (dep.state === 'REVIEW_REJECTED' && !dep.supersededBy)) {
+@@ -458,14 +516,24 @@
+       if (leased >= options.maxActive) return undefined;
+ 
+       const owned = new Set<string>();
+-      const holdingRows = this.db.prepare(`SELECT spec FROM tasks WHERE state IN (${OWNING_STATES.map(() => '?').join(',')})`).all(...OWNING_STATES) as { spec: string }[];
+-      for (const h of holdingRows) for (const f of ownedFilesOf(JSON.parse(h.spec) as TaskSpec)) owned.add(f);
++      // A corrupt row that may hold files has an unknown ownership set: fail closed for its whole repository.
++      const unknownOwnership = new Set<string>();
++      const holdingRows = this.db.prepare(`SELECT id, repository, spec FROM tasks WHERE state IN (${OWNING_STATES.map(() => '?').join(',')})`).all(...OWNING_STATES) as { id: string; repository: string; spec: string }[];
++      for (const h of holdingRows) {
++        try {
++          for (const f of ownedFilesOf(parseJson('task', h.id, 'spec', h.spec) as TaskSpec)) owned.add(f);
++        } catch (err) {
++          if (!isCorrupt(err)) throw err;
++          unknownOwnership.add(h.repository);
++        }
++      }
+ 
+       const candidates = this.db
+         .prepare(`SELECT * FROM tasks WHERE state = 'READY' AND executor = 'worker' ORDER BY priority DESC, created_at ASC, id ASC`)
+         .all()
+-        .map(rowToTask);
++        .flatMap((r) => this.parseOrSkip(rowToTask, r));
+       for (const task of candidates) {
++        if (unknownOwnership.has(task.repository)) continue;
+         if (options.batchId && task.batchId !== options.batchId) continue;
+         if (task.language && !options.languages.includes(task.language)) continue;
+         if (task.claims >= task.spec.maxClaims) continue;
+@@ -680,7 +748,7 @@
+ 
+   listReviews(filter: { pendingOnly?: boolean } = {}): ReviewRow[] {
+     const rows = this.db.prepare(`SELECT * FROM reviews ${filter.pendingOnly ? 'WHERE decision IS NULL' : ''} ORDER BY id`).all();
+-    return rows.map(rowToReview);
++    return rows.flatMap((r) => this.parseOrSkip(rowToReview, r));
+   }
+ 
+   /** Records a decision once. A second decision on the same review is rejected (no duplicate review decisions). */
+@@ -770,7 +838,7 @@
+     taskId: r.task_id,
+     round: r.round,
+     createdAt: r.created_at,
+-    request: JSON.parse(r.request),
++    request: parseJson('review', r.id, 'request', r.request),
+     decision: r.decision,
+     feedback: r.feedback,
+     reviewer: r.reviewer,
+--- a/src/mastra/scheduler/report.ts
++++ b/src/mastra/scheduler/report.ts
+@@ -107,13 +107,16 @@
+ 
+ export interface ReconcileIssue {
+   taskId?: string;
+-  kind: 'missing_worktree' | 'orphan_worktree' | 'stale_lease' | 'review_missing' | 'terminal_with_lease';
++  kind: 'missing_worktree' | 'orphan_worktree' | 'stale_lease' | 'review_missing' | 'terminal_with_lease' | 'corrupt_row';
+   detail: string;
+ }
+ 
+ /** Compares database state with the filesystem/git. Reports only; nothing is deleted or modified. */
+ export async function reconcileState(store: SchedulerStore, worktrees: WorktreeManager, batchId?: string): Promise<ReconcileIssue[]> {
+   const issues: ReconcileIssue[] = [];
++  for (const c of store.corruptRows()) {
++    issues.push({ taskId: c.table === 'tasks' ? c.id : undefined, kind: 'corrupt_row', detail: `${c.table} row quarantined${c.state ? ` (state ${c.state})` : ''}: ${c.error}. Repair or remove it by hand; scheduling skips it meanwhile` });
++  }
+   const tasks = store.listTasks({ batchId });
+   const now = store.now();
+   for (const t of tasks) {
+--- a/src/mastra/workflows/coding-task-runner.ts
++++ b/src/mastra/workflows/coding-task-runner.ts
+@@ -8,6 +8,7 @@
+ import { z } from 'zod';
+ import { REPOSITORY_ROOT_CONTEXT_KEY } from '../tools/repository-tools.ts';
+ import { runSandboxedCommand, sandboxStatus } from '../sandbox/sandbox.ts';
++import { sharedModelCapacity, type ModelCapacity } from '../capacity/model-capacity.ts';
+ import { createRepairLoopTracker } from './repair-loop-tracker.ts';
+ import { harnessMetrics, type HarnessMetrics } from '../observability/metrics.ts';
+ import { createTraceSink, type TraceEvent, type TraceSink } from './coding-task-trace.ts';
+@@ -146,6 +147,8 @@
+    * Reported as a runtime failure, so the caller restores the tree exactly as for any non-PASS.
+    */
+   signal?: AbortSignal;
++  /** Machine-wide local-model concurrency limit (default: the shared lease database). Held only around each model call. */
++  capacity?: ModelCapacity;
+ }
+ 
+ const EDIT_TOOLS = new Set(['applyPatch', 'writeFile']);
+@@ -384,8 +387,11 @@
+         return tracker.onIterationComplete(ctx);
+       };
+ 
+-      trace.emit('model_started', { model: modelLabel, attempt: attemptNo, runtimeTry });
++      let permit: { release(): void } | undefined;
+       try {
++        const waitStart = Date.now();
++        permit = await (options.capacity ?? sharedModelCapacity()).acquire(`${modelLabel}:${task.taskId}:pid${process.pid}`, options.signal);
++        trace.emit('model_started', { model: modelLabel, attempt: attemptNo, runtimeTry, capacityWaitMs: Date.now() - waitStart });
+         const response = await worker.generate(await buildPrompt(repoRoot, task, previousFailure), {
+           requestContext,
+           onIterationComplete,
+@@ -416,6 +422,8 @@
+         }
+       } catch (err) {
+         failure = (err as Error).message;
++      } finally {
++        permit?.release();
+       }
+ 
+       if (!responded) {
+--- a/src/mastra/scheduler/failure-injection.test.ts
++++ b/src/mastra/scheduler/failure-injection.test.ts
+@@ -1,4 +1,5 @@
+ import assert from 'node:assert/strict';
++import { execFileSync } from 'node:child_process';
+ import { createServer, type Server } from 'node:http';
+ import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+ import { DatabaseSync } from 'node:sqlite';
+@@ -6,6 +7,7 @@
+ import { after, describe, it } from 'node:test';
+ import { integrateBatch, type CommandRunner } from './integrate.ts';
+ import { createMastraExecutor } from './mastra-executor.ts';
++import { reconcileState } from './report.ts';
+ import { reviewDecision } from './review.ts';
+ import { Scheduler, type Executor } from './scheduler.ts';
+ import { SchedulerStore } from './store.ts';
+@@ -298,14 +300,6 @@
+     }
+   });
+ 
+-  it('one corrupted task row does not take the whole scheduler down', { todo: 'known risk: rowToTask JSON.parse throws for every listTasks()/claim(), so run/status/tasks all fail until the row is repaired by hand' }, async () => {
+-    const path = join(tempDir('sched-db-'), 'sched.db');
+-    const store = new SchedulerStore(path);
+-    const { scheduler } = setup([workerTask('a'), workerTask('b')], { store });
+-    store.db.prepare("UPDATE tasks SET spec = '{not json' WHERE id = 'b'").run();
+-    const summary = await scheduler.run();
+-    assert.deepEqual(summary.reviewPending, ['a']);
+-  });
+ });
+ 
+ describe('retry after a recorded failure', () => {
+@@ -333,3 +327,54 @@
+     assert.deepEqual(t.runIds, ['run-a-1', 'run-a-2'], 'run history is kept');
+   });
+ });
++
++describe('corrupt scheduler rows are quarantined, not fatal', () => {
++  const corrupt = (store: SchedulerStore, id: string, column = 'spec') => store.db.prepare(`UPDATE tasks SET ${column} = '{not json' WHERE id = ?`).run(id);
++
++  it('one corrupted task row does not take the whole scheduler down; it is reported, never rewritten', async () => {
++    const store = new SchedulerStore(join(tempDir('sched-db-'), 'sched.db'));
++    const { scheduler, worktrees } = setup([workerTask('a'), workerTask('b')], { store });
++    corrupt(store, 'b');
++    const summary = await scheduler.run();
++    assert.deepEqual(summary.reviewPending, ['a']);
++    assert.deepEqual(store.corruptRows().map((c) => [c.table, c.id, c.state]), [['tasks', 'b', 'READY']]);
++    assert.throws(() => store.requireTask('b'), /task b: column spec is not valid JSON/);
++    const issues = await reconcileState(store, worktrees);
++    assert.ok(issues.some((i) => i.kind === 'corrupt_row' && i.taskId === 'b'));
++    assert.equal((store.db.prepare("SELECT spec FROM tasks WHERE id = 'b'").get() as { spec: string }).spec, '{not json', 'evidence kept as-is');
++  });
++
++  it('a corrupt row that may hold files blocks claims in its repository (ownership unknown: fail closed)', () => {
++    const store = makeStore();
++    store.createBatch(plan('/repo-x', [workerTask('a'), workerTask('b')]));
++    store.promote();
++    store.claim({ workerId: 'w', languages: ['js'], leaseMs: 60_000, maxActive: 5 }); // a is now CLAIMED (owns its files)
++    corrupt(store, 'a');
++    assert.equal(store.claim({ workerId: 'w2', languages: ['js'], leaseMs: 60_000, maxActive: 5 }), undefined);
++  });
++
++  it('a task depending on a corrupt row waits (neither promoted nor blocked)', () => {
++    const store = makeStore();
++    store.createBatch(plan('/repo-y', [workerTask('a'), workerTask('b', { dependsOn: ['a'] })]));
++    corrupt(store, 'a', 'run_ids');
++    const p = store.promote();
++    assert.deepEqual(p, { ready: [], blocked: [], unblocked: [] });
++    assert.equal(store.requireTask('b').state, 'BACKLOG');
++  });
++
++  it('lead-sched status and tasks still work and print the quarantined row', () => {
++    const dir = tempDir('sched-cli-');
++    const dbFile = join(dir, 'db', 's.db');
++    const store = new SchedulerStore(dbFile);
++    store.createBatch(plan(makeRepo(), [workerTask('a'), workerTask('b')]));
++    store.promote();
++    corrupt(store, 'b', 'artifacts');
++    store.close();
++    const script = join(import.meta.dirname, '..', '..', '..', 'scripts', 'lead-sched.ts');
++    const env = { ...process.env, HARNESS_SCHED_DB: dbFile, HARNESS_SCHED_ROOT: dir };
++    const cli = (...a: string[]) => execFileSync(process.execPath, ['--disable-warning=ExperimentalWarning', script, ...a], { env, encoding: 'utf8', cwd: dir });
++    assert.match(cli('tasks'), /READY\s+p50 a/);
++    assert.match(cli('status'), /ISSUE corrupt_row b: tasks row quarantined \(state READY\): task b: column artifacts is not valid JSON/);
++  });
++});
++
+--- /dev/null
++++ b/src/mastra/capacity/model-capacity.ts
+@@ -0,0 +1,201 @@
++import { mkdirSync } from 'node:fs';
++import { homedir, tmpdir } from 'node:os';
++import { dirname, join } from 'node:path';
++import { randomUUID } from 'node:crypto';
++import { DatabaseSync } from 'node:sqlite';
++
++/**
++ * One machine-wide limit on concurrent local-model (Ollama) calls, shared by every process that can start one:
++ * the Mastra server's coding-task workflow (reached by lead-sched, lead-batch and lead-delegate), in-process runners
++ * (bench), and any second server or checkout. The model is a single machine resource, so the lease database lives
++ * outside any checkout: ~/.harness-engineering/model-capacity.db (override: HARNESS_MODEL_LOCK_DB).
++ *
++ * A permit is a row in `leases` with an expiry. Holders renew while their call runs; a crashed holder stops renewing
++ * and its permit expires after `leaseMs`, or immediately once its pid is known dead on this host. Acquisition is one
++ * IMMEDIATE transaction (reap expired/dead -> count -> insert), so two processes can never both take the last permit.
++ * The permit count is stored in the database (first writer sets it from HARNESS_MODEL_CONCURRENCY, default 1), so every
++ * process enforces the same limit even if their environments differ.
++ */
++
++export interface CapacityLease {
++  readonly id: string;
++  /** Extends the lease; false means it was lost (expired and reclaimed). */
++  renew(): boolean;
++  release(): void;
++}
++
++export interface ModelCapacityOptions {
++  resource?: string;
++  /** Used only when the database has no permit count yet. */
++  permits?: number;
++  leaseMs?: number;
++  pollMs?: number;
++  now?: () => number;
++  /** pid liveness check (tests inject one). */
++  isAlive?: (pid: number) => boolean;
++  busyTimeoutMs?: number;
++}
++
++const SCHEMA = `
++CREATE TABLE IF NOT EXISTS capacity (resource TEXT PRIMARY KEY, permits INTEGER NOT NULL);
++CREATE TABLE IF NOT EXISTS leases (
++  id TEXT PRIMARY KEY, resource TEXT NOT NULL, holder TEXT NOT NULL, pid INTEGER NOT NULL, host TEXT NOT NULL,
++  acquired_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
++);
++CREATE INDEX IF NOT EXISTS leases_resource ON leases(resource);
++`;
++
++function defaultIsAlive(pid: number): boolean {
++  try {
++    process.kill(pid, 0);
++    return true;
++  } catch (err) {
++    return (err as NodeJS.ErrnoException).code === 'EPERM'; // exists, owned by someone else
++  }
++}
++
++export class ModelCapacity {
++  readonly path: string;
++  readonly resource: string;
++  readonly leaseMs: number;
++  private readonly pollMs: number;
++  private readonly now: () => number;
++  private readonly isAlive: (pid: number) => boolean;
++  private readonly db: DatabaseSync;
++  private readonly host = process.env.HOSTNAME ?? 'localhost';
++
++  constructor(path: string, options: ModelCapacityOptions = {}) {
++    this.path = path;
++    this.resource = options.resource ?? 'ollama';
++    this.leaseMs = options.leaseMs ?? 60_000;
++    this.pollMs = options.pollMs ?? 1_000;
++    this.now = options.now ?? Date.now;
++    this.isAlive = options.isAlive ?? defaultIsAlive;
++    if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
++    this.db = new DatabaseSync(path);
++    this.db.exec(`PRAGMA busy_timeout = ${options.busyTimeoutMs ?? 10_000};`);
++    if (path !== ':memory:') this.db.exec('PRAGMA journal_mode = WAL;');
++    this.db.exec(SCHEMA);
++    const permits = options.permits ?? (Number(process.env.HARNESS_MODEL_CONCURRENCY) || 1);
++    if (!Number.isInteger(permits) || permits < 1) throw new Error('model capacity permits must be a positive integer');
++    this.db.prepare('INSERT OR IGNORE INTO capacity (resource, permits) VALUES (?, ?)').run(this.resource, permits);
++  }
++
++  get permits(): number {
++    return (this.db.prepare('SELECT permits FROM capacity WHERE resource = ?').get(this.resource) as { permits: number }).permits;
++  }
++
++  /** Operator action: change the machine-wide limit. */
++  setPermits(permits: number): void {
++    if (!Number.isInteger(permits) || permits < 1) throw new Error('model capacity permits must be a positive integer');
++    this.db.prepare('INSERT INTO capacity (resource, permits) VALUES (?, ?) ON CONFLICT(resource) DO UPDATE SET permits = excluded.permits').run(this.resource, permits);
++  }
++
++  /** Currently held, unexpired leases (for status / metrics). */
++  holders(): { id: string; holder: string; pid: number; expiresAt: number }[] {
++    return (this.db.prepare('SELECT id, holder, pid, expires_at FROM leases WHERE resource = ? AND expires_at > ? ORDER BY acquired_at').all(this.resource, this.now()) as Record<string, any>[]).map((r) => ({ id: r.id, holder: r.holder, pid: r.pid, expiresAt: r.expires_at }));
++  }
++
++  /** One non-blocking attempt. Reclaims expired leases and leases of dead local processes first. */
++  tryAcquire(holder: string): CapacityLease | undefined {
++    const now = this.now();
++    this.db.exec('BEGIN IMMEDIATE');
++    try {
++      this.db.prepare('DELETE FROM leases WHERE resource = ? AND expires_at <= ?').run(this.resource, now);
++      const live = this.db.prepare('SELECT id, pid, host FROM leases WHERE resource = ?').all(this.resource) as { id: string; pid: number; host: string }[];
++      for (const l of live) if (l.host === this.host && l.pid !== process.pid && !this.isAlive(l.pid)) this.db.prepare('DELETE FROM leases WHERE id = ?').run(l.id);
++      const held = (this.db.prepare('SELECT COUNT(*) AS n FROM leases WHERE resource = ?').get(this.resource) as { n: number }).n;
++      const permits = (this.db.prepare('SELECT permits FROM capacity WHERE resource = ?').get(this.resource) as { permits: number }).permits;
++      if (held >= permits) {
++        this.db.exec('COMMIT');
++        return undefined;
++      }
++      const id = randomUUID();
++      this.db.prepare('INSERT INTO leases (id, resource, holder, pid, host, acquired_at, expires_at) VALUES (?,?,?,?,?,?,?)').run(id, this.resource, holder, process.pid, this.host, now, now + this.leaseMs);
++      this.db.exec('COMMIT');
++      return this.lease(id);
++    } catch (err) {
++      try {
++        this.db.exec('ROLLBACK');
++      } catch {
++        /* already rolled back */
++      }
++      throw err;
++    }
++  }
++
++  /**
++   * Waits for a permit (polling; abortable), then keeps it alive with a heartbeat until released. A transiently locked
++   * database delays the wait instead of failing it.
++   */
++  async acquire(holder: string, signal?: AbortSignal): Promise<CapacityLease> {
++    for (;;) {
++      if (signal?.aborted) throw new Error(`waiting for model capacity aborted: ${String(signal.reason?.message ?? signal.reason ?? '')}`);
++      let lease: CapacityLease | undefined;
++      try {
++        lease = this.tryAcquire(holder);
++      } catch (err) {
++        if (!/database is locked|SQLITE_BUSY/i.test((err as Error).message)) throw err;
++      }
++      if (lease) return this.keepAlive(lease);
++      await new Promise<void>((resolve) => {
++        const t = setTimeout(resolve, this.pollMs);
++        signal?.addEventListener('abort', () => (clearTimeout(t), resolve()), { once: true });
++      });
++    }
++  }
++
++  private lease(id: string): CapacityLease {
++    return {
++      id,
++      renew: () => Number(this.db.prepare('UPDATE leases SET expires_at = ? WHERE id = ?').run(this.now() + this.leaseMs, id).changes) === 1,
++      release: () => {
++        this.db.prepare('DELETE FROM leases WHERE id = ?').run(id);
++      },
++    };
++  }
++
++  private keepAlive(lease: CapacityLease): CapacityLease {
++    const timer = setInterval(() => {
++      try {
++        lease.renew();
++      } catch {
++        /* busy database: the next tick retries before the lease (3 ticks) can expire */
++      }
++    }, Math.max(50, Math.floor(this.leaseMs / 3)));
++    timer.unref?.();
++    let released = false;
++    return {
++      id: lease.id,
++      renew: lease.renew,
++      release: () => {
++        if (released) return;
++        released = true;
++        clearInterval(timer);
++        try {
++          lease.release();
++        } catch {
++          /* if this fails the lease simply expires */
++        }
++      },
++    };
++  }
++
++  close(): void {
++    this.db.close();
++  }
++}
++
++/** Where the machine-wide lease database lives. Under `node --test`, a temp file, so test runs never wait on real model work. */
++export function defaultModelCapacityPath(env: NodeJS.ProcessEnv = process.env): string {
++  if (env.HARNESS_MODEL_LOCK_DB) return env.HARNESS_MODEL_LOCK_DB;
++  if (env.NODE_TEST_CONTEXT) return join(tmpdir(), 'harness-test-model-capacity.db');
++  return join(homedir(), '.harness-engineering', 'model-capacity.db');
++}
++
++let shared: ModelCapacity | undefined;
++/** The process-wide handle on the machine-wide limit. */
++export function sharedModelCapacity(): ModelCapacity {
++  shared ??= new ModelCapacity(defaultModelCapacityPath());
++  return shared;
++}
+--- /dev/null
++++ b/src/mastra/capacity/model-capacity.test.ts
+@@ -0,0 +1,134 @@
++import { describe, it } from 'node:test';
++import assert from 'node:assert/strict';
++import { execFile, spawn } from 'node:child_process';
++import { mkdtempSync } from 'node:fs';
++import { mkdir, writeFile } from 'node:fs/promises';
++import { tmpdir } from 'node:os';
++import { join } from 'node:path';
++import { promisify } from 'node:util';
++import { ModelCapacity, defaultModelCapacityPath } from './model-capacity.ts';
++import { runCodingTask, type CodingTask } from '../workflows/coding-task-runner.ts';
++
++const CHILD = join(import.meta.dirname, 'capacity-child.fixture.ts');
++const dbPath = () => join(mkdtempSync(join(tmpdir(), 'capacity-')), 'capacity.db');
++const run = promisify(execFile);
++const child = (db: string, holdMs: number) => run(process.execPath, ['--disable-warning=ExperimentalWarning', CHILD, db, String(holdMs)]).then((r) => JSON.parse(r.stdout) as { start: number; end: number });
++
++/** Max number of [start,end) intervals overlapping at any instant. */
++function peak(intervals: { start: number; end: number }[]): number {
++  const points = intervals.flatMap((i) => [[i.start, 1], [i.end, -1]] as const).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
++  let cur = 0;
++  let max = 0;
++  for (const [, d] of points) max = Math.max(max, (cur += d));
++  return max;
++}
++
++describe('machine-wide model capacity (cross-process leases)', () => {
++  it('one permit: a second holder (another connection) waits until the first releases', () => {
++    const path = dbPath();
++    const a = new ModelCapacity(path, { permits: 1 });
++    const b = new ModelCapacity(path, { permits: 1 });
++    const la = a.tryAcquire('a')!;
++    assert.ok(la);
++    assert.equal(b.tryAcquire('b'), undefined);
++    la.release();
++    assert.ok(b.tryAcquire('b'));
++  });
++
++  for (const permits of [1, 2]) {
++    it(`six OS processes competing for ${permits} permit(s) never exceed it`, async () => {
++      const path = dbPath();
++      new ModelCapacity(path, { permits }).close();
++      const intervals = await Promise.all(Array.from({ length: 6 }, () => child(path, 250)));
++      assert.equal(peak(intervals), permits);
++    });
++  }
++
++  it('crash recovery: a holder killed with SIGKILL loses its permit at once (dead pid), not after the TTL', async () => {
++    const path = dbPath();
++    const cap = new ModelCapacity(path, { permits: 1, leaseMs: 60_000 });
++    const holder = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', CHILD, path, '0', 'hold-forever'], { stdio: ['ignore', 'pipe', 'inherit'] });
++    await new Promise<void>((r) => holder.stdout!.once('data', () => r()));
++    assert.equal(cap.tryAcquire('me'), undefined, 'held by the live child');
++    holder.kill('SIGKILL');
++    await new Promise((r) => holder.once('exit', r));
++    assert.ok(cap.tryAcquire('me'), 'reclaimed immediately after the holder died');
++  });
++
++  it('crash recovery without a pid check (e.g. another host): the lease expires after its TTL', () => {
++    let now = 1_000;
++    const path = dbPath();
++    const holder = new ModelCapacity(path, { permits: 1, leaseMs: 5_000, now: () => now });
++    const waiter = new ModelCapacity(path, { permits: 1, leaseMs: 5_000, now: () => now, isAlive: () => true });
++    holder.tryAcquire('crashed');
++    now += 4_999;
++    assert.equal(waiter.tryAcquire('w'), undefined);
++    now += 2;
++    assert.ok(waiter.tryAcquire('w'));
++  });
++
++  it('a live holder keeps its permit past the TTL by heartbeating', async () => {
++    const path = dbPath();
++    const holder = new ModelCapacity(path, { permits: 1, leaseMs: 300 });
++    const other = new ModelCapacity(path, { permits: 1, leaseMs: 300, isAlive: () => true });
++    const lease = await holder.acquire('long-call');
++    await new Promise((r) => setTimeout(r, 900)); // 3x the TTL
++    assert.equal(other.tryAcquire('other'), undefined);
++    lease.release();
++    assert.ok(other.tryAcquire('other'));
++  });
++
++  it('waiting is abortable (cancel) and leaves no lease behind', async () => {
++    const path = dbPath();
++    const cap = new ModelCapacity(path, { permits: 1, pollMs: 20 });
++    const held = cap.tryAcquire('busy')!;
++    const ctl = new AbortController();
++    const waiting = cap.acquire('waiter', ctl.signal);
++    setTimeout(() => ctl.abort(new Error('cancelled')), 100);
++    await assert.rejects(waiting, /aborted/);
++    held.release();
++    assert.equal(cap.holders().length, 0);
++  });
++
++  it('the permit count is stored once in the database, so every process enforces the same limit', () => {
++    const path = dbPath();
++    new ModelCapacity(path, { permits: 1 });
++    const other = new ModelCapacity(path, { permits: 5 });
++    assert.equal(other.permits, 1);
++    other.setPermits(2);
++    assert.equal(new ModelCapacity(path).permits, 2);
++  });
++
++  it('defaults to a machine-wide path outside any checkout, and to a temp file under node --test', () => {
++    assert.match(defaultModelCapacityPath({}), /\.harness-engineering\/model-capacity\.db$/);
++    assert.equal(defaultModelCapacityPath({ HARNESS_MODEL_LOCK_DB: '/x/y.db' }), '/x/y.db');
++    assert.match(defaultModelCapacityPath({ NODE_TEST_CONTEXT: 'child' }), /harness-test-model-capacity\.db$/);
++  });
++});
++
++describe('runner: model calls go through the shared capacity', () => {
++  it('two tasks running concurrently in one process never overlap their model calls (permits = 1)', async () => {
++    const capacity = new ModelCapacity(dbPath(), { permits: 1, pollMs: 10 });
++    const calls: { start: number; end: number }[] = [];
++    const makeTask = async (name: string) => {
++      const root = mkdtempSync(join(tmpdir(), `cap-runner-${name}-`));
++      await mkdir(join(root, 'src'));
++      await writeFile(join(root, 'src', 'a.txt'), 'old\n');
++      const task: CodingTask = { taskId: name, objective: 'x', allowedFiles: ['src/a.txt'], verificationCommands: [['node', '-e', 'process.exit(0)']], constraints: ['tests are immutable'] };
++      const worker = {
++        async generate() {
++          const start = Date.now();
++          await new Promise((r) => setTimeout(r, 200));
++          await writeFile(join(root, 'src', 'a.txt'), 'new\n');
++          calls.push({ start, end: Date.now() });
++          return { text: 'done', finishReason: 'stop', steps: [{}] };
++        },
++      };
++      return runCodingTask(task, { repoRoot: root, worker, capacity, maxAttempts: 1 });
++    };
++    const results = await Promise.all([makeTask('t1'), makeTask('t2'), makeTask('t3')]);
++    assert.deepEqual(results.map((r) => r.verdict), ['PASS', 'PASS', 'PASS']);
++    assert.equal(peak(calls), 1);
++    assert.equal(capacity.holders().length, 0, 'every permit was released');
++  });
++});
+--- /dev/null
++++ b/src/mastra/capacity/capacity-child.fixture.ts
+@@ -0,0 +1,16 @@
++// Child process used by model-capacity.test.ts: takes a permit on a shared lease DB, holds it, and reports timings.
++import { ModelCapacity } from './model-capacity.ts';
++
++const [dbPath, holdMs, mode] = process.argv.slice(2);
++const capacity = new ModelCapacity(dbPath, { pollMs: 20, leaseMs: 2_000 });
++const lease = await capacity.acquire(`child-${process.pid}`);
++const start = Date.now();
++if (mode === 'hold-forever') {
++  console.log(JSON.stringify({ pid: process.pid, acquired: start }));
++  await new Promise(() => {}); // until killed
++}
++await new Promise((r) => setTimeout(r, Number(holdMs)));
++const end = Date.now();
++lease.release();
++console.log(JSON.stringify({ pid: process.pid, start, end }));
++process.exit(0);

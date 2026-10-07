@@ -1,0 +1,14 @@
+{
+  "taskId": "C-calc",
+  "status": "PASS",
+  "reasons": [],
+  "restored": false,
+  "attempts": 1,
+  "runtimeRetries": 0,
+  "assessment": {
+    "complexity": "small",
+    "risk": "low",
+    "ambiguity": "none",
+    "rationale": "one function with tests"
+  }
+}

@@ -1,0 +1,21 @@
+Index: slug/slug.go
+===================================================================
+--- slug/slug.go
++++ slug/slug.go
+@@ -1,6 +1,15 @@
+ package slug
+ 
++import (
++	"regexp"
++	"strings"
++)
++
+ // Slugify converts s into a URL slug.
+ func Slugify(s string) string {
+-	return ""
++	s = strings.ToLower(s)
++	re := regexp.MustCompile(`[^a-z0-9]+`)
++	s = re.ReplaceAllString(s, "-")
++	s = strings.Trim(s, "-")
++	return s
+ }

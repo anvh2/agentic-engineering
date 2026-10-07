@@ -1,0 +1,12 @@
+{
+  "taskId": "A-slug",
+  "status": "PASS",
+  "verdict": "PASS",
+  "attempts": 1,
+  "runtimeRetries": 0,
+  "durationMs": 602893,
+  "modelCalls": 4,
+  "implementationChanged": true,
+  "verifiedStateHash": "f3803dfc0abace4c55f962ca3680462ade284729594dfd8f91c95e2c28ac858b",
+  "editFailures": 0
+}

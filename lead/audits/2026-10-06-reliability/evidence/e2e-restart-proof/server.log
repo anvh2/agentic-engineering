@@ -1,0 +1,101 @@
+
+> harness-engineering@1.0.0 dev
+> mastra dev
+
+(node:92216) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+◐ Preparing development environment...
+[33mWARN[39m [2026-10-07 21:58:17.629 +0700] (Mastra CLI): [36mCircular dependency found[39m
+    [35mdependency[39m: "src/mastra/tools/execution-tools.ts -> src/mastra/sandbox/sandbox.ts -> src/mastra/tools/execution-tools.ts"
+✓ Initial bundle complete
+◇ Starting Mastra dev server...
+(node:92255) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+ mastra  1.25.0 ready in 1551 ms
+
+│ Studio: http://localhost:4112
+│ API:    http://localhost:4112/api
+
+◯ watching for file changes...
+Error executing step workflow.coding-task-workflow.step.run-qwen-worker-harness: Error: ENOENT: no such file or directory, scandir '/private/tmp/claude-501/-Users-anvh-go-src-github-com-anvh2-harness-engineering/2bdedb7a-d117-4b74-b975-8735395f3272/scratchpad/e2e/repos/reload'
+    at async readdir (node:internal/fs/promises:955:18)
+    at async walk (file:///private/tmp/claude-501/-Users-anvh-go-src-github-com-anvh2-harness-engineering/2bdedb7a-d117-4b74-b975-8735395f3272/scratchpad/audit/.mastra/output/index.mjs:566:25)
+    at async snapshotRepo (file:///private/tmp/claude-501/-Users-anvh-go-src-github-com-anvh2-harness-engineering/2bdedb7a-d117-4b74-b975-8735395f3272/scratchpad/audit/.mastra/output/index.mjs:576:3)
+    at async runCodingTask (file:///private/tmp/claude-501/-Users-anvh-go-src-github-com-anvh2-harness-engineering/2bdedb7a-d117-4b74-b975-8735395f3272/scratchpad/audit/.mastra/output/index.mjs:686:20)
+    at async executeDelegation (file:///private/tmp/claude-501/-Users-anvh-go-src-github-com-anvh2-harness-engineering/2bdedb7a-d117-4b74-b975-8735395f3272/scratchpad/audit/.mastra/output/index.mjs:1100:15)
+    at async Object.execute (file:///private/tmp/claude-501/-Users-anvh-go-src-github-com-anvh2-harness-engineering/2bdedb7a-d117-4b74-b975-8735395f3272/scratchpad/audit/.mastra/output/index.mjs:1327:22)
+    at async engine.executeStepWithRetry.retries.retries (file:///Users/anvh/go/src/github.com/anvh2/harness-engineering/node_modules/@mastra/core/dist/agent-CKAVuxKN.js:2734:18)
+    at async DefaultExecutionEngine.executeStepWithRetry (file:///Users/anvh/go/src/github.com/anvh2/harness-engineering/node_modules/@mastra/core/dist/agent-CKAVuxKN.js:3312:14)
+    at async executeStep (file:///Users/anvh/go/src/github.com/anvh2/harness-engineering/node_modules/@mastra/core/dist/agent-CKAVuxKN.js:2719:26)
+    at async executeEntry (file:///Users/anvh/go/src/github.com/anvh2/harness-engineering/node_modules/@mastra/core/dist/agent-CKAVuxKN.js:1864:50)
+
+> harness-engineering@1.0.0 dev
+> mastra dev
+
+(node:92478) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+◐ Preparing development environment...
+[33mWARN[39m [2026-10-07 21:58:33.263 +0700] (Mastra CLI): [36mCircular dependency found[39m
+    [35mdependency[39m: "src/mastra/tools/execution-tools.ts -> src/mastra/sandbox/sandbox.ts -> src/mastra/tools/execution-tools.ts"
+✓ Initial bundle complete
+◇ Starting Mastra dev server...
+(node:92548) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+ mastra  1.25.0 ready in 1512 ms
+
+│ Studio: http://localhost:4112
+│ API:    http://localhost:4112/api
+
+◯ watching for file changes...
+◐ Bundling...
+[33mWARN[39m [2026-10-07 21:59:04.478 +0700] (Mastra CLI): [36mCircular dependency found[39m
+    [35mdependency[39m: "src/mastra/tools/execution-tools.ts -> src/mastra/sandbox/sandbox.ts -> src/mastra/tools/execution-tools.ts"
+✓ Bundle complete
+◐ [Mastra Dev] - Bundling finished, checking if restart is allowed...
+◐ [Mastra Dev] - ✅ Restarting server...
+↻ Restarting server...
+Shutting down Mastra server { signal: 'SIGINT' }
+MastraStorageExporter shutdown complete
+[OBSERVABILITY] [Observability] Shutdown completed [name=mastra]
+Mastra shutdown completed
+◇ Starting Mastra dev server...
+(node:92891) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+ mastra  1.25.0 ready in 2181 ms
+
+│ Studio: http://localhost:4112
+│ API:    http://localhost:4112/api
+
+◯ watching for file changes...
+◐ Bundling...
+[33mWARN[39m [2026-10-07 21:59:43.260 +0700] (Mastra CLI): [36mCircular dependency found[39m
+    [35mdependency[39m: "src/mastra/tools/execution-tools.ts -> src/mastra/sandbox/sandbox.ts -> src/mastra/tools/execution-tools.ts"
+✓ Bundle complete
+◐ [Mastra Dev] - Bundling finished, checking if restart is allowed...
+◐ [Mastra Dev] - ✅ Restarting server...
+↻ Restarting server...
+Shutting down Mastra server { signal: 'SIGINT' }
+MastraStorageExporter shutdown complete
+[OBSERVABILITY] [Observability] Shutdown completed [name=mastra]
+Mastra shutdown completed
+◇ Starting Mastra dev server...
+(node:94615) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+ mastra  1.25.0 ready in 1592 ms
+
+│ Studio: http://localhost:4112
+│ API:    http://localhost:4112/api
+
+◯ watching for file changes...
+Failed to restart workflow run in background {
+  error: Error: This workflow run was not active
+      at createRestartExecutionParams (file:///Users/anvh/go/src/github.com/anvh2/harness-engineering/node_modules/@mastra/core/dist/workflow-event-processor-DS9fiurE.js:431:13)
+      at Run._restart (file:///Users/anvh/go/src/github.com/anvh2/harness-engineering/node_modules/@mastra/core/dist/agent-CKAVuxKN.js:6610:23)
+      at process.processTicksAndRejections (node:internal/process/task_queues:103:5),
+  workflowId: 'coding-task-workflow',
+  runId: 'ac6501d2-4d92-4125-9deb-2c01446cb7bb'
+}

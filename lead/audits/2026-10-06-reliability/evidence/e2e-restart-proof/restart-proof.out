@@ -1,0 +1,8 @@
+14:58:21 server up on 4112
+14:58:21 kill9 run 9fca603f-da9a-45ac-8924-4f26e5d5b86d
+14:58:56 {"scenario":"kill9","runId":"9fca603f-da9a-45ac-8924-4f26e5d5b86d","finalStatus":"success","resultStatus":"RUNTIME_FAILURE","resultReason":"run_restarted: the worker step of run 9fca603f-da9a-45ac-8924-4f26e5d5b86d already executed once (the server restarted m","workerStepExecutions":1,"modelStartedEvents":1,"traceEventsAfterInterrupt":[],"repoUnchangedSinceInterrupt":true,"ollamaChatRequestsAfterInterrupt":0}
+14:58:57 reload run fc94dde5-0e37-416e-88d5-7318755e06fd
+14:59:28 {"scenario":"reload","runId":"fc94dde5-0e37-416e-88d5-7318755e06fd","finalStatus":"success","resultStatus":"RUNTIME_FAILURE","resultReason":"run_restarted: the worker step of run fc94dde5-0e37-416e-88d5-7318755e06fd already executed once (the server restarted m","workerStepExecutions":1,"modelStartedEvents":1,"traceEventsAfterInterrupt":[],"repoUnchangedSinceInterrupt":true,"ollamaChatRequestsAfterInterrupt":0}
+14:59:28 cancel run ac6501d2-4d92-4125-9deb-2c01446cb7bb
+14:59:47 manual restart HTTP 200
+15:00:07 {"scenario":"cancel","runId":"ac6501d2-4d92-4125-9deb-2c01446cb7bb","finalStatus":"canceled","resultStatus":null,"resultReason":null,"workerStepExecutions":1,"modelStartedEvents":1,"traceEventsAfterInterrupt":["model_finished","attempt_failed","task_failed"],"repoUnchangedSinceInterrupt":true,"ollamaChatRequestsAfterInterrupt":0}

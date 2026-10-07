@@ -1,11 +1,26 @@
 import { Agent } from '@mastra/core/agent';
-import { applyPatch, listFiles, readFile, searchFiles } from '../tools/repository-tools.ts';
+import { applyPatch, listFiles, readFile, searchFiles, writeFile } from '../tools/repository-tools.ts';
 import { gitDiff, gitStatus, runGoFmt, runGoTest, runJestTest, runPrettier } from '../tools/execution-tools.ts';
 import { resolveMaxRepairAttempts } from '../workflows/repair-loop-tracker.ts';
 
 const ollamaBaseUrl = (process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434').replace(/\/$/, '');
 const ollamaModel = process.env.OLLAMA_MODEL ?? 'qwen3:8b';
 const maxRepairAttempts = resolveMaxRepairAttempts();
+
+export type EditMode = 'writeFile' | 'applyPatch';
+
+/**
+ * How the coding workers edit files. Default `writeFile` (whole-file replacement): live benchmarks showed
+ * qwen3:8b failing at hand-written unified diffs - first on Go, then again on the JS smoke fixture
+ * (JS-SMOKE-001: applyPatch rejected on 3 of 3 attempts, no file ever mutated). `applyPatch` stays available as
+ * the explicit legacy/baseline mode via CODING_WORKER_EDIT_MODE=applyPatch. Applies to both ecosystems.
+ */
+export function resolveEditMode(env: NodeJS.ProcessEnv = process.env): EditMode {
+  const value = env.CODING_WORKER_EDIT_MODE;
+  if (value === undefined || value === '' || value === 'writeFile') return 'writeFile';
+  if (value === 'applyPatch') return 'applyPatch';
+  throw new Error(`CODING_WORKER_EDIT_MODE must be "writeFile" or "applyPatch", got "${value}"`);
+}
 
 export type Ecosystem = 'go' | 'js';
 
@@ -34,8 +49,9 @@ const defaultOptions = { maxSteps: 40 } as const;
  * ecosystem at a time. `codingTaskWorkflow` auto-detects which one to use
  * per run (go.mod vs package.json) rather than asking the model to guess.
  */
-function createCodingWorker(ecosystem: Ecosystem): Agent {
+export function createCodingWorker(ecosystem: Ecosystem, editMode: EditMode = resolveEditMode()): Agent {
   const isGo = ecosystem === 'go';
+  const useWriteFile = editMode === 'writeFile';
 
   const toolsDescription = isGo
     ? 'runGoFmt - format one file. runGoTest - `go test` for a package.'
@@ -51,21 +67,25 @@ function createCodingWorker(ecosystem: Ecosystem): Agent {
     description: `A worker that inspects, patches, formats, and tests a delegated ${isGo ? 'Go' : 'JavaScript/Node'} repository using a local Ollama model, with narrowly scoped write and verification tools.`,
     instructions: `You are a repository coding worker for the assigned ${isGo ? 'Go' : 'JavaScript/Node'} repository. No arbitrary shell access.
 
-Tools: listFiles, readFile, searchFiles (regex or plain text, scans everything), gitStatus, gitDiff - all read-only. applyPatch - unified diff to one file, or create a new file. ${toolsDescription}
+Tools: listFiles, readFile, searchFiles (regex or plain text, scans everything), gitStatus, gitDiff - all read-only. ${useWriteFile ? 'writeFile - replace one file with its complete new contents (or create it).' : 'applyPatch - unified diff to one file, or create a new file.'} ${toolsDescription}
 
 Grounding: only state a path, function, or signature you actually saw in a readFile result this conversation. Don't invent structure. A zero-result search doesn't mean nothing exists - try a different query before concluding that.
 
 To make a change:
 1. listFiles/searchFiles/readFile the target and its existing tests/conventions.
-2. applyPatch a minimal diff based on content you just read. Stale-context failure -> re-read, retry.
+2. ${useWriteFile ? 'writeFile the complete updated file, based on content you just read.' : 'applyPatch a minimal diff based on content you just read. Stale-context failure -> re-read, retry.'}
 3. ${verifyStep}
 4. Test failure -> diagnose from its output, one corrective applyPatch, re-verify. Stop after ${maxRepairAttempts} corrective attempts or on success; report the last test result either way.
 
 Never claim a command ran or a change is tested unless a tool call in this conversation confirmed it. No repository or a failing tool call -> say so plainly.`,
     model: modelConfig,
     tools: isGo
-      ? { listFiles, readFile, searchFiles, applyPatch, runGoFmt, runGoTest, gitDiff, gitStatus }
-      : { listFiles, readFile, searchFiles, applyPatch, runPrettier, runJestTest, gitDiff, gitStatus },
+      ? useWriteFile
+        ? { listFiles, readFile, searchFiles, writeFile, runGoFmt, runGoTest, gitDiff, gitStatus }
+        : { listFiles, readFile, searchFiles, applyPatch, runGoFmt, runGoTest, gitDiff, gitStatus }
+      : useWriteFile
+        ? { listFiles, readFile, searchFiles, writeFile, runPrettier, runJestTest, gitDiff, gitStatus }
+        : { listFiles, readFile, searchFiles, applyPatch, runPrettier, runJestTest, gitDiff, gitStatus },
     defaultOptions,
   });
 }

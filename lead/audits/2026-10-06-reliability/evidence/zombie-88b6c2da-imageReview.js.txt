@@ -1,0 +1,81 @@
+module.exports = {
+  IMAGE_STATUS: Object.freeze({
+    NOT_REQUESTED: "not_requested",
+    REQUESTED: "requested",
+    PROCESSING: "processing",
+    READY_FOR_REVIEW: "ready_for_review",
+    APPROVED: "approved",
+    REJECTED: "rejected",
+    FAILED: "failed"
+  }),
+  IMAGE_ACTIONS: Object.freeze({
+    REQUEST: "request",
+    START: "start",
+    COMPLETE: "complete",
+    FAIL: "fail",
+    APPROVE: "approve",
+    REJECT: "reject"
+  }),
+  _transitionTable: {
+    request: {
+      from: ["not_requested", "rejected", "failed"],
+      to: "requested",
+      jobStatus: "queued"
+    },
+    start: {
+      from: ["requested"],
+      to: "processing",
+      jobStatus: "processing"
+    },
+    complete: {
+      from: ["processing"],
+      to: "ready_for_review",
+      jobStatus: "awaiting_review"
+    },
+    fail: {
+      from: ["requested", "processing"],
+      to: "failed",
+      jobStatus: "failed"
+    },
+    approve: {
+      from: ["ready_for_review"],
+      to: "approved",
+      jobStatus: "queued"
+    },
+    reject: {
+      from: ["ready_for_review"],
+      to: "rejected",
+      jobStatus: "queued"
+    }
+  },
+  transitionFor(action) {
+    const entry = this._transitionTable[action];
+    if (!entry) return null;
+    return {
+      from: [...entry.from],
+      to: entry.to,
+      jobStatus: entry.jobStatus
+    };
+  },
+  canTransition(imageStatus, action) {
+    const entry = this.transitionFor(action);
+    if (!entry) return false;
+    return entry.from.includes(imageStatus);
+  },
+  nextImageStatus(imageStatus, action) {
+    if (!this.canTransition(imageStatus, action)) {
+      throw new Error(`Cannot ${action} an image that is ${imageStatus}`);
+    }
+    const entry = this.transitionFor(action);
+    return entry.to;
+  },
+  canStartVideo(job) {
+    if (!job || job.imageStatus !== "approved") {
+      return false;
+    }
+    return true;
+  }
+};
+
+// Ensure file ends with a newline
+process.stdout.write("\n");

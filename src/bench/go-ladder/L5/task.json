@@ -1,0 +1,9 @@
+{
+  "taskId": "L5-kv-quoted-values",
+  "objective": "Add quoted-value support to Parse in internal/kv/kv.go while keeping every existing behavior unchanged. New rules: if the first non-space character after the first \"=\" of a segment is a double quote, the value is quoted. Inside a quoted value commas and \"=\" are literal, surrounding whitespace is preserved, the backslash sequences \\\" and \\\\ produce a literal quote and a literal backslash, and the enclosing quotes are removed. Anything after the closing quote up to the next comma is ignored. An unterminated quote consumes the rest of the input. A quote character anywhere else (in a key, or in the middle of an unquoted value) is an ordinary literal character.",
+  "allowedFiles": ["internal/kv/kv.go"],
+  "contextFiles": ["internal/kv/kv_test.go"],
+  "acceptanceCriteria": ["quoted values work as described", "all unquoted inputs parse exactly as before"],
+  "verificationCommands": [["go", "test", "-count=1", "./..."]],
+  "constraints": ["tests are immutable", "standard library only", "keep the exported signature unchanged"]
+}

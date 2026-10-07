@@ -164,6 +164,9 @@ export async function resolveWritablePathWithinRepository(
 
   const literalRel = relative(root, target);
   const realRel = relative(realRoot, realTarget);
+  if (isProtectedPath(literalRel) || isProtectedPath(realRel)) {
+    throw new Error(`Path "${requestedPath}" is protected (git metadata, installed dependencies or harness temp files) and cannot be modified.`);
+  }
   if (literalRel !== realRel) {
     throw new Error(
       `Path "${requestedPath}" cannot be modified because it is reached through a symlink. Writes must use a direct repository path.`,
@@ -171,6 +174,17 @@ export async function resolveWritablePathWithinRepository(
   }
 
   return target;
+}
+
+/**
+ * Paths the harness's mutation snapshot deliberately skips (coding-task-runner `snapshotRepo`), so a write there would be
+ * invisible to the forbidden-mutation check and to the restore: `.git` (a directory, or a worktree's `.git` pointer file
+ * whose rewrite redirects every later harness git command to another repository), `node_modules` (the JS verifier runs
+ * code from it) and the atomic-write temp prefix. Compared case-insensitively: the default macOS filesystem is.
+ */
+function isProtectedPath(repoRelative: string): boolean {
+  const segments = repoRelative.split(/[\\/]/).map((s) => s.toLowerCase());
+  return segments.some((s) => s === '.git' || s === 'node_modules') || (segments.at(-1) ?? '').startsWith('.applypatch-');
 }
 
 async function statOrThrow(path: string, displayPath: string) {
@@ -542,5 +556,61 @@ The @@ hunk header's line count must match the hunk's actual lines. Context/remo
     const diff = createPatch(path, originalContent, patchedContent);
 
     return { success: true, path, created: isNewFile, diff };
+  },
+});
+
+/**
+ * Whole-file alternative to applyPatch for small files: the model supplies the
+ * complete new content instead of a hand-computed unified diff. Added after a
+ * live benchmark showed the local model failing at diff generation (malformed
+ * tool-call JSON dropped by the runtime, or diffs with wrong hunk headers).
+ * Same boundary checks, size cap and atomic write as applyPatch.
+ */
+export const writeFile = createTool({
+  id: 'writeFile',
+  description: `Replace the entire contents of one existing file (or create a new file) with the full text you provide. Provide the COMPLETE new file, not a diff or a fragment. Limited to ${MAX_PATCH_BYTES} bytes; the parent directory of a new file must already exist.`,
+  inputSchema: z.object({
+    path: z.string().describe('Relative to repo root.'),
+    content: z.string().describe('The complete new contents of the file.'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    path: z.string(),
+    created: z.boolean(),
+    diff: z.string(),
+  }),
+  execute: async ({ path, content }, { requestContext }) => {
+    const root = getRepositoryRoot(requestContext);
+    const target = await resolveWritablePathWithinRepository(root, path);
+
+    const bytes = Buffer.byteLength(content, 'utf8');
+    if (bytes > MAX_PATCH_BYTES) {
+      throw new Error(`Content for "${path}" is ${bytes} bytes, which exceeds the ${MAX_PATCH_BYTES}-byte limit.`);
+    }
+    if (content.trim() === '') {
+      throw new Error('Content is empty. Provide the complete new file contents.');
+    }
+
+    const targetStat = await stat(target).catch((err: NodeJS.ErrnoException) => {
+      if (err.code !== 'ENOENT') throw new Error(`Unable to access "${path}".`);
+      return undefined;
+    });
+    if (targetStat?.isDirectory()) throw new Error(`"${path}" is a directory. writeFile only writes files.`);
+
+    const isNewFile = targetStat === undefined;
+    if (isNewFile) {
+      const parentStat = await stat(dirname(target)).catch(() => undefined);
+      if (!parentStat || !parentStat.isDirectory()) {
+        throw new Error(`Cannot create "${path}": its parent directory does not exist yet.`);
+      }
+    }
+
+    const original = isNewFile ? '' : (await readFileFromDisk(target)).toString('utf8');
+    try {
+      await atomicWrite(target, content);
+    } catch {
+      throw new Error(`Unable to write "${path}".`);
+    }
+    return { success: true, path, created: isNewFile, diff: createPatch(path, original, content) };
   },
 });

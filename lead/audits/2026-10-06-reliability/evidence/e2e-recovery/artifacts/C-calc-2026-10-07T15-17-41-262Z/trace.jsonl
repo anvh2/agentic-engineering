@@ -1,0 +1,3 @@
+{"seq":1,"ts":"2026-10-07T15:17:41.263Z","type":"task_started","data":{"taskId":"C-calc","objective":"Implement Add(a, b int) int in internal/calculator/calculator.go so that it returns the sum of a and b.","allowedFiles":["internal/calculator/calculator.go"],"model":"qwen3:8b-ctx8192","maxAttempts":3,"maxRuntimeRetriesPerAttempt":1}}
+{"seq":2,"ts":"2026-10-07T15:17:41.264Z","type":"attempt_started","data":{"attempt":1,"maxAttempts":3}}
+{"seq":3,"ts":"2026-10-07T15:17:41.265Z","type":"model_started","data":{"model":"qwen3:8b-ctx8192","attempt":1,"runtimeTry":0,"capacityWaitMs":1}}

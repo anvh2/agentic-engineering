@@ -1,0 +1,9 @@
+{
+  "taskId": "L3-truncate-bugfix",
+  "objective": "Fix the bug(s) in Truncate in internal/textutil/textutil.go without changing PadLeft or CountWords. Required behavior: if max <= 0 return \"\"; if s has at most max runes (not bytes) return s unchanged; otherwise, if max <= 3 return the first max runes with no ellipsis; otherwise return the first max-3 runes followed by \"...\" (the result is exactly max runes long). It must never split a multi-byte character or panic.",
+  "allowedFiles": ["internal/textutil/textutil.go"],
+  "contextFiles": ["internal/textutil/textutil_test.go"],
+  "acceptanceCriteria": ["Truncate follows the required behavior", "PadLeft and CountWords behave exactly as before"],
+  "verificationCommands": [["go", "test", "-count=1", "./..."]],
+  "constraints": ["tests are immutable", "standard library only", "keep all exported signatures unchanged"]
+}

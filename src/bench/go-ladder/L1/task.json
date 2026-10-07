@@ -1,0 +1,9 @@
+{
+  "taskId": "L1-calculator-add",
+  "objective": "Implement Add(a, b int) int in internal/calculator/calculator.go so that it returns the sum of a and b.",
+  "allowedFiles": ["internal/calculator/calculator.go"],
+  "contextFiles": ["internal/calculator/calculator_test.go"],
+  "acceptanceCriteria": ["Add returns a + b for positive, zero and negative inputs"],
+  "verificationCommands": [["go", "test", "-count=1", "./..."]],
+  "constraints": ["tests are immutable", "standard library only", "keep the exported signature unchanged"]
+}

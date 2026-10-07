@@ -1,0 +1,12 @@
+15:04:57 server up
+15:04:57 batch A: 2 task(s); READY: A-calc, A-slug; BLOCKED: -
+15:15:04   claimed A-calc (epoch 1, worker-66598-w1) |   claimed A-slug (epoch 1, worker-66598-w2) |   "claimed": [ |   "reviewPending": [ |                 verified; awaiting Engineering Lead review |                 verified; awaiting Engineering Lead review
+15:15:23 A-concurrency-capacity-integration {"startedAt":"2026-10-07T15:04:57.722Z","states":[{"id":"A-calc","state":"DONE","category":null,"reason":"integrated and verified","claims":1},{"id":"A-slug","state":"DONE","category":null,"reason":"integrated and verified","claims":1}],"integrate":["integrated A-calc -> 15a1e8dc78","  integrated A-slug -> 164e5bfdb1","DONE      A-calc -> 15a1e8dc78","DONE      A-slug -> 164e5bfdb1"],"userBranchUntouched":true}
+15:15:23 batch B: 1 task(s); READY: B-calc; BLOCKED: -
+15:15:27 scheduler killed; task is CODING run ac9ec445-0e30-4b41-af20-428e68f4432a
+15:17:13 orphaned-by-client run finished on the server: PASS
+15:17:40 B-scheduler-crash-adopt {"stateBeforeResume":"CODING","serverRunResult":"PASS","after":{"state":"REVIEW_PENDING","category":null,"reason":"verified; awaiting Engineering Lead review","claims":2},"runIdsAfter":["ac9ec445-0e30-4b41-af20-428e68f4432a"],"workerStepExecutions":1,"adoptedLog":true}
+15:17:40 batch C: 1 task(s); READY: C-calc; BLOCKED: -
+15:19:57 C-server-crash-guard-retry {"schedulerExit":0,"afterRestart":{"state":"RUNTIME_FAILURE","category":"runtime_unavailable","reason":"run_restarted: the worker step of run a31075f8-ae81-42d2-bce1-f02aa1ac7b1f already executed once (th","claims":1},"firstRunResult":"RUNTIME_FAILURE","firstRunReason":"run_restarted: the worker step of run a31075f8-ae81-42d2-bce1-f02aa1ac7b1f already execute","executionsAfterRestart":1,"afterRetry":{"state":"REVIEW_PENDING","category":null,"reason":"verified; awaiting Engineering Lead review","claims":2},"runIds":["a31075f8-ae81-42d2-bce1-f02aa1ac7b1f","b48d13e8-1305-43a0-9f73-951fb4cc0dd1"],"totalExecutions":2}
+15:19:57 batch D: 1 task(s); READY: D-calc; BLOCKED: -
+15:22:38 D-timeout-cancel-retry {"afterTimeout":{"state":"RUNTIME_FAILURE","category":"task_timeout","reason":"task exceeded taskTimeout of 15000ms","claims":1},"timedOutRunStatus":"canceled","worktreeCleanAfterCancel":true,"afterRetry":{"state":"REVIEW_PENDING","category":null,"reason":"verified; awaiting Engineering Lead review","claims":2},"runIds":["c6d6b8a6-94ef-465d-8f61-4469124aa7d0","b882f352-1554-4a65-8653-c7d7a1144d70"],"totalExecutions":2}

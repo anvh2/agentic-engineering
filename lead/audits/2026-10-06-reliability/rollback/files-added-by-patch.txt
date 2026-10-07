@@ -1,0 +1,4 @@
+src/mastra/scheduler/failure-injection.test.ts
+src/mastra/workflows/coding-task-runner-side-effects.test.ts
+src/mastra/workflows/coding-task-workflow-restart.test.ts
+src/mastra/tools/repository-tools-crash.test.ts

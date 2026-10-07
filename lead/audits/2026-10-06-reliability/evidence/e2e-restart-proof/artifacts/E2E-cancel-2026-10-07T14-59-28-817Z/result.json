@@ -1,0 +1,17 @@
+{
+  "taskId": "E2E-cancel",
+  "status": "RUNTIME_FAILURE",
+  "reasons": [
+    "model runtime failed after its bounded retry: no model response (finishReason=tripwire)"
+  ],
+  "restored": false,
+  "attempts": 0,
+  "runtimeRetries": 0,
+  "failureCategory": "F_model_runtime",
+  "assessment": {
+    "complexity": "small",
+    "risk": "low",
+    "ambiguity": "none",
+    "rationale": "one function"
+  }
+}

@@ -1,0 +1,23 @@
+config: {"maxConcurrentWorkers":1,"maxConcurrentOllamaRequests":1,"workerLeaseTimeoutMs":300000,"taskTimeoutMs":1800000,"maxTasksPerBatch":5,"maxReviewCorrections":2,"pollMs":2000,"workerLanguages":["go","js"]}
+  claimed C-calc (epoch 1, worker-78157-w1)
+  C-calc: mastra run a31075f8-ae81-42d2-bce1-f02aa1ac7b1f  http://127.0.0.1:4112/workflows/coding-task-workflow/graph/a31075f8-ae81-42d2-bce1-f02aa1ac7b1f
+  C-calc: poll failed (fetch failed); 1/24
+  C-calc: poll failed (fetch failed); 2/24
+  C-calc: [success] 
+{
+  "claimed": [
+    "C-calc"
+  ],
+  "reviewPending": [],
+  "failed": [
+    {
+      "id": "C-calc",
+      "state": "RUNTIME_FAILURE",
+      "category": "runtime_unavailable"
+    }
+  ],
+  "requeued": [],
+  "stopReason": "idle"
+}
+RUNTIME_FAILURE p50 C-calc  [worker/go] attempts=0 claims=1  run=a31075f8-ae81-42d2-bce1-f02aa1ac7b1f
+                [runtime_unavailable] run_restarted: the worker step of run a31075f8-ae81-42d2-bce1-f02aa1ac7b1f already executed once (the server restarted mid-run); refusing to re-run it against a repository in an unknown state. Re-dispatch the task as a new run.

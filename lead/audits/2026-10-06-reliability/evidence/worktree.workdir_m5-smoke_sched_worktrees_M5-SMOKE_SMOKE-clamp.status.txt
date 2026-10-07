@@ -1,0 +1,3 @@
+# .workdir/m5-smoke/sched/worktrees/M5-SMOKE/SMOKE-clamp  captured 2026-10-07T14:23:33Z
+lead-task/M5-SMOKE/SMOKE-clamp
+740dba8d7c1a2b908ed844218af5345cf1bc9d4a

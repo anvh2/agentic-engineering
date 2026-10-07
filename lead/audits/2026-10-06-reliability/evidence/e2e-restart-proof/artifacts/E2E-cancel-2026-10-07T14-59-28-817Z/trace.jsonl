@@ -1,0 +1,6 @@
+{"seq":1,"ts":"2026-10-07T14:59:28.819Z","type":"task_started","data":{"taskId":"E2E-cancel","objective":"Implement Add(a, b int) int in internal/calculator/calculator.go so that it returns the sum of a and b.","allowedFiles":["internal/calculator/calculator.go"],"model":"qwen3:8b-ctx8192","maxAttempts":3,"maxRuntimeRetriesPerAttempt":1}}
+{"seq":2,"ts":"2026-10-07T14:59:28.820Z","type":"attempt_started","data":{"attempt":1,"maxAttempts":3}}
+{"seq":3,"ts":"2026-10-07T14:59:28.821Z","type":"model_started","data":{"model":"qwen3:8b-ctx8192","attempt":1,"runtimeTry":0}}
+{"seq":4,"ts":"2026-10-07T14:59:34.326Z","type":"model_finished","data":{"error":"no model response (finishReason=tripwire)","durationMs":5505}}
+{"seq":5,"ts":"2026-10-07T14:59:34.326Z","type":"attempt_failed","data":{"attempt":1,"category":"F_model_runtime","kind":"runtime","reason":"no model response (finishReason=tripwire)"}}
+{"seq":6,"ts":"2026-10-07T14:59:34.328Z","type":"task_failed","data":{"attempts":0,"category":"F_model_runtime","runtimeRetries":0,"durationMs":5510}}

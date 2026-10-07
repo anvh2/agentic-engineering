@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { relative } from 'node:path';
 import { z } from 'zod';
 import { getRepositoryRoot, resolveWithinRepository, resolveWritablePathWithinRepository } from './repository-tools.ts';
+import { runSandboxedCommand } from '../sandbox/sandbox.ts';
 
 /**
  * Controlled command execution for the coding worker's verify/repair loop
@@ -12,6 +13,10 @@ import { getRepositoryRoot, resolveWithinRepository, resolveWritablePathWithinRe
  * that data can never reach a shell for interpretation. There is
  * deliberately no generic exec/shell/spawn tool: the worker's only
  * execution capabilities are the ones exported below.
+ *
+ * Everything that executes repository code (go test, jest, and the formatters, which load repo config) runs inside the
+ * OS sandbox (../sandbox/sandbox.ts): writes limited to the repository, no network, no harness secrets. If isolation
+ * is unavailable these tools refuse to run. git here is the harness's own binary on the harness's own terms.
  */
 
 const MAX_OUTPUT_BYTES = 4_000;
@@ -36,7 +41,7 @@ function gitCommandTimeoutMs(): number {
   return Number(process.env.GIT_COMMAND_TIMEOUT_MS) || 10_000;
 }
 
-interface ControlledCommandResult {
+export interface ControlledCommandResult {
   success: boolean;
   exitCode: number | null;
   stdout: string;
@@ -62,10 +67,10 @@ function truncate(text: string, maxBytes: number): { text: string; truncated: bo
  * true` gives the child its own process group, and a negative pid targets
  * that whole group with SIGKILL.
  */
-function runControlledCommand(
+export function runControlledCommand(
   command: string,
   args: string[],
-  options: { cwd: string; timeoutMs: number },
+  options: { cwd: string; timeoutMs: number; env?: NodeJS.ProcessEnv },
 ): Promise<ControlledCommandResult> {
   const start = Date.now();
 
@@ -76,6 +81,7 @@ function runControlledCommand(
         cwd: options.cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: true,
+        ...(options.env ? { env: options.env } : {}),
       });
     } catch (err) {
       resolve({
@@ -193,8 +199,9 @@ export const runGoTest = createTool({
     const selector = pkg && pkg.trim() !== '' ? pkg.trim() : './...';
     validateGoPackage(selector);
 
-    return runControlledCommand('go', ['test', selector], {
+    return runSandboxedCommand('go', ['test', selector], {
       cwd: root,
+      root,
       timeoutMs: goTestTimeoutMs(),
     });
   },
@@ -216,8 +223,9 @@ export const runGoFmt = createTool({
     const root = getRepositoryRoot(requestContext);
     const target = await resolveWritablePathWithinRepository(root, path);
 
-    const before = await runControlledCommand('gofmt', ['-l', target], {
+    const before = await runSandboxedCommand('gofmt', ['-l', target], {
       cwd: root,
+      root,
       timeoutMs: goFmtTimeoutMs(),
     });
     if (!before.success) {
@@ -231,8 +239,9 @@ export const runGoFmt = createTool({
       return { success: true, path, changed: false, stderr: '' };
     }
 
-    const result = await runControlledCommand('gofmt', ['-w', target], {
+    const result = await runSandboxedCommand('gofmt', ['-w', target], {
       cwd: root,
+      root,
       timeoutMs: goFmtTimeoutMs(),
     });
 
@@ -266,7 +275,8 @@ export const runJestTest = createTool({
   }),
   execute: async ({ testPath }, { requestContext }) => {
     const root = getRepositoryRoot(requestContext);
-    const args = ['jest', '--ci'];
+    // --no-install: without a TTY npx would otherwise silently download and run the package from the registry.
+    const args = ['--no-install', 'jest', '--ci'];
 
     if (testPath && testPath.trim() !== '') {
       // Boundary-checked the same way gitStatus/gitDiff scope their optional
@@ -274,10 +284,13 @@ export const runJestTest = createTool({
       // is a literal repository path, not a build-pattern string like Go's
       // package selector.
       const target = await resolveWithinRepository(root, testPath);
-      args.push(relative(root, target) || '.');
+      const selector = relative(root, target) || '.';
+      // A file named like "--config=x.js" would otherwise reach jest as an option (and --config runs arbitrary code).
+      if (selector.startsWith('-')) throw new Error(`Test path "${testPath}" must not start with "-" (it would be read as a jest option).`);
+      args.push(selector);
     }
 
-    return runControlledCommand('npx', args, { cwd: root, timeoutMs: jestTestTimeoutMs() });
+    return runSandboxedCommand('npx', args, { cwd: root, root, timeoutMs: jestTestTimeoutMs() });
   },
 });
 
@@ -298,16 +311,18 @@ export const runPrettier = createTool({
     const root = getRepositoryRoot(requestContext);
     const target = await resolveWritablePathWithinRepository(root, path);
 
-    const before = await runControlledCommand('npx', ['prettier', '--check', target], {
+    const before = await runSandboxedCommand('npx', ['--no-install', 'prettier', '--check', target], {
       cwd: root,
+      root,
       timeoutMs: prettierTimeoutMs(),
     });
     if (before.success) {
       return { success: true, path, changed: false, stderr: '' };
     }
 
-    const result = await runControlledCommand('npx', ['prettier', '--write', target], {
+    const result = await runSandboxedCommand('npx', ['--no-install', 'prettier', '--write', target], {
       cwd: root,
+      root,
       timeoutMs: prettierTimeoutMs(),
     });
     // A genuine parse error (not just "unformatted") surfaces here as a

@@ -1,0 +1,9 @@
+{
+  "taskId": "L2-slugify",
+  "objective": "Implement Slugify in slug/slug.go. Rules: ASCII letters are lower-cased; ASCII letters and digits are kept; every run of any other characters (spaces, punctuation, underscores and all non-ASCII characters) is replaced by a single \"-\"; the result has no leading or trailing \"-\"; the empty string stays empty.",
+  "allowedFiles": ["slug/slug.go"],
+  "contextFiles": ["slug/slug_test.go"],
+  "acceptanceCriteria": ["Slugify follows the rules above for all inputs"],
+  "verificationCommands": [["go", "test", "-count=1", "./..."]],
+  "constraints": ["tests are immutable", "standard library only", "keep the exported signature unchanged"]
+}

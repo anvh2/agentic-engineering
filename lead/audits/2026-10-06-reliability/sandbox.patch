@@ -1,0 +1,778 @@
+--- a/src/mastra/lead/batch.ts
++++ b/src/mastra/lead/batch.ts
+@@ -1,7 +1,7 @@
+ import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+ import { join } from 'node:path';
+ import { z } from 'zod';
+-import { runControlledCommand } from '../tools/execution-tools.ts';
++import { runSandboxedCommand } from '../sandbox/sandbox.ts';
+ import { delegationRequestSchema, restoreWorkingTree, routeTask, validateJsVerification, type DelegationRequest } from './delegation.ts';
+ import { gitStatusEntries, inspectChange, type ChangeFinding } from './change-review.ts';
+ 
+@@ -580,7 +580,8 @@
+       const problems = await validateJsVerification(command, { taskId: 'integration', objective: 'integration', allowedFiles: [], contextFiles: [], acceptanceCriteria: [], verificationCommands: [command], constraints: [], hiddenFiles: {} }, state.repository);
+       if (problems.length > 0) throw new Error(`integration command rejected: ${problems.join('; ')}`);
+     }
+-    const r = await runControlledCommand(command[0], command.slice(1), { cwd: state.repository, timeoutMs: 600_000 });
++    // Runs the batch's code (worker-written included): OS sandbox, fail closed.
++    const r = await runSandboxedCommand(command[0], command.slice(1), { cwd: state.repository, root: state.repository, timeoutMs: 600_000 });
+     results.push({ command, exitCode: r.exitCode, output: `${r.stdout}${r.stderr}`.trim().slice(-1500) });
+     if (!r.success) break;
+   }
+--- a/src/mastra/lead/delegation.ts
++++ b/src/mastra/lead/delegation.ts
+@@ -2,6 +2,7 @@
+ import { dirname, extname, isAbsolute, join, normalize } from 'node:path';
+ import { z } from 'zod';
+ import { runControlledCommand } from '../tools/execution-tools.ts';
++import { sandboxStatus } from '../sandbox/sandbox.ts';
+ import {
+   codingTaskSchema,
+   runCodingTask,
+@@ -182,6 +183,10 @@
+     if (!policy.allowedVerificationBinaries.includes(command[0])) reasons.push(`verification binary "${command[0]}" is not allow-listed`);
+     else if (policy === JS_POLICY) reasons.push(...(await validateJsVerification(command, contract, repoRoot)));
+   }
++
++  // Model-written code is only ever executed inside the OS sandbox; without it nothing is delegated (fail closed).
++  const sandbox = await sandboxStatus();
++  if (!sandbox.available) reasons.push(`OS sandbox unavailable (${sandbox.reason}); model-generated code is never executed without isolation`);
+ 
+   // The repository must be a git work tree and the files the worker may touch must be clean,
+   // so a failed run can be restored exactly.
+@@ -298,8 +303,11 @@
+   } else {
+     await restoreWorkingTree(repoRoot, run.changedFiles);
+     restored = run.changedFiles.length > 0;
+-    if (run.runtimeFailed) {
++    if (run.sandboxUnavailable) {
+       status = 'RUNTIME_FAILURE';
++      reasons.push(`sandbox_unavailable: ${run.sandboxUnavailable}`);
++    } else if (run.runtimeFailed) {
++      status = 'RUNTIME_FAILURE';
+       reasons.push(`model runtime failed after its bounded retry: ${run.records.at(-1)?.runtimeError ?? 'unknown'}`);
+     } else {
+       status = 'ESCALATED_TO_CLAUDE';
+--- a/src/mastra/observability/scheduler-metrics.test.ts
++++ b/src/mastra/observability/scheduler-metrics.test.ts
+@@ -166,7 +166,8 @@
+     assert.equal(resolveSchedulerDbPath({ HARNESS_SCHED_DB: '/x/y.db' }, '/'), '/x/y.db');
+     assert.equal(resolveSchedulerDbPath({ HARNESS_SCHED_ROOT: '/r' }, '/'), '/r/scheduler/scheduler.db');
+     // from a nested cwd (mastra dev runs inside src/mastra/public) it still finds the project root
+-    assert.match(resolveSchedulerDbPath({}, join(process.cwd(), 'src', 'mastra', 'public')), /harness-engineering\/\.workdir\/scheduler\/scheduler\.db$/);
++    const projectRoot = join(import.meta.dirname, '..', '..', '..'); // independent of the checkout's directory name
++    assert.equal(resolveSchedulerDbPath({}, join(projectRoot, 'src', 'mastra', 'public')), join(projectRoot, '.workdir', 'scheduler', 'scheduler.db'));
+   });
+ });
+ 
+--- a/src/mastra/scheduler/integrate.ts
++++ b/src/mastra/scheduler/integrate.ts
+@@ -2,7 +2,7 @@
+ import { mkdir, writeFile } from 'node:fs/promises';
+ import { dirname, join } from 'node:path';
+ import { validateJsVerification } from '../lead/delegation.ts';
+-import { runControlledCommand } from '../tools/execution-tools.ts';
++import { runSandboxedCommand } from '../sandbox/sandbox.ts';
+ import { redact } from '../workflows/coding-task-trace.ts';
+ import type { BatchRow, SchedulerStore, TaskRow } from './store.ts';
+ import { StoreError } from './store.ts';
+@@ -29,8 +29,9 @@
+ }
+ export type CommandRunner = (command: string[], cwd: string) => Promise<CommandResult>;
+ 
++// Integration verification runs the integrated tasks' code: same OS sandbox as worker verification (fail closed).
+ const defaultRunner: CommandRunner = async (command, cwd) => {
+-  const r = await runControlledCommand(command[0], command.slice(1), { cwd, timeoutMs: 600_000 });
++  const r = await runSandboxedCommand(command[0], command.slice(1), { cwd, root: cwd, timeoutMs: 600_000 });
+   return { exitCode: r.exitCode, output: `${r.stdout}${r.stderr}`, timedOut: r.timedOut };
+ };
+ 
+--- a/src/mastra/tools/execution-tools.ts
++++ b/src/mastra/tools/execution-tools.ts
+@@ -3,6 +3,7 @@
+ import { relative } from 'node:path';
+ import { z } from 'zod';
+ import { getRepositoryRoot, resolveWithinRepository, resolveWritablePathWithinRepository } from './repository-tools.ts';
++import { runSandboxedCommand } from '../sandbox/sandbox.ts';
+ 
+ /**
+  * Controlled command execution for the coding worker's verify/repair loop
+@@ -12,6 +13,10 @@
+  * that data can never reach a shell for interpretation. There is
+  * deliberately no generic exec/shell/spawn tool: the worker's only
+  * execution capabilities are the ones exported below.
++ *
++ * Everything that executes repository code (go test, jest, and the formatters, which load repo config) runs inside the
++ * OS sandbox (../sandbox/sandbox.ts): writes limited to the repository, no network, no harness secrets. If isolation
++ * is unavailable these tools refuse to run. git here is the harness's own binary on the harness's own terms.
+  */
+ 
+ const MAX_OUTPUT_BYTES = 4_000;
+@@ -65,7 +70,7 @@
+ export function runControlledCommand(
+   command: string,
+   args: string[],
+-  options: { cwd: string; timeoutMs: number },
++  options: { cwd: string; timeoutMs: number; env?: NodeJS.ProcessEnv },
+ ): Promise<ControlledCommandResult> {
+   const start = Date.now();
+ 
+@@ -76,6 +81,7 @@
+         cwd: options.cwd,
+         stdio: ['ignore', 'pipe', 'pipe'],
+         detached: true,
++        ...(options.env ? { env: options.env } : {}),
+       });
+     } catch (err) {
+       resolve({
+@@ -193,8 +199,9 @@
+     const selector = pkg && pkg.trim() !== '' ? pkg.trim() : './...';
+     validateGoPackage(selector);
+ 
+-    return runControlledCommand('go', ['test', selector], {
++    return runSandboxedCommand('go', ['test', selector], {
+       cwd: root,
++      root,
+       timeoutMs: goTestTimeoutMs(),
+     });
+   },
+@@ -216,8 +223,9 @@
+     const root = getRepositoryRoot(requestContext);
+     const target = await resolveWritablePathWithinRepository(root, path);
+ 
+-    const before = await runControlledCommand('gofmt', ['-l', target], {
++    const before = await runSandboxedCommand('gofmt', ['-l', target], {
+       cwd: root,
++      root,
+       timeoutMs: goFmtTimeoutMs(),
+     });
+     if (!before.success) {
+@@ -231,8 +239,9 @@
+       return { success: true, path, changed: false, stderr: '' };
+     }
+ 
+-    const result = await runControlledCommand('gofmt', ['-w', target], {
++    const result = await runSandboxedCommand('gofmt', ['-w', target], {
+       cwd: root,
++      root,
+       timeoutMs: goFmtTimeoutMs(),
+     });
+ 
+@@ -281,7 +290,7 @@
+       args.push(selector);
+     }
+ 
+-    return runControlledCommand('npx', args, { cwd: root, timeoutMs: jestTestTimeoutMs() });
++    return runSandboxedCommand('npx', args, { cwd: root, root, timeoutMs: jestTestTimeoutMs() });
+   },
+ });
+ 
+@@ -302,16 +311,18 @@
+     const root = getRepositoryRoot(requestContext);
+     const target = await resolveWritablePathWithinRepository(root, path);
+ 
+-    const before = await runControlledCommand('npx', ['--no-install', 'prettier', '--check', target], {
++    const before = await runSandboxedCommand('npx', ['--no-install', 'prettier', '--check', target], {
+       cwd: root,
++      root,
+       timeoutMs: prettierTimeoutMs(),
+     });
+     if (before.success) {
+       return { success: true, path, changed: false, stderr: '' };
+     }
+ 
+-    const result = await runControlledCommand('npx', ['--no-install', 'prettier', '--write', target], {
++    const result = await runSandboxedCommand('npx', ['--no-install', 'prettier', '--write', target], {
+       cwd: root,
++      root,
+       timeoutMs: prettierTimeoutMs(),
+     });
+     // A genuine parse error (not just "unformatted") surfaces here as a
+--- a/src/mastra/tools/repository-tools-protected-paths.test.ts
++++ b/src/mastra/tools/repository-tools-protected-paths.test.ts
+@@ -119,7 +119,7 @@
+     fixture = await createFixtureRepo();
+     // A fake `npx` first on PATH records its argv, so the test needs no network and no real jest.
+     const bin = join(fixture.parent, 'bin');
+-    argvLog = join(fixture.parent, 'argv.log');
++    argvLog = join(fixture.root, 'argv.log'); // inside the root: the sandboxed npx may not write anywhere else
+     await mkdir(bin);
+     await writeFileOnDisk(join(bin, 'npx'), `#!/bin/sh\nprintf '%s\\n' "$@" > '${argvLog}'\n`, { mode: 0o755 });
+     process.env.PATH = `${bin}:${process.env.PATH}`;
+--- a/src/mastra/workflows/coding-task-runner.ts
++++ b/src/mastra/workflows/coding-task-runner.ts
+@@ -7,7 +7,7 @@
+ import { RequestContext } from '@mastra/core/request-context';
+ import { z } from 'zod';
+ import { REPOSITORY_ROOT_CONTEXT_KEY } from '../tools/repository-tools.ts';
+-import { runControlledCommand } from '../tools/execution-tools.ts';
++import { runSandboxedCommand, sandboxStatus } from '../sandbox/sandbox.ts';
+ import { createRepairLoopTracker } from './repair-loop-tracker.ts';
+ import { harnessMetrics, type HarnessMetrics } from '../observability/metrics.ts';
+ import { createTraceSink, type TraceEvent, type TraceSink } from './coding-task-trace.ts';
+@@ -91,6 +91,8 @@
+ 
+ export interface CodingTaskResult {
+   verdict: 'PASS' | 'FAIL';
++  /** Set when the task was refused before the worker ran because model-generated code cannot be isolated. */
++  sandboxUnavailable?: string;
+   failureCategory?: FailureCategory;
+   /** Coding attempts consumed (runtime-failed invocations excluded). */
+   attempts: number;
+@@ -274,6 +276,33 @@
+     if (await exists(join(repoRoot, hidden))) throw new Error(`hidden verification file "${hidden}" already exists in the repository`);
+   }
+ 
++  // Fail closed: the worker's tools and the verifier execute model-written code; without OS isolation nothing runs,
++  // not even the model (whatever it wrote could never be verified).
++  const sandbox = await sandboxStatus();
++  if (!sandbox.available) {
++    const reason = sandbox.reason ?? 'unknown';
++    trace.emit('task_failed', { attempts: 0, category: 'F_model_runtime', reason: `sandbox unavailable: ${reason}` });
++    return {
++      verdict: 'FAIL',
++      sandboxUnavailable: reason,
++      failureCategory: 'F_model_runtime',
++      attempts: 0,
++      modelCalls: 0,
++      runtimeRetries: 0,
++      runtimeFailed: true,
++      implementationChanged: false,
++      forbiddenFilesChanged: [],
++      changedFiles: [],
++      editFailures: 0,
++      verifier: null,
++      verifiedStateHash: null,
++      durationMs: Date.now() - taskStart,
++      finalDiff: '',
++      records: [],
++      events: trace.events,
++    };
++  }
++
+   const original = await snapshotRepo(repoRoot);
+   const originalContents = new Map<string, string>();
+   for (const f of task.allowedFiles) originalContents.set(f, await readFile(join(repoRoot, f), 'utf8').catch(() => ''));
+@@ -430,7 +459,7 @@
+         if (!(await exists(join(repoRoot, f)))) continue;
+         const command = ['gofmt', '-w', f];
+         trace.emit('verification_started', { command, phase: 'format' });
+-        const r = await runControlledCommand(command[0], command.slice(1), { cwd: repoRoot, timeoutMs: 10_000 });
++        const r = await runSandboxedCommand(command[0], command.slice(1), { cwd: repoRoot, root: repoRoot, timeoutMs: 10_000 });
+         trace.emit('verification_finished', { command, phase: 'format', exitCode: r.exitCode, timedOut: r.timedOut, output: tail(r.stderr || r.stdout, 500) });
+         if (!r.success) {
+           formatterOk = false;
+@@ -462,7 +491,7 @@
+           for (const command of task.verificationCommands) {
+             trace.emit('verification_started', { command, phase: 'verify' });
+             const started = Date.now();
+-            const r = await runControlledCommand(command[0], command.slice(1), { cwd: repoRoot, timeoutMs: 120_000 });
++            const r = await runSandboxedCommand(command[0], command.slice(1), { cwd: repoRoot, root: repoRoot, timeoutMs: 120_000 });
+             metrics.verification((Date.now() - started) / 1000, r.success ? 'pass' : r.timedOut ? 'timeout' : 'fail');
+             const output = tail(`${r.stdout}${r.stderr}`.trim(), MAX_FAILURE_CHARS);
+             record.verification = { command, exitCode: r.exitCode, timedOut: r.timedOut, output };
+--- /dev/null
++++ b/src/mastra/sandbox/sandbox.ts
+@@ -0,0 +1,196 @@
++import { existsSync, realpathSync } from 'node:fs';
++import { access, constants, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
++import { homedir, tmpdir } from 'node:os';
++import { delimiter, isAbsolute, join } from 'node:path';
++import { runControlledCommand, type ControlledCommandResult } from '../tools/execution-tools.ts';
++
++/**
++ * OS-level isolation for every command that executes model-generated code: the harness verifier, the worker's own
++ * test/format tools, and integration verification. The model's code runs with the user's privileges otherwise, so the
++ * repository-relative checks elsewhere (mutation snapshot, change gate) only see what it did AFTER it ran.
++ *
++ * Inside the sandbox a command can:
++ *   - write only inside its task root and a private temp dir created for this one command (fresh build/test caches,
++ *     so one run cannot poison another's) - never the root's `.git` or `node_modules`;
++ *   - not use the network at all, loopback included (the Mastra API and Ollama listen on loopback);
++ *   - not read credential stores or `.env` files outside its root;
++ *   - not signal or inspect processes outside its own sandbox (on macOS `ps` exposes other processes' environment);
++ *   - see only an allow-listed environment (the harness's own secrets are never passed down).
++ *
++ * Fail closed: if the platform has no supported sandbox, or the self-test cannot prove that a write outside the root is
++ * blocked, nothing is executed and the command reports `sandboxUnavailable`. There is deliberately no opt-out.
++ * Supported: macOS `sandbox-exec`. Anything else is reported unavailable.
++ */
++
++export interface SandboxStatus {
++  available: boolean;
++  mechanism: 'sandbox-exec' | null;
++  reason?: string;
++}
++
++export interface SandboxedCommandResult extends ControlledCommandResult {
++  /** True when the command was refused because isolation is unavailable (it never ran). */
++  sandboxUnavailable?: boolean;
++}
++
++const PROFILE = `(version 1)
++(allow default)
++(deny network*)
++(deny file-write*)
++(allow file-write*
++  (subpath (param "ROOT"))
++  (subpath (param "TMP"))
++  (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty") (literal "/dev/dtracehelper")
++  (regex #"^/dev/fd/[0-9]+$"))
++(deny file-write*
++  (subpath (string-append (param "ROOT") "/.git"))
++  (subpath (string-append (param "ROOT") "/node_modules")))
++(deny file-read*
++  (subpath (string-append (param "HOME") "/.ssh"))
++  (subpath (string-append (param "HOME") "/.aws"))
++  (subpath (string-append (param "HOME") "/.gnupg"))
++  (subpath (string-append (param "HOME") "/.docker"))
++  (subpath (string-append (param "HOME") "/.kube"))
++  (subpath (string-append (param "HOME") "/.claude"))
++  (subpath (string-append (param "HOME") "/.config/gh"))
++  (subpath (string-append (param "HOME") "/Library/Keychains"))
++  (literal (string-append (param "HOME") "/.claude.json"))
++  (literal (string-append (param "HOME") "/.netrc"))
++  (literal (string-append (param "HOME") "/.npmrc"))
++  (literal (string-append (param "HOME") "/.git-credentials"))
++  (require-all (regex #"/\\.env(\\.[^/]*)?$") (require-not (subpath (param "ROOT")))))
++(deny signal)
++(allow signal (target same-sandbox))
++(deny process-info*)
++(allow process-info* (target same-sandbox))
++`;
++
++/** Environment passed through to sandboxed commands; everything else (tokens, API keys, NODE_OPTIONS...) is dropped. */
++const PASS_THROUGH_ENV = ['PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'GOPATH', 'GOROOT', 'GOMODCACHE'];
++
++function sandboxExecutable(): string {
++  // Override only for tests that simulate a missing/broken sandbox. A replacement that does not actually isolate
++  // cannot pass the self-test below, so this cannot be used to turn isolation off.
++  return process.env.HARNESS_SANDBOX_EXEC ?? '/usr/bin/sandbox-exec';
++}
++
++let statusPromise: Promise<SandboxStatus> | undefined;
++
++/** Cached per process: whether model-generated code may be executed at all. */
++export function sandboxStatus(): Promise<SandboxStatus> {
++  statusPromise ??= probe();
++  return statusPromise;
++}
++
++/** Tests only: forget the cached probe result (e.g. after changing HARNESS_SANDBOX_EXEC). */
++export function resetSandboxStatusForTests(): void {
++  statusPromise = undefined;
++}
++
++async function probe(): Promise<SandboxStatus> {
++  if (process.platform !== 'darwin') {
++    return { available: false, mechanism: null, reason: `no supported OS sandbox on ${process.platform} (only macOS sandbox-exec is supported)` };
++  }
++  const exe = sandboxExecutable();
++  try {
++    await access(exe, constants.X_OK);
++  } catch {
++    return { available: false, mechanism: null, reason: `${exe} is not available` };
++  }
++  // Functional self-test: the profile must compile, a write inside the root must work and a write outside must not.
++  const dir = await realpath(await mkdtemp(join(tmpdir(), 'harness-sandbox-probe-')));
++  try {
++    const root = join(dir, 'root');
++    const outside = join(dir, 'outside');
++    await mkdir(root);
++    await mkdir(outside);
++    const r = await runControlledCommand(exe, [...defines(root, root), '-p', PROFILE, '/bin/sh', '-c', 'echo in > "$1/in"; echo leak > "$2/out"', 'probe', root, outside], { cwd: root, timeoutMs: 10_000 });
++    if (!existsSync(join(root, 'in'))) return { available: false, mechanism: null, reason: `sandbox self-test could not run a command: ${(r.stderr || r.stdout).trim().slice(0, 200)}` };
++    if (existsSync(join(outside, 'out'))) return { available: false, mechanism: null, reason: 'sandbox self-test failed: a write outside the root was not blocked' };
++    return { available: true, mechanism: 'sandbox-exec' };
++  } catch (err) {
++    return { available: false, mechanism: null, reason: `sandbox self-test failed: ${(err as Error).message}` };
++  } finally {
++    await rm(dir, { recursive: true, force: true });
++  }
++}
++
++function defines(root: string, tmp: string): string[] {
++  return ['-D', `ROOT=${root}`, '-D', `TMP=${tmp}`, '-D', `HOME=${homeDir}`];
++}
++
++const homeDir = (() => {
++  try {
++    return realpathSync(homedir());
++  } catch {
++    return homedir();
++  }
++})();
++
++/** Absolute path of `command` on PATH (or the command itself if it is already a path), or undefined if not found. */
++function resolveExecutable(command: string, path: string | undefined): string | undefined {
++  if (command.includes('/')) return isAbsolute(command) && existsSync(command) ? command : undefined;
++  for (const dir of (path ?? '').split(delimiter)) {
++    if (!dir) continue;
++    const candidate = join(dir, command);
++    if (existsSync(candidate)) return candidate;
++  }
++  return undefined;
++}
++
++function refused(command: string, reason: string, start: number): SandboxedCommandResult {
++  return {
++    success: false,
++    exitCode: null,
++    stdout: '',
++    stderr: `Refused to run "${command}": OS sandbox unavailable (${reason}). Model-generated code is never executed without isolation.`,
++    durationMs: Date.now() - start,
++    timedOut: false,
++    sandboxUnavailable: true,
++  };
++}
++
++/**
++ * Runs `command args` (argv, never a shell string) in `cwd` under the sandbox, with write access limited to `root`
++ * (which must exist) and a private temp dir that is deleted afterwards. Same result shape and timeout/kill semantics
++ * as runControlledCommand. A command that is not on PATH reports a start failure (exitCode null) without spawning.
++ */
++export async function runSandboxedCommand(
++  command: string,
++  args: string[],
++  options: { cwd: string; root: string; timeoutMs: number },
++): Promise<SandboxedCommandResult> {
++  const start = Date.now();
++  const status = await sandboxStatus();
++  if (!status.available) return refused(command, status.reason ?? 'unknown', start);
++
++  const executable = resolveExecutable(command, process.env.PATH);
++  if (!executable) {
++    return { success: false, exitCode: null, stdout: '', stderr: `Failed to start "${command}": not found on PATH`, durationMs: Date.now() - start, timedOut: false };
++  }
++
++  const root = await realpath(options.root);
++  const tmp = await realpath(await mkdtemp(join(tmpdir(), 'harness-sbx-')));
++  try {
++    await writeFile(join(tmp, 'npmrc'), '');
++    const env: NodeJS.ProcessEnv = {};
++    for (const key of PASS_THROUGH_ENV) if (process.env[key] !== undefined) env[key] = process.env[key];
++    Object.assign(env, {
++      TMPDIR: tmp,
++      GOTMPDIR: tmp,
++      GOCACHE: join(tmp, 'go-build'),
++      GOTOOLCHAIN: 'local',
++      GOPROXY: 'off',
++      CGO_ENABLED: '0',
++      npm_config_cache: join(tmp, 'npm'),
++      npm_config_userconfig: join(tmp, 'npmrc'),
++      npm_config_update_notifier: 'false',
++      npm_config_fund: 'false',
++      npm_config_audit: 'false',
++      CI: '1',
++    });
++    return await runControlledCommand(sandboxExecutable(), [...defines(root, tmp), '-p', PROFILE, executable, ...args], { cwd: options.cwd, timeoutMs: options.timeoutMs, env });
++  } finally {
++    await rm(tmp, { recursive: true, force: true });
++  }
++}
+--- /dev/null
++++ b/src/mastra/sandbox/sandbox.test.ts
+@@ -0,0 +1,205 @@
++import { after, afterEach, before, describe, it } from 'node:test';
++import assert from 'node:assert/strict';
++import { existsSync, readdirSync, realpathSync } from 'node:fs';
++import { chmod, cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
++import { createServer, type Server } from 'node:net';
++import { homedir, tmpdir } from 'node:os';
++import { join } from 'node:path';
++import { resetSandboxStatusForTests, runSandboxedCommand, sandboxStatus } from './sandbox.ts';
++
++/**
++ * The OS sandbox around model-generated code. Every property is checked by actually attempting the forbidden action
++ * from inside the sandbox (no mocks), plus the fail-closed paths: a missing sandbox binary and a "sandbox" that does
++ * not isolate must both result in the command never running.
++ */
++
++const darwin = process.platform === 'darwin';
++const sh = (root: string, script: string, timeoutMs = 20_000) => runSandboxedCommand('/bin/sh', ['-c', script], { cwd: root, root, timeoutMs });
++
++describe('sandbox: availability', () => {
++  it(darwin ? 'is available on macOS (functional self-test passed)' : 'is reported unavailable on platforms without a supported sandbox', async () => {
++    const status = await sandboxStatus();
++    assert.equal(status.available, darwin, JSON.stringify(status));
++  });
++});
++
++describe('sandbox: isolation properties', { skip: !darwin && 'macOS only' }, () => {
++  let base: string;
++  let root: string;
++  let outside: string;
++  before(async () => {
++    base = realpathSync(await mkdtemp(join(tmpdir(), 'sbx-test-')));
++    root = join(base, 'root');
++    outside = join(base, 'outside');
++    await mkdir(join(root, 'src'), { recursive: true });
++    await mkdir(join(root, '.git'));
++    await writeFile(join(root, '.git', 'config'), '[core]\n');
++    await mkdir(join(root, 'node_modules', 'jest'), { recursive: true });
++    await mkdir(outside);
++    await symlink(outside, join(root, 'escape'));
++  });
++  after(() => rm(base, { recursive: true, force: true }));
++
++  it('writes inside the root succeed', async () => {
++    const r = await sh(root, 'echo ok > src/a.js && echo ok > .gitignore');
++    assert.equal(r.exitCode, 0, r.stderr);
++    assert.equal(await readFile(join(root, 'src', 'a.js'), 'utf8'), 'ok\n');
++  });
++
++  it('writes outside the root are denied, including through a symlink inside the root', async () => {
++    const r1 = await sh(root, `echo leak > '${outside}/direct.txt'`);
++    const r2 = await sh(root, 'echo leak > escape/via-link.txt');
++    assert.notEqual(r1.exitCode, 0);
++    assert.notEqual(r2.exitCode, 0);
++    assert.deepEqual(readdirSync(outside), []);
++  });
++
++  it('the root .git and node_modules are not writable even though they are inside the root', async () => {
++    const r1 = await sh(root, 'echo pwned >> .git/config');
++    const r2 = await sh(root, 'echo pwned > node_modules/jest/index.js');
++    assert.notEqual(r1.exitCode, 0);
++    assert.notEqual(r2.exitCode, 0);
++    assert.equal(await readFile(join(root, '.git', 'config'), 'utf8'), '[core]\n');
++    assert.equal(existsSync(join(root, 'node_modules', 'jest', 'index.js')), false);
++  });
++
++  it('gets a private, writable TMPDIR that is removed afterwards', async () => {
++    const r = await sh(root, 'echo x > "$TMPDIR/t" && echo "$TMPDIR"');
++    assert.equal(r.exitCode, 0, r.stderr);
++    const dir = r.stdout.trim();
++    assert.match(dir, /harness-sbx-/);
++    assert.equal(existsSync(dir), false, 'temp dir cleaned up');
++  });
++
++  it('has no network, loopback included (a local service is reachable on loopback)', async () => {
++    const server: Server = createServer((s) => s.end('hello'));
++    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
++    const port = (server.address() as { port: number }).port;
++    try {
++      const r = await runSandboxedCommand('node', ['-e', `require('net').connect(${port},'127.0.0.1').on('connect',()=>{console.log('CONNECTED');process.exit(0)}).on('error',e=>{console.log(e.code);process.exit(3)})`], { cwd: root, root, timeoutMs: 20_000 });
++      assert.doesNotMatch(r.stdout, /CONNECTED/);
++      assert.equal(r.exitCode, 3, r.stdout + r.stderr);
++    } finally {
++      server.close();
++    }
++  });
++
++  it('cannot read credential stores of the user, nor .env files outside its root', async () => {
++    const claudeDir = join(homedir(), '.claude');
++    if (existsSync(claudeDir)) {
++      const r = await sh(root, `ls '${claudeDir}' > /dev/null`);
++      assert.notEqual(r.exitCode, 0, `listing ${claudeDir} must be denied`);
++    }
++    await writeFile(join(outside, '.env'), 'API_KEY=outside-secret\n');
++    await writeFile(join(root, '.env'), 'LOCAL=ok\n');
++    const outsideRead = await sh(root, `cat '${outside}/.env'`);
++    const insideRead = await sh(root, 'cat .env');
++    assert.doesNotMatch(outsideRead.stdout, /outside-secret/);
++    assert.notEqual(outsideRead.exitCode, 0);
++    assert.equal(insideRead.stdout, 'LOCAL=ok\n', 'the repository under test may read its own .env');
++  });
++
++  it('does not inherit the harness environment (secrets are not passed down)', async () => {
++    process.env.HARNESS_TEST_SECRET_TOKEN = 'super-secret-value-123';
++    process.env.NODE_OPTIONS = '--require /nonexistent-hook.js';
++    try {
++      const r = await sh(root, 'env');
++      assert.equal(r.exitCode, 0, r.stderr);
++      assert.doesNotMatch(r.stdout, /super-secret-value-123|HARNESS_TEST_SECRET_TOKEN|NODE_OPTIONS/);
++      assert.match(r.stdout, /^PATH=/m);
++    } finally {
++      delete process.env.HARNESS_TEST_SECRET_TOKEN;
++      delete process.env.NODE_OPTIONS;
++    }
++  });
++
++  it('cannot signal or inspect processes outside the sandbox, but manages its own children', async () => {
++    const r = await sh(root, `kill -0 ${process.pid} && echo SIGNALLED; ps -o command= -p ${process.pid} | grep -q node && echo INSPECTED; sleep 30 & C=$!; kill $C && echo OWN_CHILD_OK`);
++    assert.doesNotMatch(r.stdout, /SIGNALLED/);
++    assert.doesNotMatch(r.stdout, /INSPECTED/);
++    assert.match(r.stdout, /OWN_CHILD_OK/);
++  });
++
++  it('enforces the timeout by killing the whole process group', async () => {
++    const r = await sh(root, 'sleep 30', 300);
++    assert.equal(r.timedOut, true);
++    assert.equal(r.exitCode, null);
++  });
++
++  it('a command that is not installed is a start failure (exitCode null), not a sandbox error', async () => {
++    const r = await runSandboxedCommand('definitely-not-a-real-binary-xyz', [], { cwd: root, root, timeoutMs: 5_000 });
++    assert.equal(r.exitCode, null);
++    assert.equal(r.sandboxUnavailable, undefined);
++    assert.match(r.stderr, /not found/);
++  });
++});
++
++describe('sandbox: real toolchains work inside it', { skip: !darwin && 'macOS only' }, () => {
++  let mod: string;
++  before(async () => {
++    mod = realpathSync(await mkdtemp(join(tmpdir(), 'sbx-go-')));
++    const ladder = join(import.meta.dirname, '..', '..', 'bench', 'go-ladder', 'L4');
++    await cp(join(ladder, 'stub'), mod, { recursive: true });
++    await cp(join(ladder, 'reference', 'internal', 'cart', 'cart.go'), join(mod, 'internal', 'cart', 'cart.go'));
++  });
++  after(() => rm(mod, { recursive: true, force: true }));
++
++  it('go test passes in a fresh private build cache, with no network', async () => {
++    const r = await runSandboxedCommand('go', ['test', '-count=1', './...'], { cwd: mod, root: mod, timeoutMs: 120_000 });
++    assert.equal(r.exitCode, 0, r.stdout + r.stderr);
++    assert.match(r.stdout, /^ok\s/m);
++  });
++
++  it('gofmt can rewrite a file inside the root', async () => {
++    const file = join(mod, 'internal', 'cart', 'cart.go');
++    const before = await readFile(file, 'utf8');
++    await writeFile(file, before.replace(/\t/g, '    '));
++    const r = await runSandboxedCommand('gofmt', ['-w', 'internal/cart/cart.go'], { cwd: mod, root: mod, timeoutMs: 20_000 });
++    assert.equal(r.exitCode, 0, r.stderr);
++    assert.equal(await readFile(file, 'utf8'), before);
++  });
++
++  it('node runs and child processes with IPC work (test-runner worker pools)', async () => {
++    await writeFile(join(mod, 'child.js'), "process.on('message', (m) => { process.send(m * 2); process.exit(0); });\n");
++    const r = await runSandboxedCommand('node', ['-e', "const c=require('child_process').fork('./child.js');c.on('message',m=>console.log('IPC',m));c.send(21)"], { cwd: mod, root: mod, timeoutMs: 20_000 });
++    assert.equal(r.exitCode, 0, r.stderr);
++    assert.match(r.stdout, /IPC 42/);
++  });
++});
++
++describe('sandbox: fail closed', { skip: !darwin && 'macOS only' }, () => {
++  let base: string;
++  before(async () => {
++    base = realpathSync(await mkdtemp(join(tmpdir(), 'sbx-failclosed-')));
++  });
++  afterEach(() => {
++    delete process.env.HARNESS_SANDBOX_EXEC;
++    resetSandboxStatusForTests();
++  });
++  after(() => rm(base, { recursive: true, force: true }));
++
++  it('a missing sandbox binary means nothing runs', async () => {
++    process.env.HARNESS_SANDBOX_EXEC = join(base, 'does-not-exist');
++    resetSandboxStatusForTests();
++    const r = await sh(base, 'echo ran > ran.txt');
++    assert.equal(r.sandboxUnavailable, true);
++    assert.equal(r.success, false);
++    assert.match(r.stderr, /OS sandbox unavailable/);
++    assert.equal(existsSync(join(base, 'ran.txt')), false, 'the command never executed');
++  });
++
++  it('a "sandbox" that does not actually isolate fails the self-test, so nothing runs', async () => {
++    // Accepts sandbox-exec's arguments and runs the command WITHOUT any profile.
++    const fake = join(base, 'fake-sandbox-exec');
++    await writeFile(fake, '#!/bin/sh\nwhile [ "$1" = "-D" ]; do shift 2; done\n[ "$1" = "-p" ] && shift 2\nexec "$@"\n');
++    await chmod(fake, 0o755);
++    process.env.HARNESS_SANDBOX_EXEC = fake;
++    resetSandboxStatusForTests();
++    const status = await sandboxStatus();
++    assert.equal(status.available, false);
++    assert.match(status.reason ?? '', /not blocked/);
++    const r = await sh(base, 'echo ran > ran2.txt');
++    assert.equal(r.sandboxUnavailable, true);
++    assert.equal(existsSync(join(base, 'ran2.txt')), false);
++  });
++});
+--- /dev/null
++++ b/src/mastra/sandbox/sandbox-integration.test.ts
+@@ -0,0 +1,95 @@
++import { after, afterEach, before, describe, it } from 'node:test';
++import assert from 'node:assert/strict';
++import { execFileSync } from 'node:child_process';
++import { existsSync, realpathSync } from 'node:fs';
++import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
++import { tmpdir } from 'node:os';
++import { join } from 'node:path';
++import { runCodingTask, type CodingTask, type WorkerLike } from '../workflows/coding-task-runner.ts';
++import { delegateCodingTask, routeTask, type DelegationRequest } from '../lead/delegation.ts';
++import { runGoTest } from '../tools/execution-tools.ts';
++import { contextFor } from '../tools/__testing__/context-for.ts';
++import { resetSandboxStatusForTests } from './sandbox.ts';
++
++/** The sandbox is on every path that executes model-written code, and the whole pipeline fails closed without it. */
++
++const darwin = process.platform === 'darwin';
++const git = (cwd: string, ...a: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, encoding: 'utf8' });
++
++describe('sandbox integration', { skip: !darwin && 'macOS only' }, () => {
++  let base: string;
++  let root: string;
++  before(async () => {
++    base = realpathSync(await mkdtemp(join(tmpdir(), 'sbx-int-')));
++    root = join(base, 'repo');
++    await mkdir(join(root, 'calc'), { recursive: true });
++    await writeFile(join(root, 'go.mod'), 'module example.com/calc\n\ngo 1.22\n');
++    await writeFile(join(root, 'calc', 'calc.go'), 'package calc\n\nfunc Double(n int) int {\n\treturn 0\n}\n');
++    await writeFile(join(root, 'calc', 'calc_test.go'), 'package calc\n\nimport "testing"\n\nfunc TestDouble(t *testing.T) {\n\tif Double(3) != 6 {\n\t\tt.Fatal("bad")\n\t}\n}\n');
++    git(root, 'init', '-q');
++    git(root, 'add', '-A');
++    git(root, 'commit', '-q', '-m', 'init');
++  });
++  afterEach(() => {
++    delete process.env.HARNESS_SANDBOX_EXEC;
++    resetSandboxStatusForTests();
++  });
++  after(() => rm(base, { recursive: true, force: true }));
++
++  const writeRight: WorkerLike = {
++    async generate() {
++      await writeFile(join(root, 'calc', 'calc.go'), 'package calc\n\nfunc Double(n int) int {\n\treturn n * 2\n}\n');
++      return { text: 'done', finishReason: 'stop', steps: [{}] };
++    },
++  };
++  const task = (verify: string[][]): CodingTask => ({ taskId: 'SBX', objective: 'x', allowedFiles: ['calc/calc.go'], verificationCommands: verify, constraints: ['tests are immutable'] });
++
++  it('verification runs inside the sandbox: a verifier writing outside the repository fails and writes nothing', async () => {
++    const outside = join(base, 'escaped.txt');
++    const result = await runCodingTask(task([['node', '-e', `require('fs').writeFileSync(${JSON.stringify(outside)}, 'x')`]]), { repoRoot: root, worker: writeRight, maxAttempts: 1 });
++    assert.equal(result.verdict, 'FAIL');
++    assert.equal(existsSync(outside), false);
++    git(root, 'checkout', '--', '.');
++  });
++
++  it('real go test verification still passes inside the sandbox', async () => {
++    const result = await runCodingTask(task([['go', 'test', '-count=1', './...']]), { repoRoot: root, worker: writeRight, maxAttempts: 1 });
++    assert.equal(result.verdict, 'PASS', JSON.stringify(result.verifier));
++    git(root, 'checkout', '--', '.');
++  });
++
++  it('the worker tool runGoTest runs sandboxed (no harness secrets in its environment)', async () => {
++    await writeFile(join(root, 'calc', 'env_test.go'), 'package calc\n\nimport (\n\t"os"\n\t"testing"\n)\n\nfunc TestEnv(t *testing.T) {\n\tif os.Getenv("HARNESS_TEST_SECRET_TOKEN") != "" {\n\t\tt.Fatal("secret leaked")\n\t}\n}\n');
++    process.env.HARNESS_TEST_SECRET_TOKEN = 'leak-me-123456';
++    try {
++      const r = (await runGoTest.execute!({ package: './calc' }, contextFor(root))) as { exitCode: number | null; stdout: string };
++      assert.match(r.stdout, /secret leaked|FAIL/, 'calc test still fails (Double returns 0), but not because of the secret');
++      assert.doesNotMatch(r.stdout, /secret leaked/);
++    } finally {
++      delete process.env.HARNESS_TEST_SECRET_TOKEN;
++      await rm(join(root, 'calc', 'env_test.go'));
++    }
++  });
++
++  it('fail closed: without isolation the worker is never invoked and delegation reports RUNTIME_FAILURE sandbox_unavailable', async () => {
++    process.env.HARNESS_SANDBOX_EXEC = join(base, 'missing-sandbox-exec');
++    resetSandboxStatusForTests();
++    let calls = 0;
++    const worker: WorkerLike = { async generate() { calls++; return { text: '', finishReason: 'stop', steps: [{}] }; } };
++    const run = await runCodingTask(task([['go', 'test', './...']]), { repoRoot: root, worker });
++    assert.equal(calls, 0);
++    assert.equal(run.verdict, 'FAIL');
++    assert.match(run.sandboxUnavailable ?? '', /not available/);
++
++    const request: DelegationRequest = {
++      contract: { taskId: 'SBX-GATE', objective: 'Implement Double', allowedFiles: ['calc/calc.go'], contextFiles: ['calc/calc_test.go'], acceptanceCriteria: ['passes'], verificationCommands: [['go', 'test', './...']], constraints: ['tests are immutable'] },
++      assessment: { complexity: 'small', risk: 'low', ambiguity: 'none', rationale: 'r' },
++    };
++    const route = await routeTask(request, root);
++    assert.equal(route.route, 'claude');
++    assert.ok(route.route === 'claude' && route.reasons.some((r) => /OS sandbox unavailable/.test(r)));
++    const delegated = await delegateCodingTask(request, { repoRoot: root, worker });
++    assert.equal(delegated.status, 'KEPT_BY_CLAUDE');
++    assert.equal(calls, 0);
++  });
++});

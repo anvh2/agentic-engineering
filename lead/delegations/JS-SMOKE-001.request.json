@@ -1,0 +1,31 @@
+{
+  "contract": {
+    "taskId": "JS-SMOKE-001-clamp",
+    "objective": "Implement clamp(n, min, max) in src/clamp.js. It must return min when n < min, max when n > max, and n otherwise. Keep the CommonJS export `module.exports = { clamp }` and the function signature unchanged.",
+    "allowedFiles": ["src/clamp.js"],
+    "contextFiles": ["tests/clamp.test.js"],
+    "acceptanceCriteria": [
+      "clamp(-5, 0, 10) === 0",
+      "clamp(15, 0, 10) === 10",
+      "clamp(5, 0, 10) === 5",
+      "values equal to min or max are returned unchanged"
+    ],
+    "verificationCommands": [
+      ["npx", "--no-install", "jest", "--runInBand", "tests/clamp.hidden.test.js"]
+    ],
+    "constraints": [
+      "tests are immutable",
+      "CommonJS only, no new dependencies",
+      "do not change the exported name or the function signature"
+    ],
+    "hiddenFiles": {
+      "tests/clamp.hidden.test.js": "const { clamp } = require('../src/clamp');\n\ntest('below the range returns min', () => { expect(clamp(-5, 0, 10)).toBe(0); });\ntest('above the range returns max', () => { expect(clamp(15, 0, 10)).toBe(10); });\ntest('inside the range returns n', () => { expect(clamp(5, 0, 10)).toBe(5); });\ntest('boundaries are unchanged', () => { expect(clamp(0, 0, 10)).toBe(0); expect(clamp(10, 0, 10)).toBe(10); });\n"
+    }
+  },
+  "assessment": {
+    "complexity": "small",
+    "risk": "low",
+    "ambiguity": "none",
+    "rationale": "Isolated fixture: one pure function in one file, fully specified, oracle is a harness-owned hidden test. Validates the JS route end-to-end; touches no real repository."
+  }
+}

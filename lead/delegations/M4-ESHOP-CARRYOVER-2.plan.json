@@ -1,0 +1,69 @@
+{
+  "batchId": "M4-ESHOP-CARRYOVER-2",
+  "repository": "/Users/anvh/go/src/github.com/anvh2/harness-engineering/.workdir/worktrees/M4-ESHOP-CARRYOVER-2",
+  "description": "eShop carry-over ESHOP-001 (camelCase null guard), run in an ISOLATED git worktree of eShop HEAD: the shared main tree is being edited by another session and a resumed zombie run contaminated attempt 1 (auto-rejected by the out-of-scope gate; the worker itself only touched camelCase.js).",
+  "maxDelegated": 2,
+  "integrationCommands": [
+    [
+      "npx",
+      "--no-install",
+      "jest",
+      "--runInBand",
+      "src/library/util/tests/unit/util.camelCase.test.js",
+      "src/library/util/tests/unit/util.get.test.js",
+      "src/library/util/tests/unit/util.merge.test.js"
+    ]
+  ],
+  "tasks": [
+    {
+      "id": "ESHOP-001c-camelcase-null-guard",
+      "title": "camelCase(null) must throw the documented Error",
+      "dependsOn": [],
+      "executor": "qwen",
+      "request": {
+        "contract": {
+          "taskId": "ESHOP-001c-camelcase-null-guard",
+          "objective": "Fix the input guard in camelCase() in src/library/util/camelCase.js. The guard is meant to throw `new Error('The object must be an object')` for any input that is not a non-null object, but its condition `typeof object !== 'object' && object !== null` is wrong: for null, typeof is 'object' so the guard does not fire and the function dies later with a raw TypeError from Object.keys(null). Change only that condition so null also throws the documented Error('The object must be an object'). Strings, numbers and undefined must still throw that same Error; plain objects (and arrays, as today) must convert exactly as before. The file must keep its existing final newline and nothing else in it may change (the previous attempt dropped the trailing newline).",
+          "allowedFiles": [
+            "src/library/util/camelCase.js"
+          ],
+          "contextFiles": [
+            "src/library/util/tests/unit/util.get.test.js"
+          ],
+          "acceptanceCriteria": [
+            "camelCase(null) throws an Error with message 'The object must be an object' (not a TypeError from Object.keys)",
+            "camelCase('x'), camelCase(5) and camelCase(undefined) still throw Error('The object must be an object')",
+            "camelCase({ snake_case: 1, 'kebab-case': 2 }) still returns { snakeCase: 1, kebabCase: 2 } and does not mutate its input",
+            "camelCase({}) still returns {}"
+          ],
+          "verificationCommands": [
+            [
+              "npx",
+              "--no-install",
+              "jest",
+              "--runInBand",
+              "src/library/util/tests/unit/util.camelCase.hidden.test.js"
+            ]
+          ],
+          "constraints": [
+            "tests are immutable",
+            "change only the guard condition at the top of camelCase; do not touch the key conversion",
+            "CommonJS only (module.exports.camelCase stays), no new dependencies or imports",
+            "do not change the error message text",
+            "the file must end with a single final newline exactly as it does now; make no whitespace-only or unrelated edits"
+          ],
+          "hiddenFiles": {
+            "src/library/util/tests/unit/util.camelCase.hidden.test.js": "const { camelCase } = require('../../camelCase');\n\ndescribe('camelCase input guard', () => {\n  it('throws the documented Error for null', () => {\n    let caught;\n    try {\n      camelCase(null);\n    } catch (e) {\n      caught = e;\n    }\n    expect(caught).toBeDefined();\n    expect(caught).not.toBeInstanceOf(TypeError);\n    expect(caught.message).toBe('The object must be an object');\n  });\n\n  it.each([['x'], [5], [undefined], [true]])('still throws the documented Error for %p', (value) => {\n    expect(() => camelCase(value)).toThrow('The object must be an object');\n  });\n});\n\ndescribe('camelCase conversion is unchanged', () => {\n  it('converts snake_case and kebab-case keys and keeps values', () => {\n    expect(camelCase({ snake_case: 1, 'kebab-case': 2, plain: 3 })).toEqual({ snakeCase: 1, kebabCase: 2, plain: 3 });\n  });\n\n  it('does not mutate its input and returns a new object', () => {\n    const input = { a_b: 1 };\n    const out = camelCase(input);\n    expect(input).toEqual({ a_b: 1 });\n    expect(out).not.toBe(input);\n  });\n\n  it('returns an empty object for an empty object', () => {\n    expect(camelCase({})).toEqual({});\n  });\n});\n"
+          }
+        },
+        "assessment": {
+          "complexity": "small",
+          "risk": "low",
+          "ambiguity": "none",
+          "rationale": "One boolean condition in one pure helper; behavior fully specified and reproduced (null -> TypeError today); hermetic oracle (no DB/network); no API or caller impact since null already throws today, only the error type changes."
+        }
+      },
+      "expectedOutput": "src/library/util/camelCase.js guard fixed, final newline preserved"
+    }
+  ]
+}

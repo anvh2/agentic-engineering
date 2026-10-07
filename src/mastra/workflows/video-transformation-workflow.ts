@@ -1,5 +1,6 @@
 import { createStep, createWorkflow } from '@mastra/core/workflows';
 import { z } from 'zod';
+import { harnessMetrics } from '../observability/metrics.ts';
 import {
   assembleOutput,
   pipelineRuntime,
@@ -135,6 +136,10 @@ export const videoTransformationWorkflow = createWorkflow({
   id: 'video-transformation-workflow',
   inputSchema: videoInputSchema,
   outputSchema: resultSchema,
+  options: {
+    onStart: ({ workflowId, runId }) => harnessMetrics.workflowStarted(workflowId, runId),
+    onFinish: ({ workflowId, runId, status }) => harnessMetrics.workflowFinished(workflowId, runId, status),
+  },
 })
   .then(validateInputStep)
   .then(prepareVideoStep)

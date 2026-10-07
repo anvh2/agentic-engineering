@@ -1,0 +1,42 @@
+[
+  {
+    "scenario": "kill9",
+    "runId": "9fca603f-da9a-45ac-8924-4f26e5d5b86d",
+    "finalStatus": "success",
+    "resultStatus": "RUNTIME_FAILURE",
+    "resultReason": "run_restarted: the worker step of run 9fca603f-da9a-45ac-8924-4f26e5d5b86d already executed once (the server restarted m",
+    "workerStepExecutions": 1,
+    "modelStartedEvents": 1,
+    "traceEventsAfterInterrupt": [],
+    "repoUnchangedSinceInterrupt": true,
+    "ollamaChatRequestsAfterInterrupt": 0
+  },
+  {
+    "scenario": "reload",
+    "runId": "fc94dde5-0e37-416e-88d5-7318755e06fd",
+    "finalStatus": "success",
+    "resultStatus": "RUNTIME_FAILURE",
+    "resultReason": "run_restarted: the worker step of run fc94dde5-0e37-416e-88d5-7318755e06fd already executed once (the server restarted m",
+    "workerStepExecutions": 1,
+    "modelStartedEvents": 1,
+    "traceEventsAfterInterrupt": [],
+    "repoUnchangedSinceInterrupt": true,
+    "ollamaChatRequestsAfterInterrupt": 0
+  },
+  {
+    "scenario": "cancel",
+    "runId": "ac6501d2-4d92-4125-9deb-2c01446cb7bb",
+    "finalStatus": "canceled",
+    "resultStatus": null,
+    "resultReason": null,
+    "workerStepExecutions": 1,
+    "modelStartedEvents": 1,
+    "traceEventsAfterInterrupt": [
+      "model_finished",
+      "attempt_failed",
+      "task_failed"
+    ],
+    "repoUnchangedSinceInterrupt": true,
+    "ollamaChatRequestsAfterInterrupt": 0
+  }
+]

@@ -1,0 +1,13 @@
+{
+  "taskId": "E2E-cancel",
+  "status": "RUNTIME_FAILURE",
+  "verdict": "FAIL",
+  "failureCategory": "F_model_runtime",
+  "attempts": 0,
+  "runtimeRetries": 0,
+  "durationMs": 5510,
+  "modelCalls": 0,
+  "implementationChanged": false,
+  "verifiedStateHash": null,
+  "editFailures": 0
+}

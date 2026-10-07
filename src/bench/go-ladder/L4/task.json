@@ -1,0 +1,9 @@
+{
+  "taskId": "L4-cart-pricing",
+  "objective": "Update internal/cart/cart.go so that pricing works as follows (Subtotal and the Item type stay unchanged). DiscountCents: SAVE10 is 10% and SAVE20 is 20% of the subtotal, each rounded to the nearest cent with halves rounding up; a new code FLAT5 gives 500 cents off but never more than the subtotal; any other code gives 0; the discount is never negative. TaxCents: round to the nearest cent with halves rounding up, and return 0 when amountCents <= 0. TotalCents: the discount is applied first, tax is computed on the discounted amount, and the total is the discounted amount plus that tax.",
+  "allowedFiles": ["internal/cart/cart.go"],
+  "contextFiles": ["internal/cart/cart_test.go"],
+  "acceptanceCriteria": ["DiscountCents, TaxCents and TotalCents follow the rules above", "Subtotal behaves exactly as before"],
+  "verificationCommands": [["go", "test", "-count=1", "./..."]],
+  "constraints": ["tests are immutable", "standard library only", "keep all exported signatures unchanged"]
+}

@@ -1,0 +1,3 @@
+kill9: git status='' calculator.go==stub:yes
+reload: git status='' calculator.go==stub:yes
+cancel: git status='' calculator.go==stub:yes

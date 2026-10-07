@@ -1,0 +1,75 @@
+## Per-run harness traces ( 83 trace files )
+
+### go-bench: runs=50 finished=50 passed=20 (first-attempt pass 19) unfinished(killed)=0
+  task latency       {"n":50,"p50":"1705.4s","p90":"2117.1s","max":"4093.4s","mean":"1307.7s"}
+  model call         {"n":94,"p50":"600.0s","p90":"1042.9s","max":"1474.3s","mean":"694.4s"} errors 49
+  verification       {"n":45,"p50":"1.0s","p90":"1.4s","max":"3.5s","mean":"1.2s"}
+  attempts/finished  {"n":50,"p50":1,"p90":3,"max":3,"mean":1}  coding retries 18  runtime retries 26  (28% of model calls)
+  time share: model 100% | verification 0.1% | other 0.1%  (of finished-run wall time 65384.8s)
+
+### go-bench-aborted-headers-timeout: runs=13 finished=12 passed=11 (first-attempt pass 11) unfinished(killed)=1
+  task latency       {"n":12,"p50":"103.5s","p90":"226.7s","max":"605.1s","mean":"148.7s"}
+  model call         {"n":14,"p50":"103.9s","p90":"301.5s","max":"301.6s","mean":"148.1s"} errors 3
+  verification       {"n":11,"p50":"0.9s","p90":"1.1s","max":"1.5s","mean":"0.9s"}
+  attempts/finished  {"n":12,"p50":1,"p90":1,"max":1,"mean":1}  coding retries 0  runtime retries 2  (14% of model calls)
+  time share: model 116% | verification 0.6% | other -16.8%  (of finished-run wall time 1783.8s)
+  output tokens/call {"n":11,"p50":1445,"p90":1788,"max":3670,"mean":1612}
+
+### lead-delegations: runs=20 finished=8 passed=7 (first-attempt pass 7) unfinished(killed)=12
+  task latency       {"n":8,"p50":"346.6s","p90":"376.5s","max":"376.5s","mean":"308.3s"}
+  model call         {"n":14,"p50":"333.6s","p90":"375.4s","max":"426.0s","mean":"257.0s"} errors 1
+  verification       {"n":13,"p50":"1.1s","p90":"3.1s","max":"3.7s","mean":"1.5s"}
+  attempts/finished  {"n":8,"p50":1,"p90":3,"max":3,"mean":1}  coding retries 5  runtime retries 1  (7% of model calls)
+  time share: model 146% | verification 0.8% | other -46.7%  (of finished-run wall time 2466.7s)
+
+## Scheduler DB (read-only)
+[
+  [Object: null prototype] {
+    state: 'BACKLOG',
+    n: 5,
+    claims: 0,
+    attempts: 0,
+    coding_ms: 0
+  },
+  [Object: null prototype] {
+    state: 'BLOCKED',
+    n: 3,
+    claims: 2,
+    attempts: 0,
+    coding_ms: 226
+  },
+  [Object: null prototype] {
+    state: 'READY',
+    n: 2,
+    claims: 0,
+    attempts: 0,
+    coding_ms: 0
+  },
+  [Object: null prototype] {
+    state: 'RUNTIME_FAILURE',
+    n: 1,
+    claims: 1,
+    attempts: 0,
+    coding_ms: 1800458
+  }
+]
+reviews []
+failure categories [
+  [Object: null prototype] { c: 'dependency_failed', n: 1 },
+  [Object: null prototype] { c: 'source_tree_dirty', n: 2 },
+  [Object: null prototype] { c: 'task_timeout', n: 1 }
+]
+events 25 from 2026-10-06T15:30:15.906Z to 2026-10-06T16:00:22.726Z
+lease-expiry / steal requeues: 0
+
+## lead-batch events
+M4-ESHOP-2A-1 {"RUNNING":1,"RUNTIME_FAILURE":1} span 740.5s dispatch->outcome {"n":1,"p50":"740.1s","p90":"740.1s","max":"740.1s","mean":"740.1s"}
+M4-ESHOP-CARRYOVER-1 {"RUNNING":1,"REVIEW_REJECTED":1} span 811.8s dispatch->outcome {"n":1,"p50":"811.8s","p90":"811.8s","max":"811.8s","mean":"811.8s"}
+M4-ESHOP-CARRYOVER-2 {"RUNNING":2,"RUNTIME_FAILURE":1,"PENDING":1} span 286.3s dispatch->outcome {"n":1,"p50":"225.6s","p90":"225.6s","max":"225.6s","mean":"225.6s"}
+M4-SMOKE-1 {"RUNNING":4,"WORKER_PASS":4,"ACCEPTED":4,"REVIEW_REJECTED":1,"PENDING":1} span 1426.6s dispatch->outcome {"n":4,"p50":"355.9s","p90":"381.0s","max":"381.0s","mean":"338.4s"}
+go-bench finished 50 model share 99.8% verify share 0.08% 
+  model errors {"no model response (finishReason=tripwire)":46,"terminated":3}
+go-bench-aborted-headers-timeout finished 12 model share 99.3% verify share 0.56% 
+  model errors {"Cannot connect to API: Headers Timeout Error":3}
+lead-delegations finished 8 model share 99.2% verify share 0.53% 
+  model errors {"Cannot connect to API: Headers Timeout Error":1}

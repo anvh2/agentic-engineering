@@ -1,0 +1,76 @@
+ M package-lock.json
+ M package.json
+ D scripts/affiliate-video-generate.ts
+ D scripts/demo-coding-task-workflow.ts
+ D scripts/demo-coding-worker.ts
+ D scripts/demo-supervisor.ts
+ D scripts/demo-write-worker.ts
+ D scripts/eshop-admin-tokens-modernize.ts
+ D scripts/eshop-real-coding-task.ts
+ D scripts/generate-keyframe.ts
+ D scripts/generate-marketing-set.ts
+ D scripts/lib/run-real-coding-task.ts
+ D scripts/step15-real-repo-trial.ts
+ D scripts/step16-real-coding-task.ts
+ D src/mastra/agents/agent.ts
+ M src/mastra/agents/coding-worker.ts
+ D src/mastra/generation/config.ts
+ D src/mastra/generation/fidelity-gate.ts
+ D src/mastra/generation/product-spec.test.ts
+ D src/mastra/generation/product-spec.ts
+ D src/mastra/generation/provider-router.test.ts
+ D src/mastra/generation/provider-router.ts
+ D src/mastra/generation/providers/fal-provider.test.ts
+ D src/mastra/generation/providers/fal-provider.ts
+ D src/mastra/generation/providers/mock-provider.ts
+ D src/mastra/generation/registry.ts
+ D src/mastra/generation/service.test.ts
+ D src/mastra/generation/service.ts
+ D src/mastra/generation/types.ts
+ M src/mastra/index.ts
+ D src/mastra/repository/detect-ecosystem.test.ts
+ D src/mastra/repository/detect-ecosystem.ts
+ D src/mastra/repository/validate-target-repository.test.ts
+ D src/mastra/repository/validate-target-repository.ts
+ D src/mastra/supervisor/claude-cli.ts
+ D src/mastra/supervisor/claude-reviewer.ts
+ D src/mastra/supervisor/claude-supervisor.ts
+ M src/mastra/tools/execution-tools.ts
+ M src/mastra/tools/repository-tools.ts
+ D src/mastra/tools/schedule-tools.ts
+RD src/mastra/workflows/coding-task-workflow-repair.test.ts -> src/mastra/workflows/legacy-coding-task-workflow-repair.test.ts
+RD src/mastra/workflows/coding-task-workflow.test.ts -> src/mastra/workflows/legacy-coding-task-workflow.test.ts
+RD src/mastra/workflows/coding-task-workflow.ts -> src/mastra/workflows/legacy-coding-task-workflow.ts
+ M src/mastra/workflows/video-transformation-workflow.ts
+?? GOALS.md
+?? lead/audits/
+?? lead/delegation.md
+?? lead/delegations/
+?? lead/scheduler.md
+?? scripts/bench-go-ladder.ts
+?? scripts/bench-go-summarize.ts
+?? scripts/lead-sched.ts
+?? src/bench/
+?? src/mastra/agents/streaming-worker.test.ts
+?? src/mastra/agents/streaming-worker.ts
+?? src/mastra/capacity/
+?? src/mastra/lead/
+?? src/mastra/observability/
+?? src/mastra/sandbox/
+?? src/mastra/scheduler/
+?? src/mastra/tools/repository-tools-crash.test.ts
+?? src/mastra/tools/repository-tools-protected-paths.test.ts
+?? src/mastra/tools/repository-tools-write-file.test.ts
+?? src/mastra/workflows/coding-task-artifacts.ts
+?? src/mastra/workflows/coding-task-runner-control.test.ts
+?? src/mastra/workflows/coding-task-runner-eof.test.ts
+?? src/mastra/workflows/coding-task-runner-side-effects.test.ts
+?? src/mastra/workflows/coding-task-runner.test.ts
+?? src/mastra/workflows/coding-task-runner.ts
+?? src/mastra/workflows/coding-task-status.ts
+?? src/mastra/workflows/coding-task-trace.ts
+?? src/mastra/workflows/coding-task-workflow-restart.test.ts
+?? src/mastra/workflows/coding-task-workflow.test.ts
+?? src/mastra/workflows/coding-task-workflow.ts
+?? src/mastra/workflows/eof-newline.test.ts
+?? src/mastra/workflows/eof-newline.ts

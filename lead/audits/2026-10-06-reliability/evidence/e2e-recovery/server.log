@@ -1,0 +1,40 @@
+
+> harness-engineering@1.0.0 dev
+> mastra dev
+
+(node:66444) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+◐ Preparing development environment...
+[33mWARN[39m [2026-10-07 22:04:53.598 +0700] (Mastra CLI): [36mCircular dependency found[39m
+    [35mdependency[39m: "src/mastra/tools/execution-tools.ts -> src/mastra/sandbox/sandbox.ts -> src/mastra/tools/execution-tools.ts"
+✓ Initial bundle complete
+◇ Starting Mastra dev server...
+(node:66524) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+ mastra  1.25.0 ready in 1519 ms
+
+│ Studio: http://localhost:4112
+│ API:    http://localhost:4112/api
+
+◯ watching for file changes...
+
+> harness-engineering@1.0.0 dev
+> mastra dev
+
+(node:78388) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+◐ Preparing development environment...
+[33mWARN[39m [2026-10-07 22:17:52.021 +0700] (Mastra CLI): [36mCircular dependency found[39m
+    [35mdependency[39m: "src/mastra/tools/execution-tools.ts -> src/mastra/sandbox/sandbox.ts -> src/mastra/tools/execution-tools.ts"
+✓ Initial bundle complete
+◇ Starting Mastra dev server...
+(node:78433) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+ mastra  1.25.0 ready in 1919 ms
+
+│ Studio: http://localhost:4112
+│ API:    http://localhost:4112/api
+
+◯ watching for file changes...

@@ -9,6 +9,10 @@
     "build": "mastra build",
     "start": "mastra start",
     "worker:demo": "node --env-file=.env scripts/demo-coding-worker.ts",
+    "bench:go": "node --env-file=.env scripts/bench-go-ladder.ts",
+    "bench:summarize": "node scripts/bench-go-summarize.ts",
+    "lead:delegate": "node --env-file=.env scripts/lead-delegate.ts",
+    "lead:batch": "node --env-file=.env scripts/lead-batch.ts",
     "workflow:demo": "node --env-file=.env scripts/demo-coding-task-workflow.ts",
     "supervisor:demo": "node --env-file=.env scripts/demo-supervisor.ts",
     "write-worker:demo": "node --env-file=.env scripts/demo-write-worker.ts",
@@ -17,9 +21,17 @@
     "video:transform": "node --env-file=.env scripts/video-transform.ts",
     "video:phase2": "node benchmarks/phase2/build.mjs",
     "video:phase3": "node benchmarks/phase3/compose-review.mjs",
-    "test": "node --test 'src/**/*.test.ts'",
+    "test": "node --disable-warning=ExperimentalWarning --test 'src/**/*.test.ts'",
     "test:integration": "node --test 'src/**/*.itest.ts'",
-    "harness": "node src/harness/cli.ts"
+    "harness": "node src/harness/cli.ts",
+    "lead:sched": "node --disable-warning=ExperimentalWarning --env-file=.env scripts/lead-sched.ts",
+    "lead:plan": "node --disable-warning=ExperimentalWarning --env-file=.env scripts/lead-sched.ts plan",
+    "lead:tasks": "node --disable-warning=ExperimentalWarning --env-file=.env scripts/lead-sched.ts tasks",
+    "lead:run": "node --disable-warning=ExperimentalWarning --env-file=.env scripts/lead-sched.ts run",
+    "lead:status": "node --disable-warning=ExperimentalWarning --env-file=.env scripts/lead-sched.ts status",
+    "lead:review": "node --disable-warning=ExperimentalWarning --env-file=.env scripts/lead-sched.ts review",
+    "lead:resume": "node --disable-warning=ExperimentalWarning --env-file=.env scripts/lead-sched.ts resume",
+    "lead:cancel": "node --disable-warning=ExperimentalWarning --env-file=.env scripts/lead-sched.ts cancel"
   },
   "keywords": [],
   "author": "",
@@ -35,6 +47,7 @@
     "@mastra/memory": "1.26.2",
     "@mastra/observability": "1.17.0",
     "diff": "^8.0.4",
+    "prom-client": "^15.1.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {

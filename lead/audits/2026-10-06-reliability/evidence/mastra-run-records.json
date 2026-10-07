@@ -1,0 +1,190 @@
+[
+  {
+    "runId": "3cd3969f-0dbf-4383-afcb-7d992547dd63",
+    "createdAt": "2026-10-06T16:04:00.072Z",
+    "updatedAt": "2026-10-06T16:04:00.121Z",
+    "status": "running",
+    "activePaths": [
+      1
+    ],
+    "steps": {
+      "prepare-coding-task": {
+        "status": "success",
+        "startedAt": 1791302640084,
+        "endedAt": 1791302640119
+      },
+      "run-qwen-worker-harness": {
+        "status": "running",
+        "startedAt": 1791302640120
+      }
+    },
+    "input": {
+      "taskId": "ESHOP-001c-camelcase-null-guard",
+      "repository": "/Users/anvh/go/src/github.com/anvh2/harness-engineering/.workdir/worktrees/M4-ESHOP-CARRYOVER-2",
+      "allowedFiles": [
+        "src/library/util/camelCase.js"
+      ]
+    },
+    "result": null
+  },
+  {
+    "runId": "3fb28fd3-26fd-4596-9ce0-51207608e025",
+    "createdAt": "2026-10-06T16:03:38.961Z",
+    "updatedAt": "2026-10-06T16:20:48.543Z",
+    "status": "success",
+    "activePaths": [
+      2
+    ],
+    "steps": {
+      "prepare-coding-task": {
+        "status": "success",
+        "startedAt": 1791302618973,
+        "endedAt": 1791302619008
+      },
+      "run-qwen-worker-harness": {
+        "status": "success",
+        "startedAt": 1791302619010,
+        "endedAt": 1791303648539
+      },
+      "finalize-result": {
+        "status": "success",
+        "startedAt": 1791303648542,
+        "endedAt": 1791303648543
+      }
+    },
+    "input": {
+      "taskId": "SMOKE-clamp",
+      "repository": "/Users/anvh/go/src/github.com/anvh2/harness-engineering/.workdir/m5-smoke/sched/worktrees/M5-SMOKE/SMOKE-clamp",
+      "allowedFiles": [
+        "src/clamp.js"
+      ]
+    },
+    "result": {
+      "status": "RUNTIME_FAILURE",
+      "reasons": [
+        "model runtime failed after its bounded retry: Cannot connect to API: Headers Timeout Error"
+      ]
+    }
+  },
+  {
+    "runId": "6c69a9be-c21b-46a4-9663-6a0cf08d777b",
+    "createdAt": "2026-10-06T15:36:55.102Z",
+    "updatedAt": "2026-10-06T15:50:22.450Z",
+    "status": "success",
+    "activePaths": [
+      2
+    ],
+    "steps": {
+      "prepare-coding-task": {
+        "status": "success",
+        "startedAt": 1791301015127,
+        "endedAt": 1791301015259
+      },
+      "run-qwen-worker-harness": {
+        "status": "success",
+        "startedAt": 1791301485453,
+        "endedAt": 1791301822447
+      },
+      "finalize-result": {
+        "status": "success",
+        "startedAt": 1791301822449,
+        "endedAt": 1791301822449
+      }
+    },
+    "input": {
+      "taskId": "ESHOP-001b-camelcase-null-guard",
+      "repository": "/Users/anvh/go/src/github.com/anvh2/eshop",
+      "allowedFiles": [
+        "src/library/util/camelCase.js"
+      ]
+    },
+    "result": {
+      "status": "PASS",
+      "reasons": []
+    }
+  },
+  {
+    "runId": "88b6c2da-f3fb-45ac-a40a-67e5e798852d",
+    "createdAt": "2026-10-06T15:30:22.736Z",
+    "updatedAt": "2026-10-06T15:50:22.451Z",
+    "status": "running",
+    "activePaths": [
+      1
+    ],
+    "steps": {
+      "prepare-coding-task": {
+        "status": "success",
+        "startedAt": 1791300622747,
+        "endedAt": 1791300622833
+      },
+      "run-qwen-worker-harness": {
+        "status": "running",
+        "startedAt": 1791301822451
+      }
+    },
+    "input": {
+      "taskId": "ESHOP-2A-image-review-state-machine",
+      "repository": "/Users/anvh/go/src/github.com/anvh2/harness-engineering/.workdir/worktrees/M5-ESHOP-2A/2A-image-review-state-machine",
+      "allowedFiles": [
+        "src/modules/workspace/lib/imageReview.js"
+      ]
+    },
+    "result": null
+  },
+  {
+    "runId": "8ab8109f-04e4-45e6-968c-b6df7eea5084",
+    "createdAt": "2026-10-06T15:23:00.254Z",
+    "updatedAt": "2026-10-06T15:29:34.071Z",
+    "status": "canceled",
+    "activePaths": [
+      1
+    ],
+    "steps": {
+      "prepare-coding-task": {
+        "status": "success",
+        "startedAt": 1791300180267,
+        "endedAt": 1791300180304
+      },
+      "run-qwen-worker-harness": {
+        "status": "running",
+        "startedAt": 1791300574049
+      }
+    },
+    "input": {
+      "taskId": "ESHOP-2A-image-review-state-machine",
+      "repository": "/Users/anvh/go/src/github.com/anvh2/eshop",
+      "allowedFiles": [
+        "src/modules/workspace/lib/imageReview.js"
+      ]
+    },
+    "result": null
+  },
+  {
+    "runId": "c9cea24c-9287-461c-ba65-a640cd023d67",
+    "createdAt": "2026-10-06T15:59:13.790Z",
+    "updatedAt": "2026-10-06T16:03:36.231Z",
+    "status": "canceled",
+    "activePaths": [
+      1
+    ],
+    "steps": {
+      "prepare-coding-task": {
+        "status": "success",
+        "startedAt": 1791302353822,
+        "endedAt": 1791302353881
+      },
+      "run-qwen-worker-harness": {
+        "status": "running",
+        "startedAt": 1791302616215
+      }
+    },
+    "input": {
+      "taskId": "ESHOP-001c-camelcase-null-guard",
+      "repository": "/Users/anvh/go/src/github.com/anvh2/harness-engineering/.workdir/worktrees/M4-ESHOP-CARRYOVER-2",
+      "allowedFiles": [
+        "src/library/util/camelCase.js"
+      ]
+    },
+    "result": null
+  }
+]

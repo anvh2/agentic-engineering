@@ -1,0 +1,16 @@
+[
+  {
+    "attempt": 1,
+    "durationMs": 15132,
+    "modelCalls": 0,
+    "toolCalls": [],
+    "filesMutated": [],
+    "forbiddenFiles": [],
+    "editFailures": 0,
+    "runtimeRetries": 0,
+    "formatter": null,
+    "verification": null,
+    "runtimeError": "no model response (finishReason=tripwire)",
+    "category": "F_model_runtime"
+  }
+]
