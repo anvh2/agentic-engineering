@@ -8,10 +8,11 @@ import { RequestContext } from '@mastra/core/request-context';
 import { z } from 'zod';
 import { REPOSITORY_ROOT_CONTEXT_KEY } from '../../workers/tools/repository-tools.ts';
 import { runSandboxedCommand, sandboxStatus } from '../sandbox/sandbox.ts';
-import { CapacityWaitTimeout, modelWaitBudgetMs, sharedModelCapacity, type CapacityLease, type ModelCapacity } from '../capacity/model-capacity.ts';
+import { CapacityWaitTimeout, capacityFor, modelWaitBudgetMs, type CapacityLease, type ModelCapacity } from '../capacity/model-capacity.ts';
 import { createRepairLoopTracker } from './repair-loop-tracker.ts';
 import { runtimeMetrics, type RuntimeMetrics } from '../../observability/metrics.ts';
 import { createTraceSink, type TraceEvent, type TraceSink } from './coding-task-trace.ts';
+import { normalizeUsage, type ProviderDescriptor, type ProviderRequest, type ProviderTelemetry, type RawUsage } from './worker-provider.ts';
 
 /**
  * Runtime-owned control loop for ONE bounded coding task.
@@ -87,6 +88,8 @@ export interface AttemptRecord {
   /** First chars of the model's final visible text - diagnostic only, never evidence. */
   workerText?: string;
   modelStats?: { inputTokens?: number; outputTokens?: number };
+  /** Provider/model, inference time and usage (unreported values are 'UNKNOWN', never 0). Set once a model call returned. */
+  telemetry?: ProviderTelemetry;
   formatter: { ran: boolean; ok: boolean } | null;
   verification: { command: string[]; exitCode: number | null; timedOut: boolean; output: string } | null;
   category?: FailureCategory;
@@ -127,8 +130,13 @@ export interface WorkerLike {
     text?: string;
     finishReason?: string;
     steps?: unknown[];
-    usage?: { inputTokens?: number; outputTokens?: number };
+    usage?: RawUsage;
   }>;
+  /**
+   * Who runs this worker (see worker-provider.ts). Optional so a bare test double or a legacy worker keeps working; without
+   * it the call is attributed to the local model and queued on its capacity, exactly as before providers existed.
+   */
+  provider?: ProviderDescriptor;
 }
 
 export interface RunCodingTaskOptions {
@@ -318,7 +326,15 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
   const { repoRoot, worker } = options;
   const maxAttempts = options.maxAttempts ?? 3;
   const timeoutMs = options.modelTimeoutMs ?? 300_000;
-  const modelLabel = options.modelLabel ?? 'worker';
+  const descriptor = worker.provider;
+  const modelLabel = options.modelLabel ?? (descriptor ? `${descriptor.identity.id}:${descriptor.identity.model}` : 'worker');
+  const providerRequestBase = {
+    workdir: repoRoot,
+    allowedFiles: task.allowedFiles,
+    contextFiles: task.contextFiles,
+    taskType: task.allowedFiles.every((f) => f.endsWith('.go')) ? ('go' as const) : ('js' as const),
+    timeoutMs,
+  } satisfies ProviderRequest;
   const waitBudgetMs = options.capacityWaitBudgetMs ?? modelWaitBudgetMs();
   const trace = options.trace ?? createTraceSink();
   const metrics = options.metrics ?? runtimeMetrics;
@@ -447,7 +463,7 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
           // the budget is cumulative over the whole task run (every attempt and retry), so a task cannot queue forever one call at a time
           const spent = records.reduce((a, r) => a + r.capacityWaitMs, 0);
           const remaining = Math.max(1, waitBudgetMs - spent);
-          permit = await (options.capacity ?? sharedModelCapacity()).acquire(`${modelLabel}:${task.taskId}:pid${process.pid}`, options.signal, { tag: task.taskId, maxWaitMs: remaining });
+          permit = await (options.capacity ?? capacityFor(descriptor?.capacity)).acquire(`${modelLabel}:${task.taskId}:pid${process.pid}`, options.signal, { tag: task.taskId, maxWaitMs: remaining });
           waitOutcome = 'acquired';
         } catch (err) {
           if (err instanceof CapacityWaitTimeout) {
@@ -461,9 +477,9 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
           metrics.modelCapacityWait(waitedMs / 1000, waitOutcome);
         }
         inferenceStart = Date.now();
-        trace.emit('model_started', { model: modelLabel, attempt: attemptNo, runtimeTry, capacityWaitMs: inferenceStart - waitStart });
+        trace.emit('model_started', { model: modelLabel, ...(descriptor ? { provider: descriptor.identity.id, providerModel: descriptor.identity.model } : {}), attempt: attemptNo, runtimeTry, capacityWaitMs: inferenceStart - waitStart });
         const callSignal = options.signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), options.signal]) : AbortSignal.timeout(timeoutMs);
-        const call = worker.generate(await buildPrompt(repoRoot, task, previousFailure), { requestContext, onIterationComplete, abortSignal: callSignal });
+        const call = worker.generate(await buildPrompt(repoRoot, task, previousFailure), { requestContext, onIterationComplete, abortSignal: callSignal, providerRequest: providerRequestBase });
         const settled = await awaitWithAbortGrace(call, callSignal, options.abortGraceMs ?? DEFAULT_ABORT_GRACE_MS);
         if ('unresponsive' in settled) {
           call.catch(() => {}); // the late rejection must not become an unhandled one
@@ -489,12 +505,19 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
           record.workerText = (response.text ?? '').slice(0, 200);
           record.modelStats = { inputTokens: response.usage?.inputTokens, outputTokens: response.usage?.outputTokens };
           metrics.workerInference(modelLabel, (Date.now() - inferenceStart) / 1000, 'ok');
+          record.telemetry = {
+            provider: descriptor?.identity.id ?? 'unknown',
+            model: descriptor?.identity.model ?? modelLabel,
+            inferenceMs: Date.now() - inferenceStart,
+            usage: normalizeUsage(response.usage, descriptor?.capabilities.billing),
+          };
           trace.emit('model_finished', {
             finishReason: response.finishReason,
-            durationMs: Date.now() - inferenceStart,
+            durationMs: record.telemetry.inferenceMs,
             steps,
             inputTokens: response.usage?.inputTokens,
             outputTokens: response.usage?.outputTokens,
+            telemetry: record.telemetry,
           });
           responded = true;
         }

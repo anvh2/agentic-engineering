@@ -5,7 +5,7 @@ import { findProjectRoot } from '../../../core/paths.ts';
 import { createStep, createWorkflow } from '@mastra/core/workflows';
 import { z } from 'zod';
 import { codingWorkerGo, codingWorkerJs } from '../../../workers/coding-worker.ts';
-import { asStreamingWorker } from '../../../workers/streaming-worker.ts';
+import { createOllamaProvider } from '../../../workers/providers/ollama.ts';
 import { delegationRequestSchema, executeDelegation, languageOf, routeTask, workerAgentIdFor, type EngineeringResult } from '../../../runtime/execution/delegation.ts';
 import type { RunCodingTaskOptions, WorkerLike } from '../../../runtime/execution/coding-task-runner.ts';
 import { phaseOf, type CodingPhase, type PhaseUpdate } from '../../../runtime/execution/coding-task-status.ts';
@@ -218,7 +218,7 @@ export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
       const fallbackAgent = agentId === 'codingWorkerJs' ? codingWorkerJs : codingWorkerGo;
       const worker = deps.resolveWorker
         ? deps.resolveWorker({ mastra, tracingContext })
-        : asStreamingWorker(
+        : createOllamaProvider(
             (mastra?.getAgent(agentId) as typeof fallbackAgent | undefined) ?? fallbackAgent,
             tracingContext ? { tracingContext } : {},
           );

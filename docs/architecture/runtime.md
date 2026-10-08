@@ -88,6 +88,14 @@ Failure behavior: a waiter row is leased too (`waiterLeaseMs`, default 15 s, ren
 
 The scheduler learns that a task is queued from the capacity database (`ModelCapacity.isWaiting(tag)`, tag = the contract's `taskId`, the same tag the runner queues with) and samples it every `min(pollMs, taskTimeoutMs/4)` (<= 1 s): each transition between waiting and working is accounted to within one sample. Without a capacity probe (`Scheduler` built without `capacity`) the legacy single wall-clock `taskTimeoutMs` applies. A Mastra run superseded by a lease change is adopted by the next claim (`reconcile`) rather than duplicated; its own wait is bounded by the same budgets and ends when Mastra cancels the run.
 
+### Worker providers
+
+A coding worker is a `WorkerLike` plus an optional `ProviderDescriptor` (`src/runtime/execution/worker-provider.ts`): identity (provider, model, CLI version), capabilities (task types, how it edits, how the file scope is enforced, how it is cancelled, what usage it reports, billing class) and the capacity resource its calls queue on. It is not a second execution path: the runner still owns attempts, the filesystem mutation policy, formatting and verification, so **a provider proposes and only the runtime verifier can produce PASS**; allowed-file scope is re-judged from the filesystem after every provider call, whatever the provider enforces itself.
+
+- Per call the runner passes `providerRequest` (isolated worktree, allowed/context files, task type, deadline) and records `AttemptRecord.telemetry`: provider, model, inference time and usage. Anything a provider does not report is the literal `UNKNOWN`, never 0 (a local-free provider's cost is a known 0).
+- Capacity is per provider resource (`capacityFor`): the local model queues on `ollama`, each cloud CLI on its own resource in the same machine-wide database, so one never blocks the other, while each resource keeps one limit across processes. `AGENTIC_MODEL_CONCURRENCY` sizes only the local model.
+- `ProviderRegistry` (`src/workers/providers`) lists what can run and probes availability without exposing credentials. The default is `ollama` (Qwen); a worker without a descriptor behaves exactly as before. There is no automatic fallback between providers.
+
 ### Cancellation: stopping a run, and knowing it stopped
 
 Every way a run can be abandoned (task timeout, queue-wait timeout, scheduler stop, `lead cancel`, a cancelled task noticed through a lost lease, a run that started after its task lost the fence) goes through one function, `cancelTaskRun` (`src/runtime/scheduler/cancel.ts`). Asking is not stopping, so it reports what it could confirm:

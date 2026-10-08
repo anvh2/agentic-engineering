@@ -168,7 +168,8 @@ export class ModelCapacity {
 
   /** True while work tagged `tag` is queued for a permit (not while it holds one). The scheduler uses this to keep queue time out of a task's execution budget. */
   isWaiting(tag: string): boolean {
-    return Boolean(this.db.prepare('SELECT 1 FROM waiters WHERE resource = ? AND tag = ? AND expires_at > ? LIMIT 1').get(this.resource, tag, this.now()));
+    // not scoped to this handle's resource: a task may queue on any provider's resource, and the scheduler must see all of them
+    return Boolean(this.db.prepare('SELECT 1 FROM waiters WHERE tag = ? AND expires_at > ? LIMIT 1').get(tag, this.now()));
   }
 
   /**
@@ -177,10 +178,12 @@ export class ModelCapacity {
    */
   engagedBy(tag: string): { kind: 'lease' | 'waiter'; holder: string; pid: number }[] {
     const marker = `:${tag}:pid`;
-    return [
-      ...this.holders().filter((h) => h.holder.includes(marker)).map((h) => ({ kind: 'lease' as const, holder: h.holder, pid: h.pid })),
-      ...this.queue().filter((w) => w.tag === tag || w.holder.includes(marker)).map((w) => ({ kind: 'waiter' as const, holder: w.holder, pid: w.pid })),
-    ];
+    const now = this.now();
+    // Across every resource: a cancelled task must have released the permit of whichever provider it was using.
+    // Matched in code, not with LIKE, so task ids containing '_' or '%' cannot match each other.
+    const leases = (this.db.prepare('SELECT holder, pid FROM leases WHERE expires_at > ? ORDER BY acquired_at').all(now) as { holder: string; pid: number }[]).filter((l) => l.holder.includes(marker));
+    const waiters = (this.db.prepare('SELECT holder, pid, tag FROM waiters WHERE expires_at > ? ORDER BY ticket').all(now) as { holder: string; pid: number; tag: string | null }[]).filter((w) => w.tag === tag || w.holder.includes(marker));
+    return [...leases.map((l) => ({ kind: 'lease' as const, holder: l.holder, pid: l.pid })), ...waiters.map((w) => ({ kind: 'waiter' as const, holder: w.holder, pid: w.pid }))];
   }
 
   private tx<T>(fn: () => T): T {
@@ -381,9 +384,26 @@ export function defaultModelCapacityPath(env: NodeJS.ProcessEnv = process.env): 
   return join(homedir(), '.agentic-engineering', 'model-capacity.db');
 }
 
-let shared: ModelCapacity | undefined;
-/** The process-wide handle on the machine-wide limit. */
+const handles = new Map<string, ModelCapacity>();
+
+/**
+ * The process-wide handle on the machine-wide limit for one provider's resource. Every provider queues on its own
+ * resource ('ollama' for the local model, one per cloud CLI) in the same database, so a long local inference never blocks
+ * a cloud call or the reverse, while each resource still has one limit across every process. No spec: the local model.
+ */
+export function capacityFor(spec?: { resource: string; defaultPermits: number }, path = defaultModelCapacityPath()): ModelCapacity {
+  const resource = spec?.resource ?? 'ollama';
+  const key = `${path}|${resource}`;
+  let handle = handles.get(key);
+  if (!handle) {
+    // An explicit default beats AGENTIC_MODEL_CONCURRENCY, which is the local model's knob and must not size a cloud resource.
+    handle = new ModelCapacity(path, { resource, ...(spec ? { permits: spec.defaultPermits } : {}) });
+    handles.set(key, handle);
+  }
+  return handle;
+}
+
+/** The process-wide handle on the local model's limit (the default provider). */
 export function sharedModelCapacity(): ModelCapacity {
-  shared ??= new ModelCapacity(defaultModelCapacityPath());
-  return shared;
+  return capacityFor();
 }
