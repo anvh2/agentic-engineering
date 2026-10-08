@@ -157,6 +157,12 @@ export interface RunCodingTaskOptions {
    * runtime failure (retryable by the Lead), not a model failure and not a coding attempt.
    */
   capacityWaitBudgetMs?: number;
+  /**
+   * After a model call's signal fires (cancellation or `modelTimeoutMs`), how long to wait for the provider to actually
+   * stop before giving up on it (default 10 s). A provider that still has not settled is REPORTED as unresponsive and its
+   * model permit stays held until it does settle: releasing it would let a second inference overlap the orphaned one.
+   */
+  abortGraceMs?: number;
 }
 
 const EDIT_TOOLS = new Set(['applyPatch', 'writeFile']);
@@ -269,7 +275,41 @@ export function classifyAttempt(record: AttemptRecord, forbiddenNow: boolean): F
   return 'C_wrong_implementation';
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    if (signal?.aborted) return resolve();
+    const t = setTimeout(done, ms);
+    function done() {
+      clearTimeout(t);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    }
+    signal?.addEventListener('abort', done, { once: true });
+  });
+
+const DEFAULT_ABORT_GRACE_MS = 10_000;
+
+/**
+ * Awaits `call`, but once `signal` has fired gives the provider only `graceMs` to settle. Returns the call's result, or
+ * `unresponsive` when the provider ignored the abort: the caller then still owns a live call it must account for.
+ */
+async function awaitWithAbortGrace<T>(call: Promise<T>, signal: AbortSignal, graceMs: number): Promise<{ value: T } | { unresponsive: true }> {
+  let timer: NodeJS.Timeout | undefined;
+  let onAbort: (() => void) | undefined;
+  const giveUp = new Promise<{ unresponsive: true }>((resolve) => {
+    onAbort = () => {
+      timer = setTimeout(() => resolve({ unresponsive: true }), graceMs);
+    };
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([call.then((value) => ({ value })), giveUp]);
+  } finally {
+    clearTimeout(timer);
+    if (onAbort) signal.removeEventListener('abort', onAbort);
+  }
+}
 
 // ---- the loop ----------------------------------------------------------------
 
@@ -399,6 +439,7 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
       };
 
       let permit: CapacityLease | undefined;
+      let orphanedCall: Promise<unknown> | undefined; // a provider call that outlived its abort: it keeps the permit
       try {
         const waitStart = Date.now();
         let waitOutcome: 'acquired' | 'aborted' | 'timeout' = 'aborted';
@@ -421,11 +462,16 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
         }
         inferenceStart = Date.now();
         trace.emit('model_started', { model: modelLabel, attempt: attemptNo, runtimeTry, capacityWaitMs: inferenceStart - waitStart });
-        const response = await worker.generate(await buildPrompt(repoRoot, task, previousFailure), {
-          requestContext,
-          onIterationComplete,
-          abortSignal: options.signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), options.signal]) : AbortSignal.timeout(timeoutMs),
-        });
+        const callSignal = options.signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), options.signal]) : AbortSignal.timeout(timeoutMs);
+        const call = worker.generate(await buildPrompt(repoRoot, task, previousFailure), { requestContext, onIterationComplete, abortSignal: callSignal });
+        const settled = await awaitWithAbortGrace(call, callSignal, options.abortGraceMs ?? DEFAULT_ABORT_GRACE_MS);
+        if ('unresponsive' in settled) {
+          call.catch(() => {}); // the late rejection must not become an unhandled one
+          orphanedCall = call;
+          trace.emit('provider_unresponsive', { model: modelLabel, attempt: attemptNo, graceMs: options.abortGraceMs ?? DEFAULT_ABORT_GRACE_MS, reason: String(callSignal.reason?.message ?? callSignal.reason ?? 'aborted'), permitHeldUntilSettled: true });
+          throw new Error(`provider_unresponsive: the model call ignored its abort for ${options.abortGraceMs ?? DEFAULT_ABORT_GRACE_MS}ms; it may still be running and still holds the model permit`);
+        }
+        const response = settled.value;
         // The permit is leased: if its renewals were refused (the process stalled past leaseMs and the permit was reclaimed),
         // another holder may have overlapped this call. Never silent: it is the one way two calls can share a single permit.
         if (permit.lost) trace.emit('worker_status', { text: 'model permit lease was lost during this call (stalled past its lease); another holder may have overlapped it', diagnostic: true });
@@ -461,9 +507,18 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
           // not an inference, so it is not observed as one.
           const inferenceMs = inferenceStart === undefined ? 0 : Date.now() - inferenceStart;
           if (inferenceStart !== undefined) metrics.workerInference(modelLabel, inferenceMs / 1000, 'error');
-          trace.emit('model_finished', { error: failure, durationMs: inferenceMs });
+          trace.emit('model_finished', { error: failure, durationMs: inferenceMs, ...(orphanedCall ? { providerStillActive: true } : {}) });
         }
-        permit?.release();
+        if (orphanedCall && permit) {
+          // The call is still live: the permit is released only when it really ends, so no second inference can overlap it.
+          const held = permit;
+          const startedAt = inferenceStart ?? Date.now();
+          const free = () => {
+            trace.emit('provider_settled_late', { model: modelLabel, attempt: attemptNo, afterMs: Date.now() - startedAt });
+            held.release();
+          };
+          orphanedCall.then(free, free);
+        } else permit?.release();
       }
 
       if (!responded) {
@@ -472,7 +527,7 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
           record.runtimeRetries += 1;
           metrics.retry('runtime');
           trace.emit('runtime_retry', { attempt: attemptNo, retry: record.runtimeRetries, reason: failure });
-          await sleep(options.runtimeRetryDelayMs ?? 2_000);
+          await sleep(options.runtimeRetryDelayMs ?? 2_000, options.signal);
         } else {
           record.runtimeError = failure;
           break; // retry budget spent, or cancelled: no further model call
@@ -486,6 +541,15 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
       record.durationMs = Date.now() - attemptStart;
       record.category = 'F_model_runtime';
       trace.emit('attempt_failed', { attempt: attemptNo, category: record.category, kind: 'runtime', reason: record.runtimeError });
+      break;
+    }
+    if (options.signal?.aborted) {
+      // Cancelled while the model call was ending: nothing it produced is verified, accepted or counted as a coding attempt.
+      record.runtimeError = 'cancelled';
+      runtimeFailed = true;
+      record.durationMs = Date.now() - attemptStart;
+      record.category = 'F_model_runtime';
+      trace.emit('attempt_failed', { attempt: attemptNo, category: record.category, kind: 'runtime', reason: 'cancelled' });
       break;
     }
     codingAttempts += 1;
@@ -506,7 +570,7 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
         if (!(await exists(join(repoRoot, f)))) continue;
         const command = ['gofmt', '-w', f];
         trace.emit('verification_started', { command, phase: 'format' });
-        const r = await runSandboxedCommand(command[0], command.slice(1), { cwd: repoRoot, root: repoRoot, timeoutMs: 10_000 });
+        const r = await runSandboxedCommand(command[0], command.slice(1), { cwd: repoRoot, root: repoRoot, timeoutMs: 10_000, signal: options.signal });
         trace.emit('verification_finished', { command, phase: 'format', exitCode: r.exitCode, timedOut: r.timedOut, output: tail(r.stderr || r.stdout, 500) });
         if (!r.success) {
           formatterOk = false;
@@ -536,9 +600,10 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
         }
         try {
           for (const command of task.verificationCommands) {
+            if (options.signal?.aborted) break; // cancelled: PASS requires every command to have run (checked below)
             trace.emit('verification_started', { command, phase: 'verify' });
             const started = Date.now();
-            const r = await runSandboxedCommand(command[0], command.slice(1), { cwd: repoRoot, root: repoRoot, timeoutMs: 120_000 });
+            const r = await runSandboxedCommand(command[0], command.slice(1), { cwd: repoRoot, root: repoRoot, timeoutMs: 120_000, signal: options.signal });
             metrics.verification((Date.now() - started) / 1000, r.success ? 'pass' : r.timedOut ? 'timeout' : 'fail');
             const output = tail(`${r.stdout}${r.stderr}`.trim(), MAX_FAILURE_CHARS);
             record.verification = { command, exitCode: r.exitCode, timedOut: r.timedOut, output };
@@ -556,7 +621,7 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
       // PASS requires every verification command to have succeeded AND the verified state to be the final state.
       const stateAfterVerify = await hashFiles(repoRoot, task.allowedFiles);
       const lastCommand = task.verificationCommands[task.verificationCommands.length - 1];
-      const allRan = formatterOk && record.verification?.exitCode === 0 && record.verification.command === lastCommand;
+      const allRan = formatterOk && !options.signal?.aborted && record.verification?.exitCode === 0 && record.verification.command === lastCommand;
       if (allRan && stateAfterVerify === stateAfterFormat) {
         // Verification executes worker-written code; whatever it left changed outside the allowed files is a forbidden
         // mutation exactly as if the worker had written it (the pre-verification check above cannot see it).

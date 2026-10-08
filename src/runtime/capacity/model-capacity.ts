@@ -171,6 +171,18 @@ export class ModelCapacity {
     return Boolean(this.db.prepare('SELECT 1 FROM waiters WHERE resource = ? AND tag = ? AND expires_at > ? LIMIT 1').get(this.resource, tag, this.now()));
   }
 
+  /**
+   * Permits held, or queue entries waiting, on behalf of work tagged `tag` (the task's contract id). The runner names its
+   * holder `<model>:<taskId>:pid<pid>`. Used to confirm that a cancelled run really released the model.
+   */
+  engagedBy(tag: string): { kind: 'lease' | 'waiter'; holder: string; pid: number }[] {
+    const marker = `:${tag}:pid`;
+    return [
+      ...this.holders().filter((h) => h.holder.includes(marker)).map((h) => ({ kind: 'lease' as const, holder: h.holder, pid: h.pid })),
+      ...this.queue().filter((w) => w.tag === tag || w.holder.includes(marker)).map((w) => ({ kind: 'waiter' as const, holder: w.holder, pid: w.pid })),
+    ];
+  }
+
   private tx<T>(fn: () => T): T {
     this.db.exec('BEGIN IMMEDIATE');
     try {

@@ -751,6 +751,14 @@ export class SchedulerStore {
     });
   }
 
+  /** Appends an audit event without changing the task (e.g. a run cancellation and what it confirmed). Not fenced: it records, never decides. */
+  audit(id: string, actor: string, reason: string, detail?: Record<string, unknown>): void {
+    this.tx(() => {
+      const t = this.requireTask(id);
+      this.db.prepare('INSERT INTO events (task_id, at, from_state, to_state, actor, reason, detail) VALUES (?,?,?,?,?,?,?)').run(id, this.now(), t.state, t.state, actor, reason, detail ? json(detail) : null);
+    });
+  }
+
   /** Merge-patch artifacts without a state change (worktree path, artifact dirs...). */
   setArtifacts(id: string, artifacts: Record<string, unknown>): void {
     this.tx(() => {

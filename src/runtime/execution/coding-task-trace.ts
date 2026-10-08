@@ -15,6 +15,8 @@ export type TraceEventType =
   | 'attempt_started'
   | 'model_started'
   | 'model_finished'
+  | 'provider_unresponsive'
+  | 'provider_settled_late'
   | 'worker_status'
   | 'tool_call_started'
   | 'tool_call_finished'

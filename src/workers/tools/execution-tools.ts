@@ -48,6 +48,8 @@ export interface ControlledCommandResult {
   stderr: string;
   durationMs: number;
   timedOut: boolean;
+  /** True when the caller's AbortSignal terminated the command (the whole process group was killed). */
+  aborted?: boolean;
 }
 
 function truncate(text: string, maxBytes: number): { text: string; truncated: boolean } {
@@ -70,11 +72,15 @@ function truncate(text: string, maxBytes: number): { text: string; truncated: bo
 export function runControlledCommand(
   command: string,
   args: string[],
-  options: { cwd: string; timeoutMs: number; env?: NodeJS.ProcessEnv },
+  options: { cwd: string; timeoutMs: number; env?: NodeJS.ProcessEnv; signal?: AbortSignal },
 ): Promise<ControlledCommandResult> {
   const start = Date.now();
 
   return new Promise((resolve) => {
+    if (options.signal?.aborted) {
+      resolve({ success: false, exitCode: null, stdout: '', stderr: `Not started: cancelled before "${command}" ran.`, durationMs: 0, timedOut: false, aborted: true });
+      return;
+    }
     let child: ReturnType<typeof spawn>;
     try {
       child = spawn(command, args, {
@@ -100,10 +106,11 @@ export function runControlledCommand(
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let timedOut = false;
+    let aborted = false;
     let settled = false;
 
-    const timer = setTimeout(() => {
-      timedOut = true;
+    // Only this command's own process group is ever signalled (detached: true gave it one); never a pid we did not spawn.
+    const killGroup = () => {
       if (child.pid !== undefined) {
         try {
           process.kill(-child.pid, 'SIGKILL');
@@ -113,7 +120,16 @@ export function runControlledCommand(
       } else {
         child.kill('SIGKILL');
       }
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killGroup();
     }, options.timeoutMs);
+    const onAbort = () => {
+      aborted = true;
+      killGroup();
+    };
+    options.signal?.addEventListener('abort', onAbort, { once: true });
 
     child.stdout?.on('data', (chunk: Buffer) => {
       if (stdoutBytes < MAX_OUTPUT_BYTES * 2) {
@@ -132,6 +148,7 @@ export function runControlledCommand(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      options.signal?.removeEventListener('abort', onAbort);
       resolve(result);
     };
 
@@ -152,13 +169,15 @@ export function runControlledCommand(
       if (timedOut) {
         stderr += `\n[Command timed out after ${options.timeoutMs}ms and was terminated.]`;
       }
+      if (aborted) stderr += '\n[Command was cancelled and its process group terminated.]';
       finish({
-        success: !timedOut && code === 0,
-        exitCode: timedOut ? null : code,
+        success: !timedOut && !aborted && code === 0,
+        exitCode: timedOut || aborted ? null : code,
         stdout,
         stderr,
         durationMs: Date.now() - start,
         timedOut,
+        ...(aborted ? { aborted: true } : {}),
       });
     });
   });

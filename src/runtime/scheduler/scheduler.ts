@@ -2,6 +2,7 @@ import { StoreError, type Fence, type SchedulerStore, type TaskRow } from './sto
 import { resolveConfig, type FailureCategory, type SchedulerConfig } from './types.ts';
 import { WorkspaceError, type Workspace } from '../worktree/worktree.ts';
 import { ExecutionClock } from './execution-clock.ts';
+import { cancelTaskRun, type CancelReport, type CancelRunResult } from './cancel.ts';
 
 /**
  * Worker-pool scheduler. It ASSIGNS work and RECORDS outcomes; it contains no coding, retry or verification logic:
@@ -42,11 +43,12 @@ export interface Executor {
    */
   reconcile?(input: { task: TaskRow; runId: string; signal: AbortSignal; log(line: string): void }): Promise<ExecutorOutcome | undefined>;
   /**
-   * Stops a run the scheduler has given up on (task timeout), best effort. Aborting `signal` only stops waiting; without
-   * this the run would keep executing (and holding the model) unsupervised, and a run orphaned by a server restart would
-   * stay "running" forever, so every later claim would re-attach to it and time out again.
+   * Stops a run the scheduler has given up on (task timeout, scheduler stop, operator cancel). Aborting `signal` only stops
+   * waiting; without this the run would keep executing (and holding the model) unsupervised, and a run orphaned by a server
+   * restart would stay "running" forever, so every later claim would re-attach to it and time out again. Should report what
+   * it could CONFIRM about the run (a bare resolve counts as "unconfirmed"); see cancel.ts, which also checks the model permit.
    */
-  cancel?(input: { task: TaskRow; runId: string; log(line: string): void }): Promise<void>;
+  cancel?(input: { task: TaskRow; runId: string; log(line: string): void }): Promise<CancelReport | void>;
 }
 
 /** A store error that is a transient database condition (lock contention), not a lifecycle decision. */
@@ -65,6 +67,8 @@ export interface RunSummary {
   /** Most tasks that were in their execution lifecycle at the same instant during this run (concurrency actually achieved). */
   peakInFlight: number;
   stopReason: 'idle' | 'aborted';
+  /** Runs the scheduler cancelled (timeout, stop) whose stop could not be CONFIRMED: possibly still executing and holding the model. */
+  stillActive: CancelRunResult[];
 }
 
 export interface SchedulerDeps {
@@ -78,7 +82,9 @@ export interface SchedulerDeps {
    * becomes an ACTIVE-execution budget that pauses while the task is queued for a permit, and the queueing itself is
    * bounded by `maxCapacityWaitMs`. Without it the legacy single wall-clock deadline applies.
    */
-  capacity?: { isWaiting(tag: string): boolean };
+  capacity?: { isWaiting(tag: string): boolean; engagedBy?(tag: string): { kind: 'lease' | 'waiter'; holder: string; pid: number }[] };
+  /** How long a cancelled run gets to release the model before it is reported as still active (default 15 s). */
+  cancelGraceMs?: number;
   /** Called when a task's executor starts (tests/measurement). */
   onExecutorStart?: (task: TaskRow) => void;
 }
@@ -92,6 +98,10 @@ export class Scheduler {
   private onExecutorStart?: (task: TaskRow) => void;
   private capacity?: SchedulerDeps['capacity'];
   private abort = new AbortController();
+  private cancelGraceMs?: number;
+  private stillActive: CancelRunResult[] = [];
+  /** Tasks this scheduler is executing right now, with their run id once known (what a forced exit must report). */
+  private live = new Map<string, { taskId: string; epoch: number; runId?: string }>();
 
   constructor(deps: SchedulerDeps) {
     this.store = deps.store;
@@ -101,10 +111,25 @@ export class Scheduler {
     this.log = deps.log ?? (() => {});
     this.onExecutorStart = deps.onExecutorStart;
     this.capacity = deps.capacity;
+    this.cancelGraceMs = deps.cancelGraceMs;
   }
 
+  /**
+   * Begins shutdown: nothing new is claimed from this moment, and every in-flight task is aborted, failed through its fence,
+   * and has its run cancelled and the cancellation confirmed (or reported in `RunSummary.stillActive`). `run()` resolves
+   * only after all of that has finished. Idempotent.
+   */
   stop(): void {
-    this.abort.abort();
+    this.abort.abort(new Error('scheduler stopped'));
+  }
+
+  get stopping(): boolean {
+    return this.abort.signal.aborted;
+  }
+
+  /** Tasks in flight and their Mastra run ids: what is (possibly) still executing if this process exits now. */
+  inFlight(): { taskId: string; epoch: number; runId?: string }[] {
+    return [...this.live.values()];
   }
 
   /**
@@ -116,7 +141,7 @@ export class Scheduler {
    * lease taken by the coding runner around each model call (src/runtime/capacity), which no scheduler setting bypasses.
    */
   async run(options: { batchId?: string; workerPrefix?: string } = {}): Promise<RunSummary> {
-    const summary: RunSummary = { claimed: [], reviewPending: [], failed: [], requeued: [], peakInFlight: 0, stopReason: 'idle' };
+    const summary: RunSummary = { claimed: [], reviewPending: [], failed: [], requeued: [], peakInFlight: 0, stopReason: 'idle', stillActive: [] };
     const prefix = options.workerPrefix ?? `worker-${process.pid}`;
     const inflight = new Map<string, Promise<void>>();
     const slots = new Set<number>(); // worker slots in use
@@ -128,7 +153,8 @@ export class Scheduler {
         summary.requeued.push(...reaped.requeued);
         this.store.promote();
 
-        while (inflight.size < this.config.maxConcurrentWorkers) {
+        // Shutdown gate: re-checked per claim, so no task is claimed once stop() has been called.
+        while (inflight.size < this.config.maxConcurrentWorkers && !this.abort.signal.aborted) {
           const free = Array.from({ length: this.config.maxConcurrentWorkers }, (_, i) => i + 1).find((n) => !slots.has(n)) ?? 1;
           const claim = this.store.claim({
             workerId: `${prefix}-w${free}`,
@@ -172,6 +198,7 @@ export class Scheduler {
       summary.stopReason = 'aborted';
       await Promise.allSettled(inflight.values());
     }
+    summary.stillActive = this.stillActive;
 
     for (const id of new Set(summary.claimed)) {
       const t = this.store.requireTask(id);
@@ -187,6 +214,9 @@ export class Scheduler {
     const ctl = new AbortController();
     const onGlobalAbort = () => ctl.abort(new Error('scheduler stopped'));
     this.abort.signal.addEventListener('abort', onGlobalAbort, { once: true });
+    if (this.abort.signal.aborted) onGlobalAbort(); // a listener added after the event would never hear it
+    const liveKey = `${claimed.id}@${fence.epoch}`;
+    this.live.set(liveKey, { taskId: claimed.id, epoch: fence.epoch });
     let timedOut = false;
     let leaseLost = false;
     const heartbeat = setInterval(() => {
@@ -208,6 +238,7 @@ export class Scheduler {
     // Two budgets (see execution-clock.ts): active execution (taskTimeoutMs), which does not run while the task is queued
     // for a model permit, and the queueing itself (maxCapacityWaitMs). Without a capacity probe: the single legacy deadline.
     let capacityWaitExpired = false;
+    let unrecordedRunId: string | undefined; // a run that started after this task lost its fence: no row points at it, so only we can stop it
     const tag = claimed.spec.request?.contract.taskId ?? claimed.id; // what the runner tags its queue entry with
     const clock = this.capacity ? new ExecutionClock(Date.now(), this.config.taskTimeoutMs, this.config.maxCapacityWaitMs) : undefined;
     const timeout = clock
@@ -296,9 +327,14 @@ export class Scheduler {
           signal: ctl.signal,
           log: this.log,
           onRunStart: ({ runId }) => {
-            store.recordRun(task.id, fence, runId);
+            if (!store.recordRun(task.id, fence, runId)) unrecordedRunId = runId;
+            const entry = this.live.get(liveKey);
+            if (entry) entry.runId = runId;
           },
         });
+        // A result that arrives after the budget ran out is stale: the fence already belongs to the timeout decision, and an
+        // outcome that races it in the same tick must not be recorded as if the task had finished in time.
+        if (timedOut || capacityWaitExpired) throw ctl.signal.reason ?? new Error('task timeout');
       } else {
         store.transition(task.id, 'CODING', { actor: fence.owner, reason: 'adopting previous run outcome', expectFrom: 'CLAIMED', fence });
       }
@@ -306,33 +342,39 @@ export class Scheduler {
     } catch (err) {
       if (leaseLost || (err instanceof StoreError && err.code === 'stale_owner')) {
         this.log(`${claimed.id}: ownership lost; result discarded (task state belongs to its new owner)`);
+        // Lost because the operator cancelled the task: nobody will adopt the run, so it must be stopped here. (A lease that
+        // merely expired leaves the run to the next claim, which re-attaches to it.)
+        if (store.getTask(claimed.id)?.state === 'CANCELLED') await this.cancelAbandonedRun(claimed.id, 'task cancelled by operator');
       } else if (capacityWaitExpired) {
         fail('RUNTIME_FAILURE', 'capacity_wait_timeout', `queued for a model permit for ${clock?.waitedMs ?? '?'}ms, past maxCapacityWaitMs of ${this.config.maxCapacityWaitMs}ms; retry when the model is less contended`);
-        await this.cancelAbandonedRun(claimed.id);
+        await this.cancelAbandonedRun(claimed.id, 'capacity wait budget exhausted');
       } else if (timedOut) {
         fail('RUNTIME_FAILURE', 'task_timeout', `task exceeded taskTimeout of ${this.config.taskTimeoutMs}ms${clock ? ` of active execution (${clock.waitedMs}ms queued for a model permit not counted)` : ''}`);
-        await this.cancelAbandonedRun(claimed.id);
+        await this.cancelAbandonedRun(claimed.id, 'task timeout');
       } else if (this.abort.signal.aborted) {
         fail('RUNTIME_FAILURE', 'executor_error', 'scheduler stopped while the task was running');
+        await this.cancelAbandonedRun(claimed.id, 'scheduler stopped');
       } else {
         fail('RUNTIME_FAILURE', 'executor_error', `executor failed: ${(err as Error).message}`);
       }
+      if (unrecordedRunId) await this.cancelAbandonedRun(claimed.id, 'run started after the task lost its lease', unrecordedRunId);
     } finally {
       clearInterval(heartbeat);
       clearTimeout(timeout);
       this.abort.signal.removeEventListener('abort', onGlobalAbort);
+      this.live.delete(liveKey);
     }
   }
 
-  /** Best-effort cancel of the run a timed-out task was executing or re-attached to (see Executor.cancel). */
-  private async cancelAbandonedRun(taskId: string): Promise<void> {
+  /** Stops the run a task was executing or re-attached to and confirms it (see cancel.ts). Never throws; an unconfirmed stop is surfaced in the run summary. */
+  private async cancelAbandonedRun(taskId: string, reason: string, runId?: string): Promise<void> {
     const task = this.store.getTask(taskId);
-    if (!task?.runId || !this.executor.cancel) return;
+    if (!task) return;
     try {
-      await this.executor.cancel({ task, runId: task.runId, log: this.log });
-      this.log(`${taskId}: cancelled abandoned run ${task.runId}`);
+      const result = await cancelTaskRun({ store: this.store, executor: this.executor, capacity: this.capacity, task, runId, actor: 'scheduler', reason, graceMs: this.cancelGraceMs, log: this.log });
+      if (result.outcome === 'still_active' || result.outcome === 'unreachable') this.stillActive.push(result);
     } catch (err) {
-      this.log(`${taskId}: could not cancel run ${task.runId}: ${(err as Error).message}`);
+      this.log(`${taskId}: could not cancel run ${task.runId ?? '(none)'}: ${(err as Error).message}`);
     }
   }
 

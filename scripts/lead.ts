@@ -32,6 +32,7 @@ import { configFromEnv, resolveConfig, type SchedulerConfig } from '../src/runti
 import { WorktreeManager } from '../src/runtime/worktree/worktree.ts';
 import { runObjectiveCommand } from '../src/lead/objective/cli.ts';
 import { recoverRuntimeFailure } from '../src/lead/recovery.ts';
+import { cancelTask } from '../src/lead/cancel.ts';
 
 const args = process.argv.slice(2);
 const [command, ...rest] = args;
@@ -99,13 +100,32 @@ async function main(): Promise<void> {
       const config = await loadConfig();
       const executor = createMastraExecutor({ server: flag('--server'), taskTimeoutMs: config.taskTimeoutMs + config.maxCapacityWaitMs /* poll backstop = the hard bound: active budget + queueing budget */ });
       const scheduler = new Scheduler({ store, executor, workspace: worktrees, config, capacity: sharedModelCapacity(), log: (l) => console.log(`  ${l}`) });
-      process.on('SIGINT', () => scheduler.stop());
+      // First signal: graceful (claim nothing new, cancel and confirm every in-flight run). A second signal exits at once and
+      // says which runs may still be executing, because nothing was confirmed for them.
+      let signals = 0;
+      const onSignal = (name: string) => {
+        signals += 1;
+        if (signals === 1) {
+          console.log(`\n${name}: stopping. No new work is claimed; cancelling ${scheduler.inFlight().length} in-flight task(s) (send ${name} again to exit immediately).`);
+          scheduler.stop();
+          return;
+        }
+        const live = scheduler.inFlight();
+        console.error(`${name} again: exiting without waiting. UNCONFIRMED, possibly still running: ${live.length ? live.map((l) => `${l.taskId} (run ${l.runId ?? 'unknown'})`).join(', ') : 'none in flight'}. Finish with: lead cancel <task>`);
+        process.exit(130);
+      };
+      process.on('SIGINT', () => onSignal('SIGINT'));
+      process.on('SIGTERM', () => onSignal('SIGTERM'));
       const capacity = sharedModelCapacity();
       console.log(`config: ${JSON.stringify(config)}`);
       console.log(`logical workers: ${config.maxConcurrentWorkers}; active-execution timeout ${Math.round(config.taskTimeoutMs / 1000)}s (paused while queued) + queue budget ${Math.round(config.maxCapacityWaitMs / 1000)}s; model permits (machine-wide): ${capacity.permits}${process.env.AGENTIC_MODEL_CONCURRENCY && Number(process.env.AGENTIC_MODEL_CONCURRENCY) !== capacity.permits ? ` (AGENTIC_MODEL_CONCURRENCY=${process.env.AGENTIC_MODEL_CONCURRENCY} is ignored: the capacity database already holds ${capacity.permits})` : ''}`);
       const summary = await scheduler.run({ batchId: flag('--batch') });
       console.log(JSON.stringify(summary, null, 2));
       table(flag('--batch'));
+      if (summary.stillActive.length > 0) {
+        console.error(`WARNING: ${summary.stillActive.length} cancelled run(s) could not be confirmed stopped: ${summary.stillActive.map((r) => `${r.taskId} run ${r.runId} (${r.outcome})`).join(', ')}. The model may still be busy; retry with: lead cancel <task>`);
+        process.exitCode = 1;
+      }
       break;
     }
     case 'status': {
@@ -154,9 +174,13 @@ async function main(): Promise<void> {
       break;
     }
     case 'cancel': {
-      const t = store.transition(positional[0], 'CANCELLED', { actor: 'human', reason: flag('--reason') ?? 'cancelled by user', patch: { failureCategory: 'cancelled' } });
-      store.promote('cancel');
-      console.log(`${t.id} -> ${t.state} (a running worker notices on its next lease heartbeat and discards its result; its worktree is preserved)`);
+      const config = await loadConfig();
+      const r = await cancelTask(store, { taskId: positional[0], reason: flag('--reason'), executor: createMastraExecutor({ server: flag('--server'), taskTimeoutMs: config.taskTimeoutMs }), capacity: sharedModelCapacity(), log: (l) => console.log(`  ${l}`) });
+      console.log(`${r.task.id} -> ${r.task.state}${r.alreadyCancelled ? ' (already cancelled; run cancellation retried)' : ''}; run ${r.run.runId ?? '-'}: ${r.run.outcome}${r.run.detail ? ` (${r.run.detail})` : ''}`);
+      if (!r.clean) {
+        console.error('The run is NOT confirmed stopped: its inference and model permit may still be active. Check the Mastra server and retry: lead cancel ' + r.task.id);
+        process.exitCode = 1;
+      }
       break;
     }
     case 'retry': {

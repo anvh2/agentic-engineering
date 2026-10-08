@@ -88,6 +88,25 @@ Failure behavior: a waiter row is leased too (`waiterLeaseMs`, default 15 s, ren
 
 The scheduler learns that a task is queued from the capacity database (`ModelCapacity.isWaiting(tag)`, tag = the contract's `taskId`, the same tag the runner queues with) and samples it every `min(pollMs, taskTimeoutMs/4)` (<= 1 s): each transition between waiting and working is accounted to within one sample. Without a capacity probe (`Scheduler` built without `capacity`) the legacy single wall-clock `taskTimeoutMs` applies. A Mastra run superseded by a lease change is adopted by the next claim (`reconcile`) rather than duplicated; its own wait is bounded by the same budgets and ends when Mastra cancels the run.
 
+### Cancellation: stopping a run, and knowing it stopped
+
+Every way a run can be abandoned (task timeout, queue-wait timeout, scheduler stop, `lead cancel`, a cancelled task noticed through a lost lease, a run that started after its task lost the fence) goes through one function, `cancelTaskRun` (`src/runtime/scheduler/cancel.ts`). Asking is not stopping, so it reports what it could confirm:
+
+| Layer | What stops | Evidence required |
+| --- | --- | --- |
+| CLI | `lead cancel` writes `CANCELLED` first (the fence: later results are discarded), then cancels the run. Idempotent: on an already-cancelled task it retries the run cancellation. First `SIGINT`/`SIGTERM` of `lead run` is graceful, a second exits at once and prints the runs that may still be executing. | exit code 1 unless the run is confirmed stopped |
+| Scheduler | `stop()` claims nothing further (gate re-checked per claim), aborts every in-flight task, fails it through its fence, then cancels and confirms its run. `run()` returns only after that; unconfirmed runs are in `RunSummary.stillActive`. | audit event `run cancellation (<reason>): <outcome>` on the task |
+| Executor / Mastra | `cancelCodingTaskRunConfirmed`: POST cancel, then poll the run until terminal (a run the server no longer knows counts as terminal; a refused cancel of a finished run is fine; an unreachable server is `unreachable`, never terminal) | run status |
+| Model permit | the run being terminal is not enough: the task must hold no permit and have no queue entry (`ModelCapacity.engagedBy(taskId)`) within `cancelGraceMs` (15 s) | permit table |
+| Runner | the abort stops the model call, verification commands (whole process group), and the retry delay; a cancel that lands as the model returns skips verification and cannot yield PASS | trace events |
+| Provider call | a provider that ignores its abort for `abortGraceMs` (10 s) is reported (`provider_unresponsive`) and **keeps the model permit until it really settles** (`provider_settled_late`), so a second inference cannot overlap an orphaned one | trace events |
+
+Outcomes: `stopped`, `no_run`, `still_active`, `unreachable`, `unconfirmed`. Only the first two are clean.
+
+Fencing is unchanged and now also covers a result that arrives in the same tick as a timeout: after `taskTimeoutMs` or `maxCapacityWaitMs` expires, an executor outcome is discarded even if it is a PASS. A lease that merely **expired** does not cancel the run (the next claim adopts it with `reconcile`); a lease lost because the task was **cancelled** does. Only processes this runtime spawned are ever signalled (the command runner's own process group); user CLI sessions are never touched.
+
+Known limit: cancelling during a verification command takes effect immediately for the sandboxed command (its process group is killed), but a Mastra step that is between tool calls only observes the abort at its next await.
+
 ### Task graph (DAG) semantics
 
 A plan is a DAG over `dependsOn`. `createBatch` rejects, before storing anything: a task depending on itself, a dependency that is neither in the plan nor an existing task, and any cycle.

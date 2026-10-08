@@ -1,4 +1,4 @@
-import { attachToCodingTaskRun, cancelCodingTaskRun, runCodingTaskWorkflow, type WorkflowRunResult } from './client.ts';
+import { attachToCodingTaskRun, cancelCodingTaskRunConfirmed, runCodingTaskWorkflow, type WorkflowRunResult } from './client.ts';
 import type { Executor, ExecutorOutcome } from '../../runtime/scheduler/scheduler.ts';
 
 /**
@@ -25,7 +25,7 @@ function toOutcome(run: WorkflowRunResult): ExecutorOutcome {
   };
 }
 
-export function createMastraExecutor(options: { server?: string; pollMs?: number; taskTimeoutMs?: number } = {}): Executor {
+export function createMastraExecutor(options: { server?: string; pollMs?: number; taskTimeoutMs?: number; cancelGraceMs?: number } = {}): Executor {
   return {
     async run({ task, repository, signal, onRunStart, log }) {
       if (!task.spec.request) throw new Error(`task ${task.id} has no delegation request`);
@@ -51,8 +51,9 @@ export function createMastraExecutor(options: { server?: string; pollMs?: number
     },
 
     async cancel({ runId, task, log }) {
-      await cancelCodingTaskRun(runId, { server: options.server });
-      log(`${task.id}: mastra run ${runId} cancelled`);
+      const result = await cancelCodingTaskRunConfirmed(runId, { server: options.server, graceMs: options.cancelGraceMs });
+      log(`${task.id}: mastra run ${runId} cancel: ${result.run}${result.runStatus ? ` (${result.runStatus})` : ''}`);
+      return result;
     },
   };
 }

@@ -158,7 +158,7 @@ function refused(command: string, reason: string, start: number): SandboxedComma
 export async function runSandboxedCommand(
   command: string,
   args: string[],
-  options: { cwd: string; root: string; timeoutMs: number },
+  options: { cwd: string; root: string; timeoutMs: number; signal?: AbortSignal },
 ): Promise<SandboxedCommandResult> {
   const start = Date.now();
   const status = await sandboxStatus();
@@ -189,7 +189,7 @@ export async function runSandboxedCommand(
       npm_config_audit: 'false',
       CI: '1',
     });
-    return await runControlledCommand(sandboxExecutable(), [...defines(root, tmp), '-p', PROFILE, executable, ...args], { cwd: options.cwd, timeoutMs: options.timeoutMs, env });
+    return await runControlledCommand(sandboxExecutable(), [...defines(root, tmp), '-p', PROFILE, executable, ...args], { cwd: options.cwd, timeoutMs: options.timeoutMs, env, signal: options.signal });
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }

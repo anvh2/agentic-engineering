@@ -110,3 +110,47 @@ export async function cancelCodingTaskRun(runId: string, options: { server?: str
   });
   if (!res.ok) throw new Error(`POST cancel ${runId} -> HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
 }
+
+export interface ConfirmedCancel {
+  run: 'terminal' | 'still_active' | 'unreachable';
+  runStatus?: string;
+  detail?: string;
+}
+
+/**
+ * Cancels a run and verifies the server's view of it. The cancel request is not trusted to have worked: the run's status
+ * is polled until it is terminal (Mastra marks it `canceled` immediately and aborts the step if this server is executing
+ * it), a run the server no longer knows (restart) counts as terminal, and a run still `running` after `graceMs` is
+ * reported as still active. A failed cancel request is reported, not thrown, so the caller can record what is unknown.
+ */
+export async function cancelCodingTaskRunConfirmed(runId: string, options: { server?: string; graceMs?: number; pollMs?: number } = {}): Promise<ConfirmedCancel> {
+  const server = (options.server ?? process.env.MASTRA_URL ?? 'http://localhost:4111').replace(/\/$/, '');
+  const base = `${server}/api/workflows/coding-task-workflow/runs/${encodeURIComponent(runId)}`;
+  let requestError: string | undefined;
+  try {
+    await cancelCodingTaskRun(runId, { server });
+  } catch (err) {
+    requestError = (err as Error).message; // the run may already be terminal (cancel of a finished run is refused): the probe below decides
+  }
+  const deadline = Date.now() + (options.graceMs ?? 15_000);
+  const pollMs = options.pollMs ?? 500;
+  let lastStatus: string | undefined;
+  let reached = false;
+  for (;;) {
+    try {
+      const res = await fetch(base, { signal: AbortSignal.timeout(10_000) });
+      if (res.status === 404) return { run: 'terminal', runStatus: 'not_found', detail: 'the server does not know this run (restarted or evicted): nothing is executing under it' };
+      if (res.ok) {
+        reached = true;
+        lastStatus = ((await res.json()) as { status?: string }).status;
+        if (lastStatus && !['running', 'pending', 'waiting'].includes(lastStatus)) return { run: 'terminal', runStatus: lastStatus, ...(requestError ? { detail: `cancel request refused (${requestError}) but the run is terminal` } : {}) };
+      }
+    } catch {
+      /* unreachable this poll; retried until the deadline */
+    }
+    if (Date.now() >= deadline) break;
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+  if (!reached) return { run: 'unreachable', detail: `Mastra server at ${server} did not answer${requestError ? ` (${requestError})` : ''}; the run may still be executing` };
+  return { run: 'still_active', runStatus: lastStatus, detail: `run still ${lastStatus} ${options.graceMs ?? 15_000}ms after the cancel request${requestError ? ` (${requestError})` : ''}` };
+}
