@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { Scheduler, Semaphore, type ExecutorOutcome } from './scheduler.ts';
+import { Scheduler, type ExecutorOutcome } from './scheduler.ts';
 import { makeRepo, makeStore, plan, fakeExecutor, git, sleep, tempDir, workerTask } from './test-helpers.ts';
 import { WorktreeManager } from '../worktree/worktree.ts';
 
@@ -192,7 +192,7 @@ describe('batch base and snapshotPaths', () => {
 });
 
 describe('M5.2 parallel workers and isolation', () => {
-  it('two workers run disjoint tasks concurrently in separate worktrees (maxConcurrentWorkers=2, ollama=2)', async () => {
+  it('two workers run disjoint tasks concurrently in separate worktrees (maxConcurrentWorkers=2)', async () => {
     let release!: () => void;
     const hold = new Promise<void>((r) => (release = r));
     const arrived: string[] = [];
@@ -203,26 +203,19 @@ describe('M5.2 parallel workers and isolation', () => {
         await hold; // both must be in flight at once, or this deadlocks and the test times out
       },
     });
-    const { store, scheduler } = setup([workerTask('a'), workerTask('b')], { executor, config: { maxConcurrentWorkers: 2, maxConcurrentOllamaRequests: 2 } });
-    await scheduler.run();
+    const { store, scheduler } = setup([workerTask('a'), workerTask('b')], { executor, config: { maxConcurrentWorkers: 2 } });
+    const summary = await scheduler.run();
     assert.equal(executor.peak(), 2);
+    assert.equal(summary.peakInFlight, 2);
     const [a, b] = [store.requireTask('a'), store.requireTask('b')];
     assert.notEqual(a.worktreePath, b.worktreePath);
     assert.ok(existsSync(join(a.worktreePath!, 'src/a.js')) && !existsSync(join(a.worktreePath!, 'src/b.js')), 'no cross-contamination');
     assert.notEqual(a.assignedWorker, b.assignedWorker);
   });
 
-  it('maxConcurrentOllamaRequests=1 serializes model work even with 2 workers', async () => {
-    const executor = fakeExecutor({ gate: () => sleep(40) });
-    const { scheduler } = setup([workerTask('a'), workerTask('b'), workerTask('c')], { executor, config: { maxConcurrentWorkers: 2, maxConcurrentOllamaRequests: 1 } });
-    const s = await scheduler.run();
-    assert.equal(executor.peak(), 1);
-    assert.equal(s.reviewPending.length, 3);
-  });
-
   it('tasks with overlapping files never run concurrently', async () => {
     const executor = fakeExecutor({ gate: () => sleep(30) });
-    const { scheduler } = setup([workerTask('a', { files: ['src/shared.js'] }), workerTask('b', { files: ['src/shared.js'] })], { executor, config: { maxConcurrentWorkers: 2, maxConcurrentOllamaRequests: 2 } });
+    const { scheduler } = setup([workerTask('a', { files: ['src/shared.js'] }), workerTask('b', { files: ['src/shared.js'] })], { executor, config: { maxConcurrentWorkers: 2 } });
     const s = await scheduler.run();
     assert.equal(executor.peak(), 1);
     assert.deepEqual(s.claimed, ['a'], 'b stays READY until a releases its files by being integrated or rejected');
@@ -230,19 +223,6 @@ describe('M5.2 parallel workers and isolation', () => {
 
   it('rejects unsupported worker counts', () => {
     assert.throws(() => setup([workerTask('a')], { config: { maxConcurrentWorkers: 4 } }), /not supported/);
-  });
-
-  it('Semaphore bounds permits and wakes waiters FIFO', async () => {
-    const s = new Semaphore(1);
-    await s.acquire();
-    const order: number[] = [];
-    const w1 = s.acquire().then(() => order.push(1));
-    const w2 = s.acquire().then(() => order.push(2));
-    s.release();
-    await w1;
-    s.release();
-    await w2;
-    assert.deepEqual(order, [1, 2]);
   });
 });
 

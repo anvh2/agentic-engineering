@@ -67,7 +67,7 @@ npm run dev                      # Mastra server + Studio on :4111 (needed for `
 ```shell
 npm run lead -- plan <plan.json>               # create a batch (tasks → BACKLOG/READY)
 npm run lead -- tasks [--batch B] [--state S]
-npm run lead -- run [--batch B] [--workers N]  # needs `npm run dev`
+npm run lead -- run [--batch B] [--workers N]  # needs `npm run dev`; N logical workers (or AGENTIC_WORKER_CONCURRENCY), model calls stay limited by AGENTIC_MODEL_CONCURRENCY
 npm run lead -- status [--batch B]
 npm run lead -- review list | pack | decide <task> approve|reject|escalate --feedback "..."
 npm run lead -- integrate <batch>

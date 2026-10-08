@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DEFAULT_MODEL_WAIT_BUDGET_MS, modelWaitBudgetMs } from '../capacity/model-capacity.ts';
 import { delegationRequestSchema, languageOf, type Language } from '../execution/delegation.ts';
 
 /**
@@ -100,12 +101,24 @@ export type BatchPlan = z.output<typeof batchPlanSchema>;
 export type BatchPlanInput = z.input<typeof batchPlanSchema>;
 
 export interface SchedulerConfig {
+  /**
+   * LOGICAL workers: tasks that may be in their execution lifecycle (CLAIMED/CODING/VERIFYING) at once. This is a
+   * different limit from model concurrency, which is the machine-wide lease database in src/runtime/capacity
+   * (AGENTIC_MODEL_CONCURRENCY) held only around each model call: three logical workers may each prepare a worktree,
+   * wait for the model, run verification and so on while a single one owns the inference slot.
+   */
   maxConcurrentWorkers: number;
-  maxConcurrentOllamaRequests: number;
   /** A claim's lease; heartbeats extend it while the worker is alive. */
   workerLeaseTimeoutMs: number;
   /** Hard wall-clock cap per task run (executor is aborted past it). */
   taskTimeoutMs: number;
+  /**
+   * Cumulative time one task may spend QUEUED for a model permit; it does not count against `taskTimeoutMs` (the active
+   * execution budget). Exhausting it fails the task as `capacity_wait_timeout` (RUNTIME_FAILURE, retryable). Total wall
+   * clock per run is therefore bounded by taskTimeoutMs + maxCapacityWaitMs. Same value the runner enforces
+   * (AGENTIC_MODEL_WAIT_BUDGET_MS).
+   */
+  maxCapacityWaitMs: number;
   /** Max distinct tasks that may be claimed within one batch (corrections included). */
   maxTasksPerBatch: number;
   maxReviewCorrections: number;
@@ -115,11 +128,14 @@ export interface SchedulerConfig {
   workerLanguages: Language[];
 }
 
+/** Upper bound on logical workers for this hardware profile (verification runs `go test` / jest in parallel). */
+export const MAX_WORKER_CONCURRENCY = 3;
+
 export const DEFAULT_CONFIG: SchedulerConfig = {
   maxConcurrentWorkers: 1,
-  maxConcurrentOllamaRequests: 1,
   workerLeaseTimeoutMs: 5 * 60_000,
   taskTimeoutMs: 30 * 60_000,
+  maxCapacityWaitMs: DEFAULT_MODEL_WAIT_BUDGET_MS,
   maxTasksPerBatch: 5,
   maxReviewCorrections: 2,
   pollMs: 2_000,
@@ -128,13 +144,29 @@ export const DEFAULT_CONFIG: SchedulerConfig = {
 
 export function resolveConfig(overrides: Partial<SchedulerConfig> = {}): SchedulerConfig {
   const config = { ...DEFAULT_CONFIG, ...Object.fromEntries(Object.entries(overrides).filter(([, v]) => v !== undefined)) } as SchedulerConfig;
-  const positive = ['maxConcurrentWorkers', 'maxConcurrentOllamaRequests', 'workerLeaseTimeoutMs', 'taskTimeoutMs', 'maxTasksPerBatch', 'pollMs'] as const;
+  const positive = ['maxConcurrentWorkers', 'workerLeaseTimeoutMs', 'taskTimeoutMs', 'maxCapacityWaitMs', 'maxTasksPerBatch', 'pollMs'] as const;
   for (const key of positive) {
     if (!Number.isInteger(config[key]) || config[key] < 1) throw new Error(`config ${key} must be a positive integer`);
   }
   if (!Number.isInteger(config.maxReviewCorrections) || config.maxReviewCorrections < 0) throw new Error('config maxReviewCorrections must be an integer >= 0');
-  if (config.maxConcurrentWorkers > 3) throw new Error('maxConcurrentWorkers above 3 is not supported on this hardware profile');
+  if (config.maxConcurrentWorkers > MAX_WORKER_CONCURRENCY) throw new Error(`maxConcurrentWorkers above ${MAX_WORKER_CONCURRENCY} is not supported on this hardware profile`);
   return config;
+}
+
+/**
+ * Scheduler settings taken from the environment. AGENTIC_WORKER_CONCURRENCY sets the logical worker pool; a malformed
+ * value is an error rather than a silent default, because "I asked for 3 and got 1" is an invisible performance bug.
+ * (Model concurrency is deliberately NOT here: it lives in the machine-wide capacity database, AGENTIC_MODEL_CONCURRENCY.)
+ */
+export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Partial<SchedulerConfig> {
+  const out: Partial<SchedulerConfig> = {};
+  const raw = env.AGENTIC_WORKER_CONCURRENCY?.trim();
+  if (raw) {
+    if (!/^\d+$/.test(raw)) throw new Error(`AGENTIC_WORKER_CONCURRENCY must be a positive integer, got "${raw}"`);
+    out.maxConcurrentWorkers = Number(raw);
+  }
+  if (env.AGENTIC_MODEL_WAIT_BUDGET_MS?.trim()) out.maxCapacityWaitMs = modelWaitBudgetMs(env); // validated by the same function the runner uses
+  return out;
 }
 
 /** The task's file-ownership set: the files nobody else may be working on concurrently. */
@@ -153,6 +185,7 @@ export type FailureCategory =
   | 'forbidden_mutation'
   | 'runtime_unavailable'
   | 'task_timeout'
+  | 'capacity_wait_timeout'
   | 'executor_error'
   | 'lease_expired'
   | 'review_gate_blocked'

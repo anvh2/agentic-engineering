@@ -4,7 +4,9 @@
 //
 //   npm run lead:plan -- <plan.json>                       create a batch (tasks start in BACKLOG, then READY when unblocked)
 //   npm run lead:tasks -- [--batch B] [--state S] [--markdown]
-//   npm run lead:run -- [--batch B] [--workers N] [--ollama N] [--server URL]   needs `npm run dev` running
+//   npm run lead:run -- [--batch B] [--workers N] [--server URL]   needs `npm run dev` running
+//        logical workers: --workers, else AGENTIC_WORKER_CONCURRENCY (default 1, max 3). Model concurrency is separate:
+//        the machine-wide capacity database (AGENTIC_MODEL_CONCURRENCY, default 1); more workers never mean more model calls.
 //   npm run lead:status -- [--batch B]                     states, pending reviews, issues, metrics
 //   npm run lead:review -- list | pack [--out F] | decide <task> approve|reject|escalate [--feedback "..."]
 //   npm run lead -- integrate <batch>                merge APPROVED tasks into lead-integration/<batch>, verify
@@ -23,7 +25,8 @@ import { computeMetrics, reconcileState, renderBacklog } from '../src/runtime/sc
 import { pendingReviews, renderReviewPack, reviewDecision, startClaudeTask, takeOverEscalated, writeReviewPack } from '../src/lead/review.ts';
 import { Scheduler } from '../src/runtime/scheduler/scheduler.ts';
 import { SchedulerStore } from '../src/runtime/scheduler/store.ts';
-import { resolveConfig, type SchedulerConfig } from '../src/runtime/scheduler/types.ts';
+import { sharedModelCapacity } from '../src/runtime/capacity/model-capacity.ts';
+import { configFromEnv, resolveConfig, type SchedulerConfig } from '../src/runtime/scheduler/types.ts';
 import { WorktreeManager } from '../src/runtime/worktree/worktree.ts';
 
 const args = process.argv.slice(2);
@@ -41,14 +44,17 @@ async function loadConfig(): Promise<SchedulerConfig> {
   const file = join(workdir, 'scheduler.config.json');
   const fromFile = existsSync(file) ? JSON.parse(await readFile(file, 'utf8')) : {};
   const num = (name: string) => (flag(name) ? Number(flag(name)) : undefined);
+  if (has('--ollama')) throw new Error('--ollama was removed: model concurrency is machine-wide (AGENTIC_MODEL_CONCURRENCY, stored in the capacity database), not a scheduler setting');
+  if ('maxConcurrentOllamaRequests' in fromFile) console.warn('lead: ignoring maxConcurrentOllamaRequests in scheduler.config.json (removed; model concurrency is AGENTIC_MODEL_CONCURRENCY)');
+  // precedence: --workers flag > AGENTIC_WORKER_CONCURRENCY > scheduler.config.json > default
   return resolveConfig({
     ...fromFile,
-    maxConcurrentWorkers: num('--workers') ?? fromFile.maxConcurrentWorkers,
-    maxConcurrentOllamaRequests: num('--ollama') ?? fromFile.maxConcurrentOllamaRequests,
+    maxConcurrentWorkers: num('--workers') ?? configFromEnv().maxConcurrentWorkers ?? fromFile.maxConcurrentWorkers,
     maxTasksPerBatch: num('--max-tasks') ?? fromFile.maxTasksPerBatch,
     taskTimeoutMs: num('--task-timeout-ms') ?? fromFile.taskTimeoutMs,
     workerLeaseTimeoutMs: num('--lease-ms') ?? fromFile.workerLeaseTimeoutMs,
     maxReviewCorrections: num('--max-corrections') ?? fromFile.maxReviewCorrections,
+    maxCapacityWaitMs: configFromEnv().maxCapacityWaitMs ?? fromFile.maxCapacityWaitMs,
   });
 }
 
@@ -56,7 +62,9 @@ function table(batchId?: string, state?: string): void {
   for (const t of store.listTasks({ batchId })) {
     if (state && t.state !== state) continue;
     const lease = t.leaseOwner ? ` lease=${t.leaseOwner}@${t.claimEpoch}` : '';
+    const waiting = t.state === 'BACKLOG' ? store.dependencyStatus(t).waitingOn : [];
     console.log(`${t.state.padEnd(15)} p${String(t.priority).padStart(2)} ${t.id}${t.spec.dependsOn.length ? `  <- ${t.spec.dependsOn.join(',')}` : ''}  [${t.executor}${t.language ? `/${t.language}` : ''}] attempts=${t.attempts} claims=${t.claims}${lease}${t.runId ? `  run=${t.runId}` : ''}`);
+    if (waiting.length > 0) console.log(`${' '.repeat(16)}waiting on ${waiting.map((w) => `${w.id} (${w.state})`).join(', ')}`);
     if (t.stateReason && !['READY', 'BACKLOG'].includes(t.state)) console.log(`${' '.repeat(16)}${t.failureCategory ? `[${t.failureCategory}] ` : ''}${t.stateReason}`);
   }
 }
@@ -81,10 +89,12 @@ async function main(): Promise<void> {
     }
     case 'run': {
       const config = await loadConfig();
-      const executor = createMastraExecutor({ server: flag('--server'), taskTimeoutMs: config.taskTimeoutMs });
-      const scheduler = new Scheduler({ store, executor, workspace: worktrees, config, log: (l) => console.log(`  ${l}`) });
+      const executor = createMastraExecutor({ server: flag('--server'), taskTimeoutMs: config.taskTimeoutMs + config.maxCapacityWaitMs /* poll backstop = the hard bound: active budget + queueing budget */ });
+      const scheduler = new Scheduler({ store, executor, workspace: worktrees, config, capacity: sharedModelCapacity(), log: (l) => console.log(`  ${l}`) });
       process.on('SIGINT', () => scheduler.stop());
+      const capacity = sharedModelCapacity();
       console.log(`config: ${JSON.stringify(config)}`);
+      console.log(`logical workers: ${config.maxConcurrentWorkers}; active-execution timeout ${Math.round(config.taskTimeoutMs / 1000)}s (paused while queued) + queue budget ${Math.round(config.maxCapacityWaitMs / 1000)}s; model permits (machine-wide): ${capacity.permits}${process.env.AGENTIC_MODEL_CONCURRENCY && Number(process.env.AGENTIC_MODEL_CONCURRENCY) !== capacity.permits ? ` (AGENTIC_MODEL_CONCURRENCY=${process.env.AGENTIC_MODEL_CONCURRENCY} is ignored: the capacity database already holds ${capacity.permits})` : ''}`);
       const summary = await scheduler.run({ batchId: flag('--batch') });
       console.log(JSON.stringify(summary, null, 2));
       table(flag('--batch'));
@@ -122,12 +132,13 @@ async function main(): Promise<void> {
       const { reports, locked } = await integrateBatch(store, worktrees, { batchId: positional[0], log: (l) => console.log(`  ${l}`) });
       if (locked) console.log('another integrator holds the repository lock; try again shortly');
       for (const r of reports) console.log(`${r.outcome.padEnd(9)} ${r.taskId}${r.category ? ` [${r.category}]` : ''}${r.detail ? ` ${r.detail}` : ''}${r.integratedCommit ? ` -> ${r.integratedCommit.slice(0, 10)}` : ''}`);
-      process.exitCode = reports.some((r) => r.outcome === 'ESCALATED') ? 1 : 0;
+      for (const r of reports) if (r.conflict) console.log(`  conflict evidence for ${r.taskId}: files ${r.conflict.files.join(', ') || '-'}; already integrated: ${r.conflict.conflictingTasks.map((c) => c.taskId).join(', ') || '-'} (full evidence: task artifacts.integration.conflict)`);
+      process.exitCode = reports.some((r) => r.outcome === 'ESCALATED' || r.outcome === 'SKIPPED') ? 1 : 0;
       break;
     }
     case 'resume': {
       const config = await loadConfig();
-      const scheduler = new Scheduler({ store, executor: createMastraExecutor({ server: flag('--server'), taskTimeoutMs: config.taskTimeoutMs }), workspace: worktrees, config, log: (l) => console.log(`  ${l}`) });
+      const scheduler = new Scheduler({ store, executor: createMastraExecutor({ server: flag('--server'), taskTimeoutMs: config.taskTimeoutMs + config.maxCapacityWaitMs /* poll backstop = the hard bound: active budget + queueing budget */ }), workspace: worktrees, config, capacity: sharedModelCapacity(), log: (l) => console.log(`  ${l}`) });
       const r = scheduler.recover({ stealLeases: has('--steal') });
       console.log(`requeued: ${r.requeued.join(', ') || '-'}; claim budget exhausted: ${r.exhausted.join(', ') || '-'}`);
       if (has('--run')) console.log(JSON.stringify(await scheduler.run({ batchId: flag('--batch') }), null, 2));

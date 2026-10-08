@@ -1,6 +1,7 @@
 import { StoreError, type Fence, type SchedulerStore, type TaskRow } from './store.ts';
 import { resolveConfig, type FailureCategory, type SchedulerConfig } from './types.ts';
 import { WorkspaceError, type Workspace } from '../worktree/worktree.ts';
+import { ExecutionClock } from './execution-clock.ts';
 
 /**
  * Worker-pool scheduler. It ASSIGNS work and RECORDS outcomes; it contains no coding, retry or verification logic:
@@ -56,47 +57,13 @@ function isTransientDbError(err: unknown): boolean {
 /** Consecutive transient database failures the scheduling loop tolerates before giving up. */
 const MAX_CONSECUTIVE_DB_ERRORS = 20;
 
-/** Counting semaphore bounding concurrent local-model work (maxConcurrentOllamaRequests). */
-export class Semaphore {
-  private available: number;
-  private waiters: (() => void)[] = [];
-  constructor(permits: number) {
-    this.available = permits;
-  }
-  async acquire(signal?: AbortSignal): Promise<void> {
-    if (signal?.aborted) throw new Error('aborted');
-    if (this.available > 0) {
-      this.available--;
-      return;
-    }
-    await new Promise<void>((resolve, reject) => {
-      const waiter = () => {
-        signal?.removeEventListener('abort', onAbort);
-        resolve();
-      };
-      const onAbort = () => {
-        this.waiters = this.waiters.filter((w) => w !== waiter);
-        reject(new Error('aborted'));
-      };
-      this.waiters.push(waiter);
-      signal?.addEventListener('abort', onAbort, { once: true });
-    });
-  }
-  release(): void {
-    const next = this.waiters.shift();
-    if (next) next();
-    else this.available++;
-  }
-  get inUse(): number {
-    return this.waiters.length;
-  }
-}
-
 export interface RunSummary {
   claimed: string[];
   reviewPending: string[];
   failed: { id: string; state: string; category?: string | null }[];
   requeued: string[];
+  /** Most tasks that were in their execution lifecycle at the same instant during this run (concurrency actually achieved). */
+  peakInFlight: number;
   stopReason: 'idle' | 'aborted';
 }
 
@@ -106,7 +73,13 @@ export interface SchedulerDeps {
   workspace: Workspace;
   config?: Partial<SchedulerConfig>;
   log?: (line: string) => void;
-  /** Peak concurrency probe for tests/measurement. */
+  /**
+   * Where model-permit queueing can be observed (production: the machine-wide ModelCapacity). With it, `taskTimeoutMs`
+   * becomes an ACTIVE-execution budget that pauses while the task is queued for a permit, and the queueing itself is
+   * bounded by `maxCapacityWaitMs`. Without it the legacy single wall-clock deadline applies.
+   */
+  capacity?: { isWaiting(tag: string): boolean };
+  /** Called when a task's executor starts (tests/measurement). */
   onExecutorStart?: (task: TaskRow) => void;
 }
 
@@ -116,8 +89,8 @@ export class Scheduler {
   private executor: Executor;
   private workspace: Workspace;
   private log: (line: string) => void;
-  private ollama: Semaphore;
   private onExecutorStart?: (task: TaskRow) => void;
+  private capacity?: SchedulerDeps['capacity'];
   private abort = new AbortController();
 
   constructor(deps: SchedulerDeps) {
@@ -126,8 +99,8 @@ export class Scheduler {
     this.workspace = deps.workspace;
     this.config = resolveConfig(deps.config);
     this.log = deps.log ?? (() => {});
-    this.ollama = new Semaphore(this.config.maxConcurrentOllamaRequests);
     this.onExecutorStart = deps.onExecutorStart;
+    this.capacity = deps.capacity;
   }
 
   stop(): void {
@@ -135,11 +108,15 @@ export class Scheduler {
   }
 
   /**
-   * Drains claimable work with at most maxConcurrentWorkers in flight. Terminates when nothing is claimable and
-   * nothing is in flight (no busy loop: it waits on task completion or a bounded poll timer).
+   * Drains claimable work with at most maxConcurrentWorkers logical workers in flight. Terminates when nothing is
+   * claimable and nothing is in flight (no busy loop: it waits on task completion or a bounded poll timer).
+   *
+   * Worker concurrency is NOT model concurrency. Every in-flight task runs its whole lifecycle (worktree, workflow,
+   * verification, post-run checks) concurrently; the only point where they queue is the machine-wide model capacity
+   * lease taken by the coding runner around each model call (src/runtime/capacity), which no scheduler setting bypasses.
    */
   async run(options: { batchId?: string; workerPrefix?: string } = {}): Promise<RunSummary> {
-    const summary: RunSummary = { claimed: [], reviewPending: [], failed: [], requeued: [], stopReason: 'idle' };
+    const summary: RunSummary = { claimed: [], reviewPending: [], failed: [], requeued: [], peakInFlight: 0, stopReason: 'idle' };
     const prefix = options.workerPrefix ?? `worker-${process.pid}`;
     const inflight = new Map<string, Promise<void>>();
     const slots = new Set<number>(); // worker slots in use
@@ -170,6 +147,7 @@ export class Scheduler {
             slots.delete(free);
           });
           inflight.set(claim.task.id, p);
+          summary.peakInFlight = Math.max(summary.peakInFlight, inflight.size);
         }
         dbErrors = 0;
       } catch (err) {
@@ -224,12 +202,33 @@ export class Scheduler {
         ctl.abort(new Error('lease lost'));
       }
     }, Math.max(50, Math.floor(this.config.workerLeaseTimeoutMs / 3)));
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      ctl.abort(new Error('task timeout'));
-    }, this.config.taskTimeoutMs);
+    // Two budgets (see execution-clock.ts): active execution (taskTimeoutMs), which does not run while the task is queued
+    // for a model permit, and the queueing itself (maxCapacityWaitMs). Without a capacity probe: the single legacy deadline.
+    let capacityWaitExpired = false;
+    const tag = claimed.spec.request?.contract.taskId ?? claimed.id; // what the runner tags its queue entry with
+    const clock = this.capacity ? new ExecutionClock(Date.now(), this.config.taskTimeoutMs, this.config.maxCapacityWaitMs) : undefined;
+    const timeout = clock
+      ? setInterval(() => {
+          let waiting = false;
+          try {
+            waiting = this.capacity!.isWaiting(tag);
+          } catch {
+            /* an unreadable capacity database must not stop the clock: count the interval as active (the stricter reading) */
+          }
+          const verdict = clock.tick(Date.now(), waiting);
+          if (verdict === 'wait_budget_exhausted') {
+            capacityWaitExpired = true;
+            ctl.abort(new Error('capacity wait budget exhausted'));
+          } else if (verdict === 'active_timeout') {
+            timedOut = true;
+            ctl.abort(new Error('task timeout'));
+          }
+        }, Math.max(5, Math.min(1_000, Math.floor(Math.min(this.config.pollMs, this.config.taskTimeoutMs / 4)))))
+      : setTimeout(() => {
+          timedOut = true;
+          ctl.abort(new Error('task timeout'));
+        }, this.config.taskTimeoutMs);
     const started = store.now();
-    let ollamaHeld = false;
 
     const fail = (to: 'RUNTIME_FAILURE' | 'ESCALATED' | 'BLOCKED', category: FailureCategory | string, reason: string): undefined => {
       try {
@@ -281,9 +280,10 @@ export class Scheduler {
         }
       }
 
+      // A timeout, cancellation or lost lease that fired while the worktree was being prepared must stop the task HERE: an
+      // executor handed an already-aborted signal would never see an 'abort' event and would wait forever.
+      ctl.signal.throwIfAborted();
       if (!outcome) {
-        await this.ollama.acquire(ctl.signal);
-        ollamaHeld = true;
         store.transition(task.id, 'CODING', { actor: fence.owner, reason: 'executor started', expectFrom: 'CLAIMED', fence });
         this.onExecutorStart?.(task);
         const running = store.requireTask(task.id);
@@ -296,17 +296,18 @@ export class Scheduler {
             store.recordRun(task.id, fence, runId);
           },
         });
-        this.ollama.release();
-        ollamaHeld = false;
       } else {
         store.transition(task.id, 'CODING', { actor: fence.owner, reason: 'adopting previous run outcome', expectFrom: 'CLAIMED', fence });
       }
-      await this.complete(task.id, fence, outcome, started);
+      await this.complete(task.id, fence, outcome, started, clock?.waitedMs);
     } catch (err) {
       if (leaseLost || (err instanceof StoreError && err.code === 'stale_owner')) {
         this.log(`${claimed.id}: ownership lost; result discarded (task state belongs to its new owner)`);
+      } else if (capacityWaitExpired) {
+        fail('RUNTIME_FAILURE', 'capacity_wait_timeout', `queued for a model permit for ${clock?.waitedMs ?? '?'}ms, past maxCapacityWaitMs of ${this.config.maxCapacityWaitMs}ms; retry when the model is less contended`);
+        await this.cancelAbandonedRun(claimed.id);
       } else if (timedOut) {
-        fail('RUNTIME_FAILURE', 'task_timeout', `task exceeded taskTimeout of ${this.config.taskTimeoutMs}ms`);
+        fail('RUNTIME_FAILURE', 'task_timeout', `task exceeded taskTimeout of ${this.config.taskTimeoutMs}ms${clock ? ` of active execution (${clock.waitedMs}ms queued for a model permit not counted)` : ''}`);
         await this.cancelAbandonedRun(claimed.id);
       } else if (this.abort.signal.aborted) {
         fail('RUNTIME_FAILURE', 'executor_error', 'scheduler stopped while the task was running');
@@ -314,7 +315,6 @@ export class Scheduler {
         fail('RUNTIME_FAILURE', 'executor_error', `executor failed: ${(err as Error).message}`);
       }
     } finally {
-      if (ollamaHeld) this.ollama.release();
       clearInterval(heartbeat);
       clearTimeout(timeout);
       this.abort.signal.removeEventListener('abort', onGlobalAbort);
@@ -334,7 +334,7 @@ export class Scheduler {
   }
 
   /** Persists an executor outcome. Idempotent: a stale or duplicate completion is rejected by the fence / state check. */
-  async complete(taskId: string, fence: Fence, outcome: ExecutorOutcome, startedAt: number): Promise<void> {
+  async complete(taskId: string, fence: Fence, outcome: ExecutorOutcome, startedAt: number, capacityWaitMs?: number): Promise<void> {
     const { store } = this;
     const current = store.requireTask(taskId);
     const patchBase = {
@@ -343,7 +343,7 @@ export class Scheduler {
       runtimeRetries: current.runtimeRetries + outcome.runtimeRetries,
       codingMs: store.now() - startedAt,
     };
-    const artifacts = { ...(outcome.artifactDir ? { artifactDir: outcome.artifactDir } : {}), ...(outcome.studioUrl ? { studioUrl: outcome.studioUrl } : {}) };
+    const artifacts = { ...(outcome.artifactDir ? { artifactDir: outcome.artifactDir } : {}), ...(outcome.studioUrl ? { studioUrl: outcome.studioUrl } : {}), ...(capacityWaitMs !== undefined ? { capacityWaitMs } : {}) };
 
     if (outcome.status === 'PASS') {
       store.transition(taskId, 'VERIFYING', { actor: fence.owner, reason: 'runtime PASS; running post-run change checks', expectFrom: 'CODING', fence, patch: { ...patchBase, artifacts } });
@@ -398,7 +398,7 @@ export class Scheduler {
     }
 
     if (outcome.status === 'RUNTIME_FAILURE') {
-      store.transition(taskId, 'RUNTIME_FAILURE', { actor: fence.owner, reason: outcome.reasons.join('; ') || 'model runtime failure', expectFrom: 'CODING', fence, patch: { ...patchBase, failureCategory: 'runtime_unavailable' satisfies FailureCategory, artifacts } });
+      store.transition(taskId, 'RUNTIME_FAILURE', { actor: fence.owner, reason: outcome.reasons.join('; ') || 'model runtime failure', expectFrom: 'CODING', fence, patch: { ...patchBase, failureCategory: (outcome.reasons.some((r) => r.includes('capacity_wait_timeout')) ? 'capacity_wait_timeout' : 'runtime_unavailable') satisfies FailureCategory, artifacts } });
       return;
     }
     const category: FailureCategory = outcome.status === 'KEPT_BY_CLAUDE' ? 'not_eligible' : outcome.failureCategory === 'D_forbidden_mutation' || outcome.reasons.includes('forbidden_mutation') ? 'forbidden_mutation' : 'coding_attempts_exhausted';

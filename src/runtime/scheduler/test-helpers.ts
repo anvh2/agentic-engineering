@@ -74,16 +74,20 @@ export interface FakeExecutorOptions {
 /** Writes `module.exports = "<id>";` to the task's allowed file inside its worktree and reports a runtime PASS. */
 export function fakeExecutor(options: FakeExecutorOptions = {}) {
   const calls: string[] = [];
+  const intervals: { id: string; start: number; end: number | null }[] = [];
   let active = 0;
   let peak = 0;
-  const executor: Executor & { calls: string[]; peak: () => number } = {
+  const executor: Executor & { calls: string[]; peak: () => number; intervals: typeof intervals } = {
     calls,
+    intervals,
     peak: () => peak,
     async run(input) {
       const id = input.task.id;
       calls.push(id);
       active++;
       peak = Math.max(peak, active);
+      const interval = { id, start: performance.now(), end: null as number | null };
+      intervals.push(interval);
       try {
         const runId = `run-${id}-${calls.filter((c) => c === id).length}`;
         input.onRunStart({ runId });
@@ -97,6 +101,7 @@ export function fakeExecutor(options: FakeExecutorOptions = {}) {
         return { runId, status: 'PASS', reasons: [], codingAttempts: 1, runtimeRetries: 0, verifier: { command: ['npx', 'jest'], exitCode: 0 } };
       } finally {
         active--;
+        interval.end = performance.now();
       }
     },
   };
@@ -104,3 +109,35 @@ export function fakeExecutor(options: FakeExecutorOptions = {}) {
 }
 
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Resolves once `n` callers have arrived; rejects (instead of hanging the suite) if they do not all arrive in time. */
+export function barrier(n: number, timeoutMs = 10_000) {
+  let arrived = 0;
+  let open!: () => void;
+  let fail!: (e: Error) => void;
+  const gate = new Promise<void>((resolve, reject) => ((open = resolve), (fail = reject)));
+  const timer = setTimeout(() => fail(new Error(`barrier: only ${arrived}/${n} arrived within ${timeoutMs}ms (the work did not overlap)`)), timeoutMs);
+  return {
+    arrived: () => arrived,
+    async wait(): Promise<void> {
+      arrived += 1;
+      if (arrived >= n) {
+        clearTimeout(timer);
+        open();
+      }
+      await gate;
+    },
+  };
+}
+
+/** The most intervals that were open at the same instant. */
+export function maxOverlap(intervals: { start: number; end: number | null }[]): number {
+  const events = intervals.flatMap((i) => [{ at: i.start, d: 1 }, { at: i.end ?? Infinity, d: -1 }]).sort((a, b) => a.at - b.at || a.d - b.d);
+  let cur = 0;
+  let max = 0;
+  for (const e of events) {
+    cur += e.d;
+    max = Math.max(max, cur);
+  }
+  return max;
+}

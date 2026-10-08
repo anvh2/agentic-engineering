@@ -7,6 +7,7 @@ const lease = await capacity.acquire(`child-${process.pid}`);
 const start = Date.now();
 if (mode === 'hold-forever') {
   console.log(JSON.stringify({ pid: process.pid, acquired: start }));
+  setInterval(() => {}, 1 << 30); // a REF'd timer: a bare never-resolving promise does not keep Node alive (the child would exit and its lease be reaped as a dead pid)
   await new Promise(() => {}); // until killed
 }
 await new Promise((r) => setTimeout(r, Number(holdMs)));

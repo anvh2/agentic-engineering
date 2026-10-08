@@ -8,7 +8,7 @@ import { RequestContext } from '@mastra/core/request-context';
 import { z } from 'zod';
 import { REPOSITORY_ROOT_CONTEXT_KEY } from '../../workers/tools/repository-tools.ts';
 import { runSandboxedCommand, sandboxStatus } from '../sandbox/sandbox.ts';
-import { sharedModelCapacity, type ModelCapacity } from '../capacity/model-capacity.ts';
+import { CapacityWaitTimeout, modelWaitBudgetMs, sharedModelCapacity, type CapacityLease, type ModelCapacity } from '../capacity/model-capacity.ts';
 import { createRepairLoopTracker } from './repair-loop-tracker.ts';
 import { runtimeMetrics, type RuntimeMetrics } from '../../observability/metrics.ts';
 import { createTraceSink, type TraceEvent, type TraceSink } from './coding-task-trace.ts';
@@ -80,6 +80,8 @@ export interface AttemptRecord {
   editFailures: number;
   /** Model-runtime retries used inside this attempt (0 or 1). Separate from coding retries. */
   runtimeRetries: number;
+  /** Time spent WAITING for a machine-wide model permit (queueing behind other workers), excluded from the inference time. */
+  capacityWaitMs: number;
   /** Set only when the runtime retry was exhausted; the attempt did not count as a coding attempt. */
   runtimeError?: string;
   /** First chars of the model's final visible text - diagnostic only, never evidence. */
@@ -149,6 +151,12 @@ export interface RunCodingTaskOptions {
   signal?: AbortSignal;
   /** Machine-wide local-model concurrency limit (default: the shared lease database). Held only around each model call. */
   capacity?: ModelCapacity;
+  /**
+   * Cumulative time this task run may spend QUEUED for model permits (default AGENTIC_MODEL_WAIT_BUDGET_MS, 30 min).
+   * Waiting is not execution: it is bounded separately, and exhausting it is an explicit `capacity_wait_timeout`
+   * runtime failure (retryable by the Lead), not a model failure and not a coding attempt.
+   */
+  capacityWaitBudgetMs?: number;
 }
 
 const EDIT_TOOLS = new Set(['applyPatch', 'writeFile']);
@@ -271,6 +279,7 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
   const maxAttempts = options.maxAttempts ?? 3;
   const timeoutMs = options.modelTimeoutMs ?? 300_000;
   const modelLabel = options.modelLabel ?? 'worker';
+  const waitBudgetMs = options.capacityWaitBudgetMs ?? modelWaitBudgetMs();
   const trace = options.trace ?? createTraceSink();
   const metrics = options.metrics ?? runtimeMetrics;
   const taskStart = Date.now();
@@ -346,6 +355,7 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
       forbiddenFiles: [],
       editFailures: 0,
       runtimeRetries: 0,
+      capacityWaitMs: 0,
       formatter: null,
       verification: null,
     };
@@ -361,7 +371,8 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
       const requestContext = new RequestContext();
       requestContext.set(REPOSITORY_ROOT_CONTEXT_KEY, repoRoot);
       const tracker = createRepairLoopTracker(3);
-      const modelStart = Date.now();
+      let capacityWaitExpired = false;
+      let inferenceStart: number | undefined; // set once the permit is held: waiting for the model is not inference time
       let failure: string | undefined;
 
       const onIterationComplete = async (ctx: IterationCompleteContext): Promise<IterationCompleteResult | void> => {
@@ -387,16 +398,37 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
         return tracker.onIterationComplete(ctx);
       };
 
-      let permit: { release(): void } | undefined;
+      let permit: CapacityLease | undefined;
       try {
         const waitStart = Date.now();
-        permit = await (options.capacity ?? sharedModelCapacity()).acquire(`${modelLabel}:${task.taskId}:pid${process.pid}`, options.signal);
-        trace.emit('model_started', { model: modelLabel, attempt: attemptNo, runtimeTry, capacityWaitMs: Date.now() - waitStart });
+        let waitOutcome: 'acquired' | 'aborted' | 'timeout' = 'aborted';
+        try {
+          // the budget is cumulative over the whole task run (every attempt and retry), so a task cannot queue forever one call at a time
+          const spent = records.reduce((a, r) => a + r.capacityWaitMs, 0);
+          const remaining = Math.max(1, waitBudgetMs - spent);
+          permit = await (options.capacity ?? sharedModelCapacity()).acquire(`${modelLabel}:${task.taskId}:pid${process.pid}`, options.signal, { tag: task.taskId, maxWaitMs: remaining });
+          waitOutcome = 'acquired';
+        } catch (err) {
+          if (err instanceof CapacityWaitTimeout) {
+            waitOutcome = 'timeout';
+            capacityWaitExpired = true;
+          }
+          throw err;
+        } finally {
+          const waitedMs = Date.now() - waitStart;
+          record.capacityWaitMs += waitedMs;
+          metrics.modelCapacityWait(waitedMs / 1000, waitOutcome);
+        }
+        inferenceStart = Date.now();
+        trace.emit('model_started', { model: modelLabel, attempt: attemptNo, runtimeTry, capacityWaitMs: inferenceStart - waitStart });
         const response = await worker.generate(await buildPrompt(repoRoot, task, previousFailure), {
           requestContext,
           onIterationComplete,
           abortSignal: options.signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), options.signal]) : AbortSignal.timeout(timeoutMs),
         });
+        // The permit is leased: if its renewals were refused (the process stalled past leaseMs and the permit was reclaimed),
+        // another holder may have overlapped this call. Never silent: it is the one way two calls can share a single permit.
+        if (permit.lost) trace.emit('worker_status', { text: 'model permit lease was lost during this call (stalled past its lease); another holder may have overlapped it', diagnostic: true });
         const steps = response.steps ? response.steps.length : 1;
         if (steps === 0) {
           // Mastra can return (not throw) an aborted/failed run with zero steps - e.g. finishReason
@@ -410,10 +442,10 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
           record.editFailures = activity.editFailures;
           record.workerText = (response.text ?? '').slice(0, 200);
           record.modelStats = { inputTokens: response.usage?.inputTokens, outputTokens: response.usage?.outputTokens };
-          metrics.workerInference(modelLabel, (Date.now() - modelStart) / 1000, 'ok');
+          metrics.workerInference(modelLabel, (Date.now() - inferenceStart) / 1000, 'ok');
           trace.emit('model_finished', {
             finishReason: response.finishReason,
-            durationMs: Date.now() - modelStart,
+            durationMs: Date.now() - inferenceStart,
             steps,
             inputTokens: response.usage?.inputTokens,
             outputTokens: response.usage?.outputTokens,
@@ -423,13 +455,20 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
       } catch (err) {
         failure = (err as Error).message;
       } finally {
+        if (!responded) {
+          // Recorded BEFORE the permit is released, exactly like the success path: the next holder's model_started must never
+          // precede this call's model_finished in the traces. A wait that never produced a permit (cancelled while queued) was
+          // not an inference, so it is not observed as one.
+          const inferenceMs = inferenceStart === undefined ? 0 : Date.now() - inferenceStart;
+          if (inferenceStart !== undefined) metrics.workerInference(modelLabel, inferenceMs / 1000, 'error');
+          trace.emit('model_finished', { error: failure, durationMs: inferenceMs });
+        }
         permit?.release();
       }
 
       if (!responded) {
-        metrics.workerInference(modelLabel, (Date.now() - modelStart) / 1000, 'error');
-        trace.emit('model_finished', { error: failure, durationMs: Date.now() - modelStart });
-        if (runtimeTry < MAX_RUNTIME_RETRIES && !options.signal?.aborted) {
+        // a spent wait budget is not retried inside the runner: the Lead decides (explicit capacity_wait_timeout)
+        if (runtimeTry < MAX_RUNTIME_RETRIES && !options.signal?.aborted && !capacityWaitExpired) {
           record.runtimeRetries += 1;
           metrics.retry('runtime');
           trace.emit('runtime_retry', { attempt: attemptNo, retry: record.runtimeRetries, reason: failure });

@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { validateJsVerification } from '../execution/delegation.ts';
 import { runSandboxedCommand } from '../sandbox/sandbox.ts';
@@ -35,6 +35,23 @@ const defaultRunner: CommandRunner = async (command, cwd) => {
   return { exitCode: r.exitCode, output: `${r.stdout}${r.stderr}`, timedOut: r.timedOut };
 };
 
+/** What the Engineering Lead needs to decide about a merge that could not be completed: nothing was resolved or overwritten. */
+export interface ConflictEvidence {
+  /** Files git reports as conflicted (empty for a conflict that is not file-level). */
+  files: string[];
+  /** The integration tip the merge was attempted on (the branch is restored to exactly this). */
+  integrationTip: string;
+  /** The task's reviewed commit, and the merge base git used. */
+  taskHead: string | null;
+  mergeBase: string;
+  /** Per conflicted file: commits that reached the integration branch since the merge base and touched it. */
+  integratedSince: { file: string; commits: string[] }[];
+  /** DONE tasks of this batch already on the integration branch whose declared files include a conflicted file. */
+  conflictingTasks: { taskId: string; files: string[] }[];
+  /** The conflicted file contents with git's markers, truncated: both sides of every hunk. */
+  markers: { file: string; excerpt: string }[];
+}
+
 export interface IntegrationReport {
   taskId: string;
   outcome: 'DONE' | 'ESCALATED' | 'SKIPPED';
@@ -42,6 +59,7 @@ export interface IntegrationReport {
   detail?: string;
   integratedCommit?: string;
   commands?: { command: string[]; exitCode: number | null; tail: string }[];
+  conflict?: ConflictEvidence;
 }
 
 const IDENTITY = ['-c', 'user.name=agentic-integrator', '-c', 'user.email=integrator@localhost', '-c', 'commit.gpgsign=false'];
@@ -85,9 +103,18 @@ export async function integrateBatch(store: SchedulerStore, worktrees: WorktreeM
     await assertCleanIntegrationTree(ctx);
 
     const reports: IntegrationReport[] = [];
-    for (const candidate of store.listTasks({ batchId: batch.id, states: ['APPROVED'] })) {
+    // Deterministic order, independent of which worker finished first or when the Lead approved: dependencies before
+    // dependents, then (priority, creation, id). A dependent whose prerequisites are not all DONE is skipped, loudly.
+    for (const candidate of integrationOrder(store, store.listTasks({ batchId: batch.id, states: ['APPROVED'] }))) {
       const task = store.requireTask(candidate.id);
       if (task.state !== 'APPROVED') continue; // idempotent: DONE / already integrating tasks are never redone
+      const deps = store.dependencyStatus(task);
+      if (deps.status !== 'ready') {
+        const detail = deps.reason ?? `waiting on ${deps.waitingOn.map((w) => `${w.id} (${w.state})`).join(', ')}`;
+        ctx.log(`skipped ${task.id}: ${detail}`);
+        reports.push({ taskId: task.id, outcome: 'SKIPPED', detail: `dependencies not integrated: ${detail}` });
+        continue;
+      }
       reports.push(await integrateOne(ctx, task));
       store.promote('integrator');
     }
@@ -95,6 +122,28 @@ export async function integrateBatch(store: SchedulerStore, worktrees: WorktreeM
   } finally {
     store.releaseLock(lockName, owner);
   }
+}
+
+/**
+ * Stable topological order over the approved set: a task's (resolved) dependencies that are also waiting to integrate
+ * come first; everything else keeps the store's deterministic (priority desc, created, id) order.
+ */
+export function integrationOrder(store: SchedulerStore, tasks: TaskRow[]): TaskRow[] {
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  const out: TaskRow[] = [];
+  const seen = new Set<string>();
+  const visit = (t: TaskRow) => {
+    if (seen.has(t.id)) return;
+    seen.add(t.id); // the plan is validated acyclic, and `seen` makes a cycle harmless anyway
+    for (const depId of t.spec.dependsOn) {
+      const dep = store.resolveDependency(depId);
+      const waiting = dep && byId.get(dep.id);
+      if (waiting) visit(waiting);
+    }
+    out.push(t);
+  };
+  for (const t of tasks) visit(t);
+  return out;
 }
 
 interface Ctx {
@@ -156,11 +205,18 @@ async function integrateOne(ctx: Ctx, task: TaskRow): Promise<IntegrationReport>
   const preSha = await head(ctx);
   store.transition(task.id, 'INTEGRATING', { actor: ctx.actor, reason: 'integration started', expectFrom: 'APPROVED', patch: { artifacts: { integration: { preSha, startedAt: store.now() } } } });
 
-  const escalate = async (category: FailureCategory, detail: string, commands?: IntegrationReport['commands'], rollbackTo?: string): Promise<IntegrationReport> => {
+  const escalate = async (category: FailureCategory, detail: string, commands?: IntegrationReport['commands'], rollbackTo?: string, conflict?: ConflictEvidence): Promise<IntegrationReport> => {
     if (rollbackTo) await rollback(ctx, rollbackTo);
-    store.transition(task.id, 'ESCALATED', { actor: ctx.actor, reason: detail, expectFrom: 'INTEGRATING', patch: { failureCategory: category, artifacts: { integration: { preSha, failed: category, commands: commands ?? [] } } } });
+    // what was already on the branch when this failed: the other half of "these two changes do not work together"
+    const integratedBefore = store.listTasks({ batchId: ctx.batch.id, states: ['DONE'] }).map((t) => t.id);
+    store.transition(task.id, 'ESCALATED', {
+      actor: ctx.actor,
+      reason: detail,
+      expectFrom: 'INTEGRATING',
+      patch: { failureCategory: category, artifacts: { integration: { preSha, failed: category, commands: commands ?? [], integratedBefore, ...(conflict ? { conflict } : {}) } } },
+    });
     ctx.log(`integration of ${task.id} failed (${category}): ${detail}`);
-    return { taskId: task.id, outcome: 'ESCALATED', category, detail, commands };
+    return { taskId: task.id, outcome: 'ESCALATED', category, detail, commands, conflict };
   };
 
   // 1. the commit that was reviewed must still be the task branch tip
@@ -179,7 +235,16 @@ async function integrateOne(ctx: Ctx, task: TaskRow): Promise<IntegrationReport>
   const merge = await gitIn(ctx, [...IDENTITY, 'merge', '--no-ff', '-m', `integrate ${task.id}: ${task.title}`, task.headCommit]);
   if (!merge.success) {
     const conflicted = (await gitIn(ctx, ['diff', '--name-only', '--diff-filter=U'])).stdout.split('\n').filter(Boolean);
-    return escalate('integration_conflict', `merge conflict${conflicted.length ? ` in ${conflicted.join(', ')}` : ''}: ${(merge.stderr || merge.stdout).trim().slice(0, 300)}`, undefined, preSha);
+    // gathered BEFORE the rollback: afterwards the markers are gone. Nothing is resolved, merged or overwritten.
+    const evidence = await conflictEvidence(ctx, task, conflicted, preSha, base);
+    const others = evidence.conflictingTasks.map((c) => c.taskId);
+    return escalate(
+      'integration_conflict',
+      `merge conflict${conflicted.length ? ` in ${conflicted.join(', ')}` : ''}${others.length ? ` with already-integrated ${others.join(', ')}` : ''}: ${(merge.stderr || merge.stdout).trim().slice(0, 300)}`,
+      undefined,
+      preSha,
+      evidence,
+    );
   }
 
   // 4. materialize this task's runtime-owned oracles as permanent tests (Lead-authored content, committed separately)
@@ -226,6 +291,22 @@ async function integrateOne(ctx: Ctx, task: TaskRow): Promise<IntegrationReport>
   store.transition(task.id, 'DONE', { actor: ctx.actor, reason: 'integrated and verified', expectFrom: 'INTEGRATING', patch: { implementedBy: task.executor === 'claude' ? 'claude' : 'worker', artifacts: { integration: { preSha, integratedCommit, commands: results } } } });
   ctx.log(`integrated ${task.id} -> ${integratedCommit.slice(0, 10)}`);
   return { taskId: task.id, outcome: 'DONE', integratedCommit, commands: results };
+}
+
+async function conflictEvidence(ctx: Ctx, task: TaskRow, files: string[], integrationTip: string, mergeBase: string): Promise<ConflictEvidence> {
+  const integratedSince: ConflictEvidence['integratedSince'] = [];
+  const markers: ConflictEvidence['markers'] = [];
+  for (const file of files.slice(0, 10)) {
+    const log = await gitIn(ctx, ['log', '--format=%h %an: %s', '-n', '10', `${mergeBase}..${integrationTip}`, '--', file]);
+    integratedSince.push({ file, commits: log.stdout.split('\n').filter(Boolean) });
+    const content = await readFile(join(ctx.iw.path, file), 'utf8').catch(() => '(unreadable)');
+    markers.push({ file, excerpt: redact(content.slice(0, 2_000)) });
+  }
+  const conflictingTasks = ctx.store
+    .listTasks({ batchId: ctx.batch.id, states: ['DONE'] })
+    .map((t) => ({ taskId: t.id, files: ownedFilesOf(t.spec).filter((f) => files.includes(f)) }))
+    .filter((c) => c.files.length > 0);
+  return { files, integrationTip, taskHead: task.headCommit, mergeBase, integratedSince, conflictingTasks, markers };
 }
 
 /** Claude-direct completion: the Lead committed its change on the integration branch itself; verify, then mark DONE. */

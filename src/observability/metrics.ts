@@ -1,5 +1,6 @@
 import { Counter, Gauge, Histogram, Registry } from 'prom-client';
-import { readSchedulerState, resolveSchedulerDbPath, SchedulerStateUnavailable, TASK_STATES } from './scheduler-state.ts';
+import { defaultModelCapacityPath } from '../runtime/capacity/model-capacity.ts';
+import { INTEGRATION_FAILURE_CATEGORIES, readModelCapacity, readSchedulerState, resolveSchedulerDbPath, SchedulerStateUnavailable, TASK_STATES } from './scheduler-state.ts';
 
 /**
  * Operational (Prometheus) metrics for the runtime. Strictly additive observability: nothing here decides, gates or
@@ -27,6 +28,7 @@ export const RETRY_KINDS = ['runtime', 'coding'] as const;
 export const VERIFY_OUTCOMES = ['pass', 'fail', 'timeout'] as const;
 export const REVIEW_DECISIONS = ['APPROVED', 'REJECTED_WITH_FEEDBACK', 'ESCALATED_TO_HUMAN'] as const;
 export const INFERENCE_OUTCOMES = ['ok', 'error'] as const;
+export const CAPACITY_WAIT_OUTCOMES = ['acquired', 'aborted', 'timeout'] as const;
 
 const MAX_TRACKED_RUNS = 1_000;
 
@@ -46,6 +48,8 @@ export interface MetricsOptions {
   now?: () => number;
   /** Scheduler SQLite file for the persisted series. Default: resolved from the environment at each scrape. */
   schedulerDbPath?: string | (() => string);
+  /** Model-capacity SQLite file for the persisted capacity series. Default: the machine-wide lease database. */
+  modelCapacityDbPath?: string | (() => string);
   /** Wall clock (epoch ms) used to judge lease expiry; injectable for tests. */
   wallClock?: () => number;
 }
@@ -54,12 +58,14 @@ export function createMetrics(options: MetricsOptions = {}) {
   const registry = options.registry ?? new Registry();
   const now = options.now ?? (() => performance.now());
   const wallClock = options.wallClock ?? Date.now;
+  const capacityDbPath = () => (typeof options.modelCapacityDbPath === 'function' ? options.modelCapacityDbPath() : (options.modelCapacityDbPath ?? defaultModelCapacityPath()));
   const dbPath = () => (typeof options.schedulerDbPath === 'function' ? options.schedulerDbPath() : (options.schedulerDbPath ?? resolveSchedulerDbPath()));
 
   const workflowRuns = new Counter({ name: 'workflow_runs_total', help: 'Workflow runs that reached a terminal or suspended status.', labelNames: ['workflow', 'status'], registers: [registry] });
   const workflowDuration = new Histogram({ name: 'workflow_duration_seconds', help: 'Wall-clock duration of workflow runs.', labelNames: ['workflow'], buckets: [1, 5, 15, 30, 60, 120, 300, 600, 1200, 1800, 3600], registers: [registry] });
   const workerTasks = new Counter({ name: 'worker_tasks_total', help: 'Coding tasks completed by a worker, by runtime-verified outcome.', labelNames: ['worker', 'outcome'], registers: [registry] });
   const workerInference = new Histogram({ name: 'worker_inference_seconds', help: 'Duration of one worker model invocation.', labelNames: ['worker', 'outcome'], buckets: [0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600, 900], registers: [registry] });
+  const modelCapacityWait = new Histogram({ name: 'model_capacity_wait_seconds', help: 'LIVE. Time a model call spent queued for a machine-wide model permit (worker concurrency vs model concurrency). Inference time (worker_inference_seconds) starts after this wait.', labelNames: ['outcome'], buckets: [0.01, 0.1, 0.5, 1, 5, 15, 30, 60, 120, 300, 600], registers: [registry] });
   const codingAttempts = new Counter({ name: 'coding_attempts_total', help: 'Coding attempts (runtime-failed invocations excluded), by verification outcome.', labelNames: ['outcome'], registers: [registry] });
   const workerRetries = new Counter({ name: 'worker_retries_total', help: 'Retries inside the coding runner: model-runtime retries vs fresh-context coding retries.', labelNames: ['kind'], registers: [registry] });
   const verificationDuration = new Histogram({ name: 'verification_duration_seconds', help: 'Duration of one runtime verification command.', labelNames: ['outcome'], buckets: [0.1, 0.5, 1, 2, 5, 10, 30, 60, 120], registers: [registry] });
@@ -68,6 +74,11 @@ export function createMetrics(options: MetricsOptions = {}) {
   const queueDepth = new Gauge({ name: 'task_queue_depth', help: 'PERSISTED. Worker tasks in READY state in the scheduler database, waiting for a worker.', registers: [registry] });
   const activeWorkers = new Gauge({ name: 'active_workers', help: 'PERSISTED. Worker tasks holding an unexpired lease (CLAIMED, CODING or VERIFYING) in the scheduler database.', registers: [registry] });
   const schedulerTasks = new Gauge({ name: 'scheduler_tasks', help: 'PERSISTED. Tasks in the scheduler database by lifecycle state.', labelNames: ['state'], registers: [registry] });
+  const dependencyBlocked = new Gauge({ name: 'scheduler_dependency_blocked_tasks', help: 'PERSISTED. Tasks BLOCKED because a dependency can never complete (the DAG branches that need a human decision). Tasks merely waiting on a live dependency are scheduler_tasks{state="BACKLOG"}.', registers: [registry] });
+  const extraClaims = new Gauge({ name: 'scheduler_extra_claims', help: 'PERSISTED. Claims beyond each task\'s first (lease-expiry and runtime requeues): scheduler-level retries.', registers: [registry] });
+  const integrationFailures = new Gauge({ name: 'scheduler_integration_failed_tasks', help: 'PERSISTED. Tasks currently ESCALATED by integration (merge conflict, failed post-merge verification, divergence after review), by failure category.', labelNames: ['category'], registers: [registry] });
+  const modelPermits = new Gauge({ name: 'model_capacity_permits', help: 'PERSISTED. Machine-wide model-concurrency limit (permits in the capacity database).', registers: [registry] });
+  const modelInUse = new Gauge({ name: 'model_capacity_in_use', help: 'PERSISTED. Model permits currently held (unexpired leases). With model_capacity_permits this is model utilization; compare with active_workers to see workers queueing for the model.', registers: [registry] });
   const schedulerStateUp = new Gauge({ name: 'scheduler_state_up', help: '1 if the scheduler database was read successfully at this scrape, else 0 (missing, locked or unreadable); the PERSISTED series are absent when 0.', registers: [registry] });
   const schedulerReadErrors = new Counter({ name: 'scheduler_state_read_errors_total', help: 'LIVE. Scrapes where the scheduler database existed but could not be read (locked, corrupt, unexpected schema).', registers: [registry] });
   const instrumentationErrors = new Counter({ name: 'metrics_instrumentation_errors_total', help: 'Metric updates that failed and were swallowed.', registers: [registry] });
@@ -108,6 +119,9 @@ export function createMetrics(options: MetricsOptions = {}) {
     workerInference: guard((worker: string, seconds: number, outcome: string) => {
       workerInference.observe({ worker: sanitizeLabel(worker), outcome: oneOf(outcome, INFERENCE_OUTCOMES) }, Math.max(0, seconds));
     }),
+    modelCapacityWait: guard((seconds: number, outcome: string) => {
+      modelCapacityWait.observe({ outcome: oneOf(outcome, CAPACITY_WAIT_OUTCOMES) }, Math.max(0, seconds));
+    }),
     codingAttempt: guard((outcome: string) => {
       codingAttempts.inc({ outcome: oneOf(outcome, ATTEMPT_OUTCOMES) });
     }),
@@ -129,6 +143,21 @@ export function createMetrics(options: MetricsOptions = {}) {
     schedulerTasks.reset();
     queueDepth.remove();
     activeWorkers.remove();
+    dependencyBlocked.remove();
+    extraClaims.remove();
+    integrationFailures.reset();
+  }
+
+  function refreshModelCapacity(): void {
+    modelPermits.remove();
+    modelInUse.remove();
+    try {
+      const snapshot = readModelCapacity(capacityDbPath(), wallClock());
+      modelPermits.set(snapshot.permits);
+      modelInUse.set(snapshot.inUse);
+    } catch {
+      // absent (never used yet) or unreadable: the series are simply not reported
+    }
   }
 
   function refreshPersisted(): void {
@@ -137,6 +166,9 @@ export function createMetrics(options: MetricsOptions = {}) {
       const snapshot = readSchedulerState(dbPath(), wallClock());
       queueDepth.set(snapshot.queueDepth);
       activeWorkers.set(snapshot.activeWorkers);
+      dependencyBlocked.set(snapshot.dependencyBlocked);
+      extraClaims.set(snapshot.extraClaims);
+      for (const category of INTEGRATION_FAILURE_CATEGORIES) integrationFailures.set({ category }, snapshot.integrationFailures.find((f) => f.category === category)?.count ?? 0);
       for (const state of TASK_STATES) schedulerTasks.set({ state }, snapshot.tasksByState[state] ?? 0);
       for (const row of snapshot.reviewDecisions) {
         if (row.count > 0) reviewDecisions.inc({ decision: oneOf(row.decision, REVIEW_DECISIONS), reviewer: /^claude/i.test(row.reviewer) ? 'claude' : 'other' }, row.count);
@@ -156,6 +188,7 @@ export function createMetrics(options: MetricsOptions = {}) {
     render: async () => {
       try {
         refreshPersisted();
+        refreshModelCapacity();
       } catch {
         // observability must never break a scrape
       }

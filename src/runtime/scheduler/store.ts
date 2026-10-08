@@ -405,6 +405,7 @@ export class SchedulerStore {
     }
     for (const t of plan.tasks) {
       for (const dep of t.dependsOn) {
+        if (dep === t.id) throw new StoreError('invalid', `task ${t.id} depends on itself`);
         if (!ids.has(dep) && !this.getTask(dep)) throw new StoreError('invalid', `task ${t.id} depends on unknown task ${dep}`);
       }
       if (t.executor === 'worker' && !t.request) throw new StoreError('invalid', `worker task ${t.id} needs a request (contract + assessment)`);
@@ -452,25 +453,43 @@ export class SchedulerStore {
     return t;
   }
 
-  /** 'ready' (all deps DONE) | 'waiting' | 'failed' (a dependency can never complete without human action). */
-  dependencyStatus(task: TaskRow): { status: 'ready' | 'waiting' | 'failed'; reason?: string } {
+  /**
+   * The DAG contract. A task is executable only when EVERY dependency is DONE (reviewed, approved, integrated and
+   * verified on the batch's integration branch; so the dependent's worktree, cut from that branch, contains it).
+   *
+   *  - 'ready':   all dependencies DONE.
+   *  - 'waiting': at least one dependency is still on its way to DONE (BACKLOG, READY, running, REVIEW_PENDING,
+   *               APPROVED, INTEGRATING, REVIEW_REJECTED with a live correction, or RUNTIME_FAILURE with claims left
+   *               for a retry). `waitingOn` names each of them with its state, so a waiting task is never a mystery.
+   *  - 'failed':  a dependency can never reach DONE without a human decision: ESCALATED, CANCELLED, BLOCKED, a rejection
+   *               with no correction, a RUNTIME_FAILURE whose claim budget is spent, or a missing task. `promote` turns
+   *               the dependent into BLOCKED(dependency_failed) with the reason below, transitively, so no descendant
+   *               is left waiting for something that cannot happen. It returns to BACKLOG on its own if the
+   *               dependency is later recovered (retry / take-over).
+   */
+  dependencyStatus(task: TaskRow): { status: 'ready' | 'waiting' | 'failed'; reason?: string; waitingOn: { id: string; state: TaskState }[] } {
+    const waitingOn: { id: string; state: TaskState }[] = [];
     for (const depId of task.spec.dependsOn) {
       let dep: TaskRow | undefined;
       try {
         dep = this.resolveDependency(depId);
       } catch (err) {
         // never treat an unreadable dependency as done or as failed: wait until a human repairs the row
-        if (isCorrupt(err)) return { status: 'waiting', reason: err.message };
+        if (isCorrupt(err)) return { status: 'waiting', reason: err.message, waitingOn };
         throw err;
       }
-      if (!dep) return { status: 'failed', reason: `dependency ${depId} does not exist` };
+      if (!dep) return { status: 'failed', reason: `dependency ${depId} does not exist`, waitingOn: [] };
       if (dep.state === 'DONE') continue;
       if (['ESCALATED', 'CANCELLED', 'BLOCKED'].includes(dep.state) || (dep.state === 'REVIEW_REJECTED' && !dep.supersededBy)) {
-        return { status: 'failed', reason: `dependency ${dep.id} is ${dep.state}` };
+        const cause = dep.state === 'BLOCKED' && dep.failureCategory === 'dependency_failed' && dep.stateReason ? ` (${dep.stateReason})` : '';
+        return { status: 'failed', reason: `dependency ${dep.id} is ${dep.state}${cause}`, waitingOn: [] };
       }
-      return { status: 'waiting' };
+      if (dep.state === 'RUNTIME_FAILURE' && dep.claims >= dep.spec.maxClaims) {
+        return { status: 'failed', reason: `dependency ${dep.id} is RUNTIME_FAILURE with its claim budget spent (${dep.claims}/${dep.spec.maxClaims}); it cannot be retried`, waitingOn: [] };
+      }
+      waitingOn.push({ id: dep.id, state: dep.state });
     }
-    return { status: 'ready' };
+    return waitingOn.length > 0 ? { status: 'waiting', waitingOn } : { status: 'ready', waitingOn };
   }
 
   /**
