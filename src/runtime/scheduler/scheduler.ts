@@ -1,7 +1,8 @@
 import { StoreError, type Fence, type SchedulerStore, type TaskRow } from './store.ts';
-import { resolveConfig, type FailureCategory, type SchedulerConfig } from './types.ts';
+import { providerOfSpec, resolveConfig, type FailureCategory, type SchedulerConfig } from './types.ts';
 import { WorkspaceError, type Workspace } from '../worktree/worktree.ts';
 import { ExecutionClock } from './execution-clock.ts';
+import { authorizeProvider, DEFAULT_PROVIDER_ID } from '../execution/worker-provider.ts';
 import { cancelTaskRun, type CancelReport, type CancelRunResult } from './cancel.ts';
 
 /**
@@ -85,6 +86,8 @@ export interface SchedulerDeps {
   capacity?: { isWaiting(tag: string): boolean; engagedBy?(tag: string): { kind: 'lease' | 'waiter'; holder: string; pid: number }[] };
   /** How long a cancelled run gets to release the model before it is reported as still active (default 15 s). */
   cancelGraceMs?: number;
+  /** The operator's allow-list for non-default worker providers (`codex` or `codex:<taskId>`). Empty: only the local model runs. */
+  allowProviders?: readonly string[];
   /** Called when a task's executor starts (tests/measurement). */
   onExecutorStart?: (task: TaskRow) => void;
 }
@@ -99,6 +102,7 @@ export class Scheduler {
   private capacity?: SchedulerDeps['capacity'];
   private abort = new AbortController();
   private cancelGraceMs?: number;
+  private allowProviders: readonly string[];
   private stillActive: CancelRunResult[] = [];
   /** Tasks this scheduler is executing right now, with their run id once known (what a forced exit must report). */
   private live = new Map<string, { taskId: string; epoch: number; runId?: string }>();
@@ -112,6 +116,7 @@ export class Scheduler {
     this.onExecutorStart = deps.onExecutorStart;
     this.capacity = deps.capacity;
     this.cancelGraceMs = deps.cancelGraceMs;
+    this.allowProviders = deps.allowProviders ?? [];
   }
 
   /**
@@ -285,6 +290,15 @@ export class Scheduler {
       const batch = store.getBatch(claimed.batchId);
       if (!batch) return fail('RUNTIME_FAILURE', 'executor_error', `batch ${claimed.batchId} missing`);
 
+      // Cloud execution needs the operator's allow-list, checked before a worktree is prepared or any executor is called.
+      // (The workflow checks again on its own side: the executor may be a server this process does not control.)
+      const provider = providerOfSpec(claimed.spec);
+      if (provider !== DEFAULT_PROVIDER_ID) {
+        const auth = authorizeProvider(provider, claimed.spec.request?.contract.taskId ?? claimed.id, this.allowProviders);
+        if (!auth.ok) return fail('RUNTIME_FAILURE', 'provider_not_authorized', auth.reason);
+        this.log(`${claimed.id}: runs on provider "${provider}" (operator-authorized)`);
+      }
+
       // A previous claim may have started (and even finished) a Mastra run before it was lost. Re-attach to its
       // worktree WITHOUT resetting it and try to adopt that run's outcome; only if there is nothing to adopt is the
       // worktree reset and the task run fresh.
@@ -443,7 +457,7 @@ export class Scheduler {
     }
 
     if (outcome.status === 'RUNTIME_FAILURE') {
-      store.transition(taskId, 'RUNTIME_FAILURE', { actor: fence.owner, reason: outcome.reasons.join('; ') || 'model runtime failure', expectFrom: 'CODING', fence, patch: { ...patchBase, failureCategory: (outcome.reasons.some((r) => r.includes('capacity_wait_timeout')) ? 'capacity_wait_timeout' : 'runtime_unavailable') satisfies FailureCategory, artifacts } });
+      store.transition(taskId, 'RUNTIME_FAILURE', { actor: fence.owner, reason: outcome.reasons.join('; ') || 'model runtime failure', expectFrom: 'CODING', fence, patch: { ...patchBase, failureCategory: (outcome.reasons.some((r) => r.includes('capacity_wait_timeout')) ? 'capacity_wait_timeout' : outcome.reasons.some((r) => r.startsWith('provider_not_authorized')) ? 'provider_not_authorized' : outcome.reasons.some((r) => r.startsWith('provider_unavailable') || r.startsWith('unknown_provider')) ? 'provider_unavailable' : 'runtime_unavailable') satisfies FailureCategory, artifacts } });
       return;
     }
     const category: FailureCategory = outcome.status === 'KEPT_BY_CLAUDE' ? 'not_eligible' : outcome.failureCategory === 'D_forbidden_mutation' || outcome.reasons.includes('forbidden_mutation') ? 'forbidden_mutation' : 'coding_attempts_exhausted';
@@ -459,7 +473,8 @@ export class Scheduler {
     if (options.stealLeases) {
       const out = { requeued: [] as string[], exhausted: [] as string[] };
       for (const t of this.store.listTasks({ states: ['CLAIMED', 'CODING', 'VERIFYING'] })) {
-        const to = t.claims >= t.spec.maxClaims ? 'RUNTIME_FAILURE' : 'READY';
+        // A paid provider's task is never requeued on the operator's behalf; the operator retries it explicitly.
+        const to = t.claims >= t.spec.maxClaims || providerOfSpec(t.spec) !== DEFAULT_PROVIDER_ID ? 'RUNTIME_FAILURE' : 'READY';
         this.store.transition(t.id, to, {
           actor: 'recovery',
           reason: 'lease stolen by operator (previous scheduler process is gone)',

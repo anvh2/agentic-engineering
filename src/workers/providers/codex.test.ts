@@ -27,8 +27,10 @@ function fake(env: Record<string, string> = {}, extra: Partial<CodexConfig> = {}
   const dir = tempDir('codex-fake-');
   const log = join(dir, 'calls.jsonl');
   const config: CodexConfig = { command: FAKE, model: 'gpt-fake', env: { FAKE_LOG: log, ...env }, termGraceMs: 200, ...extra };
-  const calls = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { args: string[]; envKeys: string[] }) : []);
-  return { config, calls, dir };
+  const records = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
+  const calls = () => records().filter((r) => r.args) as { args: string[]; envKeys: string[] }[];
+  const stdins = () => records().filter((r) => 'stdinBytes' in r) as { stdinBytes: number; stdinHead: string }[];
+  return { config, calls, stdins, dir };
 }
 const runOnce = (config: CodexConfig, opts: { signal?: AbortSignal; timeoutMs?: number } = {}) => {
   const repo = makeRepo(files);
@@ -64,6 +66,8 @@ describe('availability probe (no model call)', () => {
     const p = await probeCodex(f.config);
     assert.equal(p.state, 'unsupported_version');
     assert.deepEqual(p.missingFlags, ['--sandbox']);
+    const g = await probeCodex(fake({ FAKE_HELP_OMIT: '--ignore-user-config' }).config);
+    assert.deepEqual(g.missingFlags, ['--ignore-user-config'], 'without it the operator config could weaken the sandbox');
   });
 
   it('the default registry lists codex as an optional cloud provider next to the default, without running anything', () => {
@@ -77,13 +81,14 @@ describe('availability probe (no model call)', () => {
 
 describe('command construction', () => {
   it('always uses the workspace-write sandbox rooted at the worktree', () => {
-    const args = buildCodexArgs('/w/tree', 'PROMPT', { model: 'm', json: true });
-    assert.deepEqual(args, ['exec', '--sandbox', 'workspace-write', '--cd', '/w/tree', '--model', 'm', '--json', 'PROMPT']);
+    const args = buildCodexArgs('/w/tree', { model: 'm', json: true, ephemeral: true, colorNever: true });
+    assert.deepEqual(args, ['exec', '--sandbox', 'workspace-write', '--cd', '/w/tree', '--ignore-user-config', '--ephemeral', '--color', 'never', '--model', 'm', '--json', '-']);
+    assert.ok(!args.includes('PROMPT'), 'the prompt is read from stdin, not argv');
   });
 
   it('refuses any argument that would weaken containment', () => {
-    for (const bad of ['--dangerously-bypass-approvals-and-sandbox', '--yolo', 'danger-full-access', '--full-auto', '--add-dir']) {
-      assert.throws(() => buildCodexArgs('/w', 'p', { model: bad, json: false }), /weaken the sandbox/, bad);
+    for (const bad of ['--dangerously-bypass-approvals-and-sandbox', '--dangerously-bypass-hook-trust', '--yolo', 'danger-full-access', '--full-auto', '--add-dir', '--worktree', '--approve-for-me', '--oss', '-c', '--config', '--profile']) {
+      assert.throws(() => buildCodexArgs('/w', { model: bad, json: false }), /weaken the sandbox/, bad);
     }
   });
 });
@@ -99,7 +104,9 @@ describe('end to end through the runner (mock CLI)', () => {
     assert.deepEqual([t.provider, t.model], ['codex', 'gpt-fake']);
     assert.deepEqual(t.usage, { inputTokens: 120, outputTokens: 34, costUsd: UNKNOWN, quota: UNKNOWN });
     const run = f.calls().find((c) => c.args[0] === 'exec' && c.args.includes('--sandbox'))!;
-    assert.ok(run.args.includes('workspace-write') && run.args.includes(repo));
+    assert.ok(run.args.includes('workspace-write') && run.args.includes(repo) && run.args.includes('--ignore-user-config'));
+    const stdin = f.stdins()[0];
+    assert.ok(stdin.stdinBytes > 100 && /coding worker inside a runtime/.test(stdin.stdinHead), 'the prompt arrived on stdin');
     assert.ok(!run.args.some((a) => /dangerous|yolo|bypass|full-auto/.test(a)));
     assert.deepEqual(r.records[0].toolCalls.map((c) => c.name), ['shell', 'applyPatch']);
   });
@@ -139,7 +146,7 @@ describe('end to end through the runner (mock CLI)', () => {
   });
 
   it('is unusable (and runs nothing) when the safety flags are missing or the user is signed out', async () => {
-    const cases: Record<string, string>[] = [{ FAKE_HELP_OMIT: '--cd' }, { FAKE_AUTH: 'none' }];
+    const cases: Record<string, string>[] = [{ FAKE_HELP_OMIT: '--cd' }, { FAKE_HELP_OMIT: '--ignore-user-config' }, { FAKE_AUTH: 'none' }];
     for (const env of cases) {
       const f = fake(env);
       const r = await runOnce(f.config).result;

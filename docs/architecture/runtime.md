@@ -96,6 +96,10 @@ A coding worker is a `WorkerLike` plus an optional `ProviderDescriptor` (`src/ru
 - Capacity is per provider resource (`capacityFor`): the local model queues on `ollama`, each cloud CLI on its own resource in the same machine-wide database, so one never blocks the other, while each resource keeps one limit across processes. `AGENTIC_MODEL_CONCURRENCY` sizes only the local model.
 - `ProviderRegistry` (`src/workers/providers`) lists what can run and probes availability without exposing credentials. The default is `ollama` (Qwen); a worker without a descriptor behaves exactly as before. There is no automatic fallback between providers.
 
+#### Selecting a provider
+
+A task requests a provider with `request.provider` (default `ollama`). A non-default provider runs only if the **operator** allows it (`AGENTIC_ALLOW_PROVIDERS` / `lead run --allow-provider`, entries `codex` or `codex:<taskId>`); the scheduler checks before preparing a worktree and the workflow checks again in the process that would spawn the CLI. Plans cannot authorize it. There is no fallback between providers, no automatic runtime retry for a non-default provider, and a lost lease on such a task fails it instead of requeueing it. See docs/plans/m8.2-providers.md.
+
 #### Cloud CLI providers (Codex)
 
 A CLI provider is an autonomous agent editing the worktree with its own tools, so containment is enforced from outside (`src/workers/providers/process.ts`, `codex.ts`):

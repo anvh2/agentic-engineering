@@ -39,6 +39,12 @@ export const leadAssessmentSchema = z.object({
 export const delegationRequestSchema = z.object({
   contract: codingTaskSchema,
   assessment: leadAssessmentSchema,
+  /**
+   * Which worker provider runs this task (default: the local model). This is only a REQUEST: any provider other than the
+   * default additionally needs the operator's allow-list (worker-provider.ts), enforced by the scheduler and again by the
+   * workflow, so writing it into a plan authorizes nothing.
+   */
+  provider: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional(),
 });
 
 export type DelegationRequest = z.input<typeof delegationRequestSchema>;

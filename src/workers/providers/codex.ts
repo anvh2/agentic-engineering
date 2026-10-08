@@ -28,8 +28,13 @@ import type { ProviderEntry } from './registry.ts';
  * Nothing here runs a model unless the runtime calls `generate`; `probe` makes no model request.
  */
 
-export const CODEX_REQUIRED_FLAGS = ['--sandbox', '--cd'] as const;
-const FORBIDDEN_ARG = /dangerously|bypass|yolo|danger-full-access|full-auto|--add-dir|--search/i;
+/**
+ * Checked against `codex exec --help` of codex-cli 0.161.0. `--ignore-user-config` is REQUIRED, not optional: without it the
+ * operator's ~/.codex/config.toml (approval policy, sandbox permissions, extra writable roots, profiles) would be layered
+ * under our flags and could weaken them. Auth still comes from CODEX_HOME, which is not a config file.
+ */
+export const CODEX_REQUIRED_FLAGS = ['--sandbox', '--cd', '--ignore-user-config'] as const;
+const FORBIDDEN_ARG = /dangerously|bypass|yolo|danger-full-access|full-auto|--add-dir|--search|--worktree|--approve-for-me|--oss|--profile|^-p$|^-c$|--config|--enable|--disable/i;
 
 export interface CodexConfig {
   /** Binary to run (default `codex`). */
@@ -44,12 +49,25 @@ export interface CodexConfig {
   termGraceMs?: number;
 }
 
-/** The exact argv for a run. Throws if anything in it would weaken containment. */
-export function buildCodexArgs(workdir: string, prompt: string, options: { model?: string; json: boolean }): string[] {
-  const args = ['exec', '--sandbox', 'workspace-write', '--cd', workdir, ...(options.model ? ['--model', options.model] : []), ...(options.json ? ['--json'] : [])];
+/**
+ * The exact argv for a run; the prompt is NOT in it (it goes on stdin via the trailing `-`, so it neither appears in the
+ * process list nor hits argv limits). Throws if anything in it would weaken containment. No `-c` overrides are accepted at
+ * all: every setting that matters is a dedicated flag verified against the installed help.
+ */
+export function buildCodexArgs(workdir: string, options: { model?: string; json: boolean; ephemeral?: boolean; colorNever?: boolean }): string[] {
+  const args = [
+    'exec',
+    '--sandbox', 'workspace-write',
+    '--cd', workdir,
+    '--ignore-user-config',
+    ...(options.ephemeral ? ['--ephemeral'] : []),
+    ...(options.colorNever ? ['--color', 'never'] : []),
+    ...(options.model ? ['--model', options.model] : []),
+    ...(options.json ? ['--json'] : []),
+  ];
   const bad = args.find((a) => FORBIDDEN_ARG.test(a));
   if (bad) throw new Error(`refusing to build a Codex command containing "${bad}": it would weaken the sandbox`);
-  return [...args, prompt];
+  return [...args, '-'];
 }
 
 const PREAMBLE = (r: ProviderRequest) =>
@@ -151,10 +169,10 @@ export function createCodexProvider(config: CodexConfig = {}): WorkerProvider {
       const a = await probe(request.workdir);
       if (a.state !== 'available') throw new Error(`codex provider unavailable (${a.state}): ${a.detail}`);
     }
-    const args = buildCodexArgs(request.workdir, `${PREAMBLE(request)}\n\n${prompt}`, { model: config.model, json: probed!.advertises('--json') });
+    const args = buildCodexArgs(request.workdir, { model: config.model, json: probed!.advertises('--json'), ephemeral: probed!.advertises('--ephemeral'), colorNever: probed!.advertises('--color') });
 
     const headBefore = await headOf(request.workdir);
-    const r: ProviderProcessResult = await runProviderProcess({ command, args, cwd: request.workdir, timeoutMs: request.timeoutMs, signal, passEnv: config.passEnv, env: config.env, parentEnv: config.parentEnv, termGraceMs: config.termGraceMs });
+    const r: ProviderProcessResult = await runProviderProcess({ command, args, stdin: `${PREAMBLE(request)}\n\n${prompt}`, cwd: request.workdir, timeoutMs: request.timeoutMs, signal, passEnv: config.passEnv, env: config.env, parentEnv: config.parentEnv, termGraceMs: config.termGraceMs });
 
     if (r.stillRunning && r.pid) {
       // The CLI could not be confirmed dead. Do not report the call as over: stay pending until the group is gone, so the

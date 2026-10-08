@@ -115,3 +115,32 @@ export function normalizeUsage(raw: RawUsage | undefined, billing?: ProviderCapa
     quota: typeof raw?.quota === 'string' && raw.quota ? raw.quota : UNKNOWN,
   };
 }
+
+// ---- selection and authorization ---------------------------------------------------------------------------------
+
+/** The provider a task runs on unless it names another: the free local model. */
+export const DEFAULT_PROVIDER_ID = 'ollama';
+
+/** Environment variable holding the OPERATOR's allow-list for non-default providers. */
+export const ALLOW_PROVIDERS_ENV = 'AGENTIC_ALLOW_PROVIDERS';
+
+export const providerOf = (request: { provider?: string } | undefined): string => request?.provider ?? DEFAULT_PROVIDER_ID;
+
+/**
+ * Entries are `<provider>` (any task) or `<provider>:<taskId>` (that one task only). The default provider needs no entry.
+ * The list comes from the operator's environment or command line, never from a task, a plan or a Lead: a task can only
+ * REQUEST a provider, so no plan, however it was written, can start cloud execution by itself.
+ */
+export function parseAllowList(raw: string | undefined): string[] {
+  return (raw ?? '').split(',').map((e) => e.trim()).filter(Boolean);
+}
+
+export function allowedProvidersFromEnv(env: NodeJS.ProcessEnv = process.env): string[] {
+  return parseAllowList(env[ALLOW_PROVIDERS_ENV]);
+}
+
+export function authorizeProvider(provider: string, taskId: string, allow: readonly string[]): { ok: true } | { ok: false; reason: string } {
+  if (provider === DEFAULT_PROVIDER_ID) return { ok: true };
+  if (allow.includes(provider) || allow.includes(`${provider}:${taskId}`)) return { ok: true };
+  return { ok: false, reason: `provider_not_authorized: task ${taskId} asks for provider "${provider}", which the operator has not allowed (set ${ALLOW_PROVIDERS_ENV}=${provider}:${taskId} or pass --allow-provider ${provider}:${taskId}; a plan cannot authorize it)` };
+}

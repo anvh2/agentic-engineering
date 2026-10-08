@@ -6,6 +6,9 @@ import { createStep, createWorkflow } from '@mastra/core/workflows';
 import { z } from 'zod';
 import { codingWorkerGo, codingWorkerJs } from '../../../workers/coding-worker.ts';
 import { createOllamaProvider } from '../../../workers/providers/ollama.ts';
+import { defaultProviderRegistry } from '../../../workers/providers/default.ts';
+import { UnknownProviderError, type ProviderRegistry } from '../../../workers/providers/registry.ts';
+import { DEFAULT_PROVIDER_ID, allowedProvidersFromEnv, authorizeProvider } from '../../../runtime/execution/worker-provider.ts';
 import { delegationRequestSchema, executeDelegation, languageOf, routeTask, workerAgentIdFor, type EngineeringResult } from '../../../runtime/execution/delegation.ts';
 import type { RunCodingTaskOptions, WorkerLike } from '../../../runtime/execution/coding-task-runner.ts';
 import { phaseOf, type CodingPhase, type PhaseUpdate } from '../../../runtime/execution/coding-task-status.ts';
@@ -53,6 +56,8 @@ const attemptSummarySchema = z.object({
 
 export const codingTaskResultSchema = z.object({
   taskId: z.string(),
+  /** Provider that ran (or was refused) the task; 'ollama' unless the request named another. */
+  provider: z.string().optional(),
   /** PASS | ESCALATED_TO_CLAUDE | RUNTIME_FAILURE | KEPT_BY_CLAUDE. Decided by the runtime verifier, never by the worker. */
   status: z.enum(['PASS', 'ESCALATED_TO_CLAUDE', 'RUNTIME_FAILURE', 'KEPT_BY_CLAUDE']),
   phase: phaseSchema,
@@ -83,6 +88,10 @@ export interface CodingTaskWorkflowDeps {
   /** Defaults to the registered Qwen/Ollama coding worker for the task's language (Go or JS), traced under the step's span. */
   resolveWorker?: (ctx: { mastra?: { getAgent(id: string): unknown }; tracingContext?: unknown }) => WorkerLike;
   artifactRoot?: string;
+  /** Providers a request may name (default: the shipped registry). */
+  providers?: ProviderRegistry;
+  /** The operator's allow-list, read at run time (default: AGENTIC_ALLOW_PROVIDERS of THIS process, i.e. the Mastra server's). */
+  allowProviders?: () => readonly string[];
   runOptions?: Pick<RunCodingTaskOptions, 'modelTimeoutMs' | 'runtimeRetryDelayMs'>;
 }
 
@@ -197,6 +206,25 @@ export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
         return summarize({ taskId: inputData.taskId, status: 'KEPT_BY_CLAUDE', reasons: inputData.reasons, diff: '', restored: false });
       }
 
+      // Provider selection: the request only names one; a non-default provider also needs the operator's allow-list HERE, in
+      // the process that would spawn it, whoever started the run. Nothing below runs (no marker, no worker, no spawn) otherwise.
+      const requestedProvider = getInitData<CodingTaskWorkflowInput>().provider ?? DEFAULT_PROVIDER_ID;
+      const refuse = (reason: string) => ({ ...summarize({ taskId: inputData.taskId, status: 'RUNTIME_FAILURE', reasons: [reason], diff: '', restored: false }), provider: requestedProvider });
+      let providerWorker: WorkerLike | undefined;
+      if (requestedProvider !== DEFAULT_PROVIDER_ID) {
+        const auth = authorizeProvider(requestedProvider, inputData.taskId, (deps.allowProviders ?? (() => allowedProvidersFromEnv()))());
+        if (!auth.ok) return refuse(auth.reason);
+        try {
+          const entry = (deps.providers ?? defaultProviderRegistry()).get(requestedProvider);
+          const availability = await entry.probe();
+          if (availability.state !== 'available') return refuse(`provider_unavailable: ${requestedProvider} is ${availability.state}: ${availability.detail}`);
+          providerWorker = entry.create({ taskType: languageOf(getInitData<CodingTaskWorkflowInput>().contract.allowedFiles) ?? 'go', mastra, tracingContext });
+        } catch (err) {
+          if (err instanceof UnknownProviderError) return refuse(`unknown_provider: ${err.message}`);
+          throw err;
+        }
+      }
+
       const artifactRoot = deps.artifactRoot ?? defaultArtifactRoot();
       if (!(await claimExecution(artifactRoot, runId, { taskId: inputData.taskId, repository: inputData.repository }))) {
         // A restarted run: the first execution may have been half-way through editing, and its client may have given up
@@ -216,12 +244,12 @@ export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
       // Worker follows the language of the allowed files (the gate already guaranteed they are all one language).
       const agentId = workerAgentIdFor(languageOf(request.contract.allowedFiles));
       const fallbackAgent = agentId === 'codingWorkerJs' ? codingWorkerJs : codingWorkerGo;
-      const worker = deps.resolveWorker
+      const worker = providerWorker ?? (deps.resolveWorker
         ? deps.resolveWorker({ mastra, tracingContext })
         : createOllamaProvider(
             (mastra?.getAgent(agentId) as typeof fallbackAgent | undefined) ?? fallbackAgent,
             tracingContext ? { tracingContext } : {},
-          );
+          ));
 
       // Runner events -> Studio phase updates, in order. Observability only; never decides anything.
       let current = state;
@@ -239,11 +267,11 @@ export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
         worker,
         artifactDir,
         trace,
-        modelLabel: process.env.OLLAMA_MODEL ?? 'qwen3:8b',
+        modelLabel: providerWorker ? undefined : (process.env.OLLAMA_MODEL ?? 'qwen3:8b'), // a provider labels itself (provider:model)
         runOptions: { modelTimeoutMs: 900_000, ...deps.runOptions, signal: abortSignal },
       });
       await chain;
-      return summarize(result);
+      return { ...summarize(result), provider: requestedProvider };
     },
   });
 

@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER_ID } from '../../runtime/execution/worker-provider.ts';
 import type { ProviderAvailability, ProviderDescriptor, TaskType } from '../../runtime/execution/worker-provider.ts';
 import type { WorkerProvider } from './provider.ts';
 
@@ -7,7 +8,7 @@ import type { WorkerProvider } from './provider.ts';
  * decision for the Lead (a cloud provider is paid/quota-limited and is never switched to silently).
  */
 
-export const DEFAULT_PROVIDER_ID = 'ollama';
+export { DEFAULT_PROVIDER_ID };
 
 export interface ProviderContext {
   taskType: TaskType;

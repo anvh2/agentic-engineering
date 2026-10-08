@@ -8,6 +8,7 @@ import {
   batchPlanSchema,
   languageOfSpec,
   ownedFilesOf,
+  providerOfSpec,
   taskSpecSchema,
   type BatchPlan,
   type BatchPlanInput,
@@ -15,6 +16,7 @@ import {
   type TaskSpec,
   type TaskState,
 } from './types.ts';
+import { DEFAULT_PROVIDER_ID } from '../execution/worker-provider.ts';
 
 /**
  * SQLite-backed backlog. Every state change goes through `transition()` (one IMMEDIATE transaction: read row,
@@ -614,7 +616,12 @@ export class SchedulerStore {
         // task's attempts; after that an expiry counts like any other claim, so a task that keeps losing its lease still
         // ends in RUNTIME_FAILURE (bounded). The count is kept in artifacts.leaseExpiries (no schema change).
         const expiries = Number(t.artifacts.leaseExpiries ?? 0);
-        if (expiries < MAX_LEASE_REFUNDS) {
+        if (providerOfSpec(t.spec) !== DEFAULT_PROVIDER_ID) {
+          // A non-default provider is paid/quota-limited: a lost lease never turns into a second automatic call. The previous
+          // run is still adoptable by an explicit `lead retry`, which is a human decision.
+          this.transition(t.id, 'RUNTIME_FAILURE', { actor, reason: `lease expired; not requeued automatically (provider "${providerOfSpec(t.spec)}" is not the default); an explicit retry starts a NEW paid call: lead retry ${t.id}`, ...guard, patch: { failureCategory: 'lease_expired' satisfies FailureCategory } });
+          out.exhausted.push(t.id);
+        } else if (expiries < MAX_LEASE_REFUNDS) {
           this.transition(t.id, 'READY', { actor, reason: `lease expired; requeued (claim refunded ${expiries + 1}/${MAX_LEASE_REFUNDS})`, ...guard, refundClaim: true, patch: { artifacts: { leaseExpiries: expiries + 1 } } });
           out.requeued.push(t.id);
         } else if (t.claims >= t.spec.maxClaims) {

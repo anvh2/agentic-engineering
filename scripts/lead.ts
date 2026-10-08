@@ -7,6 +7,8 @@
 //   npm run lead:run -- [--batch B] [--workers N] [--server URL]   needs `npm run dev` running
 //        logical workers: --workers, else AGENTIC_WORKER_CONCURRENCY (default 1, max 3). Model concurrency is separate:
 //        the machine-wide capacity database (AGENTIC_MODEL_CONCURRENCY, default 1); more workers never mean more model calls.
+//        non-default worker providers (a task's request.provider, e.g. "codex") run ONLY if the operator allows them:
+//        --allow-provider codex:<taskId> (or AGENTIC_ALLOW_PROVIDERS), and the Mastra server needs the same allow-list in its own env.
 //   npm run lead:status -- [--batch B]                     states, pending reviews, issues, metrics
 //   npm run lead:review -- list | pack [--out F] | decide <task> approve|reject|escalate [--feedback "..."]
 //   npm run lead -- integrate <batch>                merge APPROVED tasks into lead-integration/<batch>, verify
@@ -33,6 +35,7 @@ import { WorktreeManager } from '../src/runtime/worktree/worktree.ts';
 import { runObjectiveCommand } from '../src/lead/objective/cli.ts';
 import { recoverRuntimeFailure } from '../src/lead/recovery.ts';
 import { cancelTask } from '../src/lead/cancel.ts';
+import { allowedProvidersFromEnv, parseAllowList, providerOf } from '../src/runtime/execution/worker-provider.ts';
 
 const args = process.argv.slice(2);
 const [command, ...rest] = args;
@@ -68,8 +71,9 @@ function table(batchId?: string, state?: string): void {
   for (const t of store.listTasks({ batchId })) {
     if (state && t.state !== state) continue;
     const lease = t.leaseOwner ? ` lease=${t.leaseOwner}@${t.claimEpoch}` : '';
+    const provider = providerOf(t.spec.request) === 'ollama' ? '' : ` provider=${providerOf(t.spec.request)}`;
     const waiting = t.state === 'BACKLOG' ? store.dependencyStatus(t).waitingOn : [];
-    console.log(`${t.state.padEnd(15)} p${String(t.priority).padStart(2)} ${t.id}${t.spec.dependsOn.length ? `  <- ${t.spec.dependsOn.join(',')}` : ''}  [${t.executor}${t.language ? `/${t.language}` : ''}] attempts=${t.attempts} claims=${t.claims}${lease}${t.runId ? `  run=${t.runId}` : ''}`);
+    console.log(`${t.state.padEnd(15)} p${String(t.priority).padStart(2)} ${t.id}${t.spec.dependsOn.length ? `  <- ${t.spec.dependsOn.join(',')}` : ''}  [${t.executor}${t.language ? `/${t.language}` : ''}] attempts=${t.attempts} claims=${t.claims}${provider}${lease}${t.runId ? `  run=${t.runId}` : ''}`);
     if (waiting.length > 0) console.log(`${' '.repeat(16)}waiting on ${waiting.map((w) => `${w.id} (${w.state})`).join(', ')}`);
     if (t.stateReason && !['READY', 'BACKLOG'].includes(t.state)) console.log(`${' '.repeat(16)}${t.failureCategory ? `[${t.failureCategory}] ` : ''}${t.stateReason}`);
   }
@@ -99,7 +103,9 @@ async function main(): Promise<void> {
     case 'run': {
       const config = await loadConfig();
       const executor = createMastraExecutor({ server: flag('--server'), taskTimeoutMs: config.taskTimeoutMs + config.maxCapacityWaitMs /* poll backstop = the hard bound: active budget + queueing budget */ });
-      const scheduler = new Scheduler({ store, executor, workspace: worktrees, config, capacity: sharedModelCapacity(), log: (l) => console.log(`  ${l}`) });
+      const allowProviders = [...allowedProvidersFromEnv(), ...parseAllowList(flag('--allow-provider'))];
+      const scheduler = new Scheduler({ store, executor, workspace: worktrees, config, capacity: sharedModelCapacity(), allowProviders, log: (l) => console.log(`  ${l}`) });
+      if (allowProviders.length > 0) console.log(`operator-allowed providers: ${allowProviders.join(', ')} (the Mastra server must carry the same allow-list)`);
       // First signal: graceful (claim nothing new, cancel and confirm every in-flight run). A second signal exits at once and
       // says which runs may still be executing, because nothing was confirmed for them.
       let signals = 0;

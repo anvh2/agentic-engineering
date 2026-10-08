@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { DEFAULT_MODEL_WAIT_BUDGET_MS, modelWaitBudgetMs } from '../capacity/model-capacity.ts';
 import { delegationRequestSchema, languageOf, type Language } from '../execution/delegation.ts';
+import { DEFAULT_PROVIDER_ID } from '../execution/worker-provider.ts';
 
 /**
  * M5 persistent engineering backlog: task model, lifecycle state machine and scheduler configuration.
@@ -197,4 +198,11 @@ export type FailureCategory =
   | 'dependency_failed'
   | 'source_tree_dirty'
   | 'not_eligible'
+  | 'provider_not_authorized'
+  | 'provider_unavailable'
   | 'cancelled';
+
+/** The provider a task asks for ('ollama' unless its request names another). */
+export function providerOfSpec(spec: TaskSpec): string {
+  return spec.request?.provider ?? DEFAULT_PROVIDER_ID;
+}
