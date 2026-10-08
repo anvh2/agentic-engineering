@@ -11,7 +11,7 @@ import { reviewDecision } from '../../lead/review.ts';
 import { createMetrics } from '../../observability/metrics.ts';
 import { WorktreeManager } from '../worktree/worktree.ts';
 import { Scheduler, type Executor, type ExecutorOutcome } from './scheduler.ts';
-import { SchedulerStore } from './store.ts';
+import { MAX_LEASE_REFUNDS, SchedulerStore } from './store.ts';
 import { configFromEnv, resolveConfig } from './types.ts';
 import { barrier, fakeExecutor, makeRepo, makeStore, maxOverlap, plan, sleep, tempDir, workerTask } from './test-helpers.ts';
 
@@ -355,7 +355,7 @@ describe('M7 E: lease expiry and stale workers', () => {
     const newRun = newSched.run({ workerPrefix: 'new' });
     while (hold2.arrived() < 1) await sleep(5);
     const second = store.requireTask('a');
-    assert.deepEqual([second.state, second.leaseOwner, second.claimEpoch, second.claims], ['CODING', 'new-w1', 2, 2], 'reclaimed: epoch bumped, new owner is CODING');
+    assert.deepEqual([second.state, second.leaseOwner, second.claimEpoch, second.claims], ['CODING', 'new-w1', 2, 1], 'reclaimed: epoch bumped (the expired claim was refunded), new owner is CODING');
 
     // the dangerous window: the stale worker finishes while the NEW owner holds the task in the very same state
     release1();
@@ -396,7 +396,8 @@ describe('M7 E: lease expiry and stale workers', () => {
     const store = makeStore(() => now);
     store.createBatch(plan('/r', [workerTask('a', { maxClaims: 2 }), workerTask('b', { dependsOn: ['a'] })]));
     store.promote();
-    for (let i = 0; i < 2; i++) {
+    // the first MAX_LEASE_REFUNDS expiries give the claim back, then each expiry spends one of the 2 claims
+    for (let i = 0; i < MAX_LEASE_REFUNDS + 2; i++) {
       assert.ok(store.claim({ workerId: `w${i}`, languages: ['js'], leaseMs: 10, maxActive: 3 }));
       now += 100;
       store.reapExpired();

@@ -60,7 +60,7 @@ export const DEFAULT_POLICY: DelegationPolicy = {
   maxAttempts: 3,
 };
 
-const TEST_FILE = /(_test\.go$|\.test\.[cm]?[jt]sx?$|\.spec\.[cm]?[jt]sx?$|(^|\/)(tests?|__tests__)\/)/;
+export const TEST_FILE = /(_test\.go$|\.test\.[cm]?[jt]sx?$|\.spec\.[cm]?[jt]sx?$|(^|\/)(tests?|__tests__)\/)/;
 
 export type Language = 'go' | 'js';
 

@@ -66,7 +66,7 @@ export function readSchedulerState(dbPath: string, now: number = Date.now()): Sc
       if ((TASK_STATES as readonly string[]).includes(row.state)) tasksByState[row.state as TaskState] = row.n;
     }
     const dependencyBlocked = (db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE state = 'BLOCKED' AND failure_category = 'dependency_failed'`).get() as { n: number }).n;
-    const extraClaims = (db.prepare('SELECT COALESCE(SUM(MAX(claims - 1, 0)), 0) AS n FROM tasks').get() as { n: number }).n;
+    const extraClaims = (db.prepare(`SELECT COALESCE(SUM(MAX(claims - 1, 0) + COALESCE(json_extract(artifacts, '$.leaseExpiries'), 0)), 0) AS n FROM tasks`).get() as { n: number }).n;
     const integrationFailures = (
       db
         .prepare(`SELECT failure_category AS category, COUNT(*) AS n FROM tasks WHERE state = 'ESCALATED' AND failure_category IN (${INTEGRATION_FAILURE_CATEGORIES.map(() => '?').join(',')}) GROUP BY failure_category`)

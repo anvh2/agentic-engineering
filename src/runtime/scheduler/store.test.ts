@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { StoreError, SchedulerStore } from './store.ts';
+import { MAX_LEASE_REFUNDS, StoreError, SchedulerStore } from './store.ts';
 import { makeRepo, makeStore, plan, tempDir, workerTask } from './test-helpers.ts';
 import { TASK_STATES, TRANSITIONS, canTransition } from './types.ts';
 
@@ -179,19 +179,28 @@ describe('leases and fencing', () => {
     assert.equal(store.requireTask('a').leaseOwner, 'w2');
   });
 
-  it('the claim budget bounds requeues: lease expiry past maxClaims becomes RUNTIME_FAILURE', () => {
+  it('lease expiry gives the claim back MAX_LEASE_REFUNDS times (a stalled host is not the task\'s fault), then the budget bounds requeues: RUNTIME_FAILURE', () => {
     let now = 1;
     const store = makeStore(() => now);
     store.createBatch(plan('/r', [workerTask('a', { maxClaims: 2 })]));
     store.promote();
-    for (let i = 0; i < 2; i++) {
-      store.claim(claimOpts('w', { leaseMs: 10 }));
+    const expire = () => {
+      assert.ok(store.claim(claimOpts('w', { leaseMs: 10 })));
       now += 100;
-      store.reapExpired();
+      return store.reapExpired();
+    };
+    for (let i = 1; i <= MAX_LEASE_REFUNDS; i++) {
+      assert.deepEqual(expire().requeued, ['a']);
+      const t = store.requireTask('a');
+      assert.deepEqual([t.state, t.claims, t.artifacts.leaseExpiries], ['READY', 0, i], `refund ${i}`);
+      assert.match(store.events('a').at(-1)!.reason ?? '', new RegExp(`claim refunded ${i}/${MAX_LEASE_REFUNDS}`));
     }
+    // refunds are spent: expiries now count like any other claim
+    assert.deepEqual(expire().requeued, ['a']);
+    assert.equal(store.requireTask('a').claims, 1);
+    assert.deepEqual(expire().exhausted, ['a']);
     const t = store.requireTask('a');
-    assert.equal(t.state, 'RUNTIME_FAILURE');
-    assert.equal(t.failureCategory, 'lease_expired');
+    assert.deepEqual([t.state, t.failureCategory, t.claims], ['RUNTIME_FAILURE', 'lease_expired', 2]);
     assert.equal(store.claim(claimOpts('w')), undefined);
   });
 

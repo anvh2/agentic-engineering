@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { runControlledCommand } from '../../workers/tools/execution-tools.ts';
+import { classifyWhitespaceChanges } from './whitespace-changes.ts';
 
 /**
  * Deterministic quality gates over a worker's PASSED change, run by the runtime before the Lead reviews the diff.
@@ -11,6 +12,7 @@ export type FindingCode =
   | 'out_of_scope_file'
   | 'eof_newline'
   | 'whitespace_only_change'
+  | 'whitespace_reindent'
   | 'too_large'
   | 'security_block'
   | 'security_warn'
@@ -79,19 +81,23 @@ export async function inspectChange(options: {
 
     let diffText: string;
     let raw = 0;
-    let withoutWhitespace = 0;
     if (tracked) {
       const diff = await git(repoRoot, ['diff', 'HEAD', '--', file]);
       if (diff.stdout.trim() === '') continue;
       diffText = diff.stdout;
       raw = numstat((await git(repoRoot, ['diff', 'HEAD', '--numstat', '--', file])).stdout);
-      withoutWhitespace = numstat((await git(repoRoot, ['diff', 'HEAD', '-w', '--numstat', '--', file])).stdout);
       const head = (await git(repoRoot, ['show', `HEAD:${file}`])).stdout;
       if (head.endsWith('\n') !== current.endsWith('\n')) {
         findings.push({ code: 'eof_newline', severity: 'block', detail: `${file}: final newline ${head.endsWith('\n') ? 'removed' : 'added'}` });
       }
-      if (withoutWhitespace < raw) {
-        findings.push({ code: 'whitespace_only_change', severity: 'block', detail: `${file}: ${raw - withoutWhitespace} changed line(s) differ only in whitespace (unrelated formatting)` });
+      // Whitespace-only lines are judged by where they are and what they are (see whitespace-changes.ts), not counted: a block
+      // re-indented because the real change nested it is part of that change; reformatting elsewhere is not.
+      const ws = classifyWhitespaceChanges((await git(repoRoot, ['diff', 'HEAD', '-U0', '--', file])).stdout, (await git(repoRoot, ['diff', 'HEAD', '-w', '-U0', '--', file])).stdout);
+      for (const u of ws.unrelated) {
+        findings.push({ code: 'whitespace_only_change', severity: 'block', detail: `${file}: ${u.count} line(s) differ only in whitespace (${u.reason}; lines ${u.lines.slice(0, 5).join(', ')}${u.lines.length > 5 ? ', ...' : ''})` });
+      }
+      if (ws.unrelated.length === 0 && ws.attachedReindent + ws.attachedNoise > 0) {
+        findings.push({ code: 'whitespace_reindent', severity: 'warn', detail: `${file}: ${ws.attachedReindent} line(s) re-indented with the change${ws.attachedNoise ? ` and ${ws.attachedNoise} stray spacing edit(s)` : ''}; confirm it is only the nesting the change needed` });
       }
     } else {
       const diff = await git(repoRoot, ['diff', '--no-index', '--', '/dev/null', file]);

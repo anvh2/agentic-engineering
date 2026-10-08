@@ -261,7 +261,8 @@ describe('Mastra server restart / runaway runs', () => {
     assert.equal(t.state, 'REVIEW_PENDING', `expected a fresh run after the orphan was given up on, got ${t.state} (${t.stateReason})`);
     assert.ok(mastra.log.includes('cancel:orphan'), 'the orphaned run was cancelled so it is terminal in Mastra storage');
     assert.equal(mastra.log.filter((l) => l.startsWith('start:')).length, 1);
-    assert.equal(t.claims, 3);
+    // the dead scheduler's claim was refunded when its lease expired (a lost host is not the task's fault): fresh run + retry = 2
+    assert.equal(t.claims, 2);
   });
 });
 

@@ -13,8 +13,10 @@
 //   npm run lead:resume -- [--steal] [--run]               recover expired leases / interrupted integrations
 //   npm run lead:cancel -- <task> [--reason "..."]
 //   npm run lead -- retry <task>                     requeue a RUNTIME_FAILURE (bounded)
+//   npm run lead -- recover <task> --reason "..." [--grant N | --escalate]   audited recovery of a RUNTIME_FAILURE whose claim budget is spent
 //   npm run lead -- claude take|start|done <task> ...   Claude-direct work, tracked with reasons
 //   npm run lead -- metrics [--batch B] | reconcile [--batch B]
+//   npm run lead -- objective <objective.json> [--draft F] | --show <id> | --submit <id>   M7.5: plan, then explicit submit; never executes
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -28,6 +30,8 @@ import { SchedulerStore } from '../src/runtime/scheduler/store.ts';
 import { sharedModelCapacity } from '../src/runtime/capacity/model-capacity.ts';
 import { configFromEnv, resolveConfig, type SchedulerConfig } from '../src/runtime/scheduler/types.ts';
 import { WorktreeManager } from '../src/runtime/worktree/worktree.ts';
+import { runObjectiveCommand } from '../src/lead/objective/cli.ts';
+import { recoverRuntimeFailure } from '../src/lead/recovery.ts';
 
 const args = process.argv.slice(2);
 const [command, ...rest] = args;
@@ -37,7 +41,8 @@ const positional = rest.filter((a, i) => !a.startsWith('--') && !(rest[i - 1] ??
 
 const root = findProjectRoot() ?? process.cwd();
 const workdir = process.env.AGENTIC_SCHED_ROOT ?? join(root, '.workdir');
-const store = new SchedulerStore(process.env.AGENTIC_SCHED_DB ?? join(workdir, 'scheduler', 'scheduler.db'));
+// Planning (`objective` without --submit) must not create or open the scheduler database: it gets a throwaway in-memory store.
+const store = new SchedulerStore(command === 'objective' && !has('--submit') ? ':memory:' : (process.env.AGENTIC_SCHED_DB ?? join(workdir, 'scheduler', 'scheduler.db')));
 const worktrees = new WorktreeManager(join(workdir, 'worktrees'));
 
 async function loadConfig(): Promise<SchedulerConfig> {
@@ -71,6 +76,9 @@ function table(batchId?: string, state?: string): void {
 
 async function main(): Promise<void> {
   switch (command) {
+    case 'objective':
+      process.exitCode = await runObjectiveCommand(rest, { out: (t) => console.log(t), err: (t) => console.error(t), cwd: process.cwd(), workdir, sink: store });
+      break;
     case 'plan': {
       const plan = store.createBatch(JSON.parse(await readFile(resolve(positional[0]), 'utf8')));
       const p = store.promote('plan');
@@ -154,8 +162,18 @@ async function main(): Promise<void> {
     case 'retry': {
       const t = store.requireTask(positional[0]);
       if (t.state !== 'RUNTIME_FAILURE') throw new Error(`${t.id} is ${t.state}; only RUNTIME_FAILURE tasks are retried (ESCALATED needs a decision)`);
-      if (t.claims >= t.spec.maxClaims) throw new Error(`${t.id} used its claim budget (${t.claims}/${t.spec.maxClaims}); escalate or take it over instead`);
+      if (t.claims >= t.spec.maxClaims) throw new Error(`${t.id} used its claim budget (${t.claims}/${t.spec.maxClaims}); use: lead recover ${t.id} --reason "..." [--grant N | --escalate]`);
       console.log(`${t.id} -> ${store.transition(t.id, 'READY', { actor: 'human', reason: 'runtime failure retried', patch: { runtimeRequeues: t.runtimeRequeues + 1, failureCategory: null } }).state}`);
+      break;
+    }
+    case 'recover': {
+      const reason = flag('--reason');
+      if (!reason) throw new Error('usage: recover <task> --reason "..." [--grant N | --escalate]');
+      if (has('--escalate') && has('--grant')) throw new Error('--grant and --escalate are alternatives');
+      const grant = flag('--grant');
+      if (grant !== undefined && !/^\d+$/.test(grant)) throw new Error('--grant must be a positive integer');
+      const r = recoverRuntimeFailure(store, positional[0], { reason, action: has('--escalate') ? { kind: 'escalate' } : { kind: 'retry', grantClaims: grant === undefined ? undefined : Number(grant) } });
+      console.log(`${r.task.id} -> ${r.task.state}${r.grantedClaims ? ` (claim budget raised by ${r.grantedClaims} to ${r.task.spec.maxClaims})` : ''}; recorded in the task's event log and artifacts.recoveries`);
       break;
     }
     case 'claude': {
@@ -176,7 +194,7 @@ async function main(): Promise<void> {
       console.log(JSON.stringify(await reconcileState(store, worktrees, flag('--batch')), null, 2));
       break;
     default:
-      console.error('usage: lead <plan|tasks|run|status|review|integrate|resume|cancel|retry|claude|metrics|reconcile> ...');
+      console.error('usage: lead <objective|plan|tasks|run|status|review|integrate|resume|cancel|retry|claude|metrics|reconcile> ...');
       process.exit(2);
   }
 }

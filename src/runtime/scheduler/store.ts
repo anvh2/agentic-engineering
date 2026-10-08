@@ -119,6 +119,11 @@ export interface ReviewRow {
   decidedAt: number | null;
 }
 
+/** Lease expiries per task that give the claim back (see reapExpired). */
+export const MAX_LEASE_REFUNDS = 3;
+/** The task spec schema's own ceiling on maxClaims. */
+const MAX_CLAIMS_CAP = 10;
+
 /** Columns a caller may change alongside a transition. Anything else is rejected. */
 const PATCHABLE = {
   stateReason: 'state_reason',
@@ -604,7 +609,15 @@ export class SchedulerStore {
       // heartbeated between the read above and this write, and a renewed lease must never be reaped.
       const guard = { expectFrom: t.state, fence: { owner: t.leaseOwner ?? '', epoch: t.claimEpoch }, leaseExpiredBefore: now, detail, releaseLease: true };
       try {
-        if (t.claims >= t.spec.maxClaims) {
+        // A lease normally expires because the HOST stalled (laptop asleep, event loop blocked), which says nothing about the
+        // task. The first MAX_LEASE_REFUNDS expiries therefore give the claim back, so a stalled host does not spend the
+        // task's attempts; after that an expiry counts like any other claim, so a task that keeps losing its lease still
+        // ends in RUNTIME_FAILURE (bounded). The count is kept in artifacts.leaseExpiries (no schema change).
+        const expiries = Number(t.artifacts.leaseExpiries ?? 0);
+        if (expiries < MAX_LEASE_REFUNDS) {
+          this.transition(t.id, 'READY', { actor, reason: `lease expired; requeued (claim refunded ${expiries + 1}/${MAX_LEASE_REFUNDS})`, ...guard, refundClaim: true, patch: { artifacts: { leaseExpiries: expiries + 1 } } });
+          out.requeued.push(t.id);
+        } else if (t.claims >= t.spec.maxClaims) {
           this.transition(t.id, 'RUNTIME_FAILURE', { actor, reason: 'lease expired and claim budget exhausted', ...guard, patch: { failureCategory: 'lease_expired' satisfies FailureCategory } });
           out.exhausted.push(t.id);
         } else {
@@ -616,6 +629,30 @@ export class SchedulerStore {
       }
     }
     return out;
+  }
+
+  /**
+   * Audited recovery of a task whose claim budget is spent: raises its maxClaims (hard cap: the spec schema's maximum) so it
+   * can be claimed again. Only a RUNTIME_FAILURE task qualifies. The grant is recorded as an event and in
+   * artifacts.recoveries; `dependencyStatus` stops reporting the task as a dead end as soon as claims < maxClaims.
+   * Returning the task to READY is a separate, explicit transition (see src/lead/recovery.ts).
+   */
+  grantClaims(id: string, extra: number, actor: string, reason: string): TaskRow {
+    if (!Number.isInteger(extra) || extra < 1) throw new StoreError('invalid', 'extra claims must be a positive integer');
+    if (!reason.trim()) throw new StoreError('invalid', 'a recovery needs a reason');
+    return this.tx(() => {
+      const task = this.requireTask(id);
+      if (task.state !== 'RUNTIME_FAILURE') throw new StoreError('state_mismatch', `task ${id} is ${task.state}; only a RUNTIME_FAILURE task is granted claims`);
+      const maxClaims = Math.min(MAX_CLAIMS_CAP, task.spec.maxClaims + extra);
+      if (maxClaims <= task.claims) throw new StoreError('invalid', `task ${id} has used ${task.claims} claims and the hard limit is ${MAX_CLAIMS_CAP}; escalate it or take it over instead`);
+      const now = this.now();
+      const recoveries = [...((task.artifacts.recoveries as unknown[] | undefined) ?? []), { at: now, actor, action: 'grant_claims', reason, from: task.spec.maxClaims, to: maxClaims }];
+      this.db.prepare('UPDATE tasks SET spec = ?, artifacts = ?, updated_at = ? WHERE id = ?').run(json({ ...task.spec, maxClaims }), json({ ...task.artifacts, recoveries }), now, id);
+      this.db
+        .prepare('INSERT INTO events (task_id, at, from_state, to_state, actor, reason, detail) VALUES (?,?,?,?,?,?,?)')
+        .run(id, now, task.state, task.state, actor, `claim budget raised ${task.spec.maxClaims} -> ${maxClaims}: ${reason}`, json({ claims: task.claims, maxClaims }));
+      return this.requireTask(id);
+    });
   }
 
   // ---- transitions ------------------------------------------------------------------------------------------
@@ -640,6 +677,8 @@ export class SchedulerStore {
       releaseLease?: boolean;
       /** Creates the review request in the same transaction (used for REVIEW_PENDING). */
       review?: Record<string, unknown>;
+      /** Gives back one claim (never below 0) in the same write: used when a claim was lost to the host, not to the task. */
+      refundClaim?: boolean;
     },
   ): TaskRow {
     return this.tx(() => {
@@ -680,6 +719,7 @@ export class SchedulerStore {
         values.push(json([...new Set([...task.runIds, options.patch.runId as string])]));
       }
       if (options.releaseLease || !LEASED_STATES.includes(to)) sets.push('lease_owner = NULL', 'lease_expires_at = NULL');
+      if (options.refundClaim) sets.push('claims = MAX(claims - 1, 0)');
       // Requeueing a SETTLED failure (retry / take-over) means "run again": the previous run's outcome is already recorded,
       // so it must not be re-adopted by the next claim's reconcile. (A lease-expiry requeue keeps run_id: that run's
       // outcome was never recorded and may still be adopted.) run_ids keeps the full history.

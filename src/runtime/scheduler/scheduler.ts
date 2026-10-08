@@ -142,11 +142,14 @@ export class Scheduler {
           summary.claimed.push(claim.task.id);
           this.log(`claimed ${claim.task.id} (epoch ${claim.fence.epoch}, ${claim.fence.owner})`);
           slots.add(free);
+          // Keyed by claim (task + epoch), not task: a task whose lease expired is requeued and may be re-claimed by THIS run
+          // while the superseded execution is still winding down; its completion must not remove the new execution's entry.
+          const key = `${claim.task.id}@${claim.fence.epoch}`;
           const p = this.execute(claim.task, claim.fence).finally(() => {
-            inflight.delete(claim.task.id);
+            inflight.delete(key);
             slots.delete(free);
           });
-          inflight.set(claim.task.id, p);
+          inflight.set(key, p);
           summary.peakInFlight = Math.max(summary.peakInFlight, inflight.size);
         }
         dbErrors = 0;
@@ -170,7 +173,7 @@ export class Scheduler {
       await Promise.allSettled(inflight.values());
     }
 
-    for (const id of summary.claimed) {
+    for (const id of new Set(summary.claimed)) {
       const t = this.store.requireTask(id);
       if (t.state === 'REVIEW_PENDING') summary.reviewPending.push(id);
       else if (['ESCALATED', 'RUNTIME_FAILURE', 'BLOCKED', 'CANCELLED'].includes(t.state)) summary.failed.push({ id, state: t.state, category: t.failureCategory });

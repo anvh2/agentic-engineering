@@ -244,8 +244,8 @@ describe('crash recovery', () => {
     const s = await scheduler.run();
     assert.deepEqual(s.reviewPending, ['a']);
     const t = store.requireTask('a');
-    assert.equal(t.claims, 2);
-    assert.equal(t.claimEpoch, 2);
+    assert.equal(t.claims, 1, 'the crashed run\'s claim was refunded when its lease expired');
+    assert.equal(t.claimEpoch, 2, 'the fencing epoch still advanced');
     assert.equal(existsSync(join(t.worktreePath!, 'src/leftover.js')), false, 'stale files from the crashed run were cleaned (worktree verified as ours first)');
     assert.equal(readFileSync(join(t.worktreePath!, 'src/a.js'), 'utf8'), 'module.exports = "a";\n');
     assert.equal(existsSync(join(repo, 'src/leftover.js')), false);

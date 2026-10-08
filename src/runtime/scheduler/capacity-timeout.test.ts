@@ -420,7 +420,7 @@ describe('ownership and cancellation while queued', () => {
     await newRun;
     assert.deepEqual(newSide.log.worked, ['a']);
     const t = store.requireTask('a');
-    assert.deepEqual([t.state, t.claimEpoch, t.claims], ['REVIEW_PENDING', 2, 2]);
+    assert.deepEqual([t.state, t.claimEpoch, t.claims], ['REVIEW_PENDING', 2, 1]); // epoch 2, but the expired claim was refunded
     assert.equal(store.listReviews().length, 1, 'exactly one result was published, by the current owner');
     assert.equal(store.events('a').find((e) => e.to === 'REVIEW_PENDING')!.actor, 'new-w1');
   });
