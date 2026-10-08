@@ -57,6 +57,11 @@ export interface ProviderDescriptor {
   identity: ProviderIdentity;
   capabilities: ProviderCapabilities;
   capacity: ProviderCapacity;
+  /**
+   * Retry ceilings for a provider whose every call costs money or quota. The runner applies the smaller of these and its own
+   * settings; they can only lower a budget, never raise it. Absent: the runner's defaults (free local model).
+   */
+  limits?: { maxRuntimeRetries: number; maxCodingAttempts: number };
 }
 
 /** Installation/auth state. Never carries credentials, tokens or account identifiers. */

@@ -96,6 +96,16 @@ A coding worker is a `WorkerLike` plus an optional `ProviderDescriptor` (`src/ru
 - Capacity is per provider resource (`capacityFor`): the local model queues on `ollama`, each cloud CLI on its own resource in the same machine-wide database, so one never blocks the other, while each resource keeps one limit across processes. `AGENTIC_MODEL_CONCURRENCY` sizes only the local model.
 - `ProviderRegistry` (`src/workers/providers`) lists what can run and probes availability without exposing credentials. The default is `ollama` (Qwen); a worker without a descriptor behaves exactly as before. There is no automatic fallback between providers.
 
+#### Cloud CLI providers (Codex)
+
+A CLI provider is an autonomous agent editing the worktree with its own tools, so containment is enforced from outside (`src/workers/providers/process.ts`, `codex.ts`):
+
+- **Launch**: the CLI's own sandbox rooted at the worktree (`--sandbox workspace-write --cd <worktree>`); the command builder refuses any bypass flag, so no setting weakens it. The environment is an allowlist (`PATH`, `HOME`, locale...): credentials are forwarded only if the operator names them in `passEnv`.
+- **Fail closed**: the installed binary's own `--help` must advertise every required flag, and a session must exist, or nothing runs (`probe` makes no model request and returns a yes/no, never account details). A CLI that moves `HEAD` inside the worktree is rejected.
+- **Scope**: the CLI sandbox cannot say "only these files", so the runner's filesystem comparison stays the authority (forbidden change -> tree restored, task fails).
+- **Bounded cost**: at most 2 coding attempts and no automatic runtime retry (`ProviderDescriptor.limits`).
+- **Termination**: the CLI leads its own process group; timeout and cancel send SIGTERM to that group, SIGKILL after a grace period, and a process that cannot be confirmed gone keeps the call pending (so the capacity permit stays held) instead of being reported as over. Only that group is ever signalled.
+
 ### Cancellation: stopping a run, and knowing it stopped
 
 Every way a run can be abandoned (task timeout, queue-wait timeout, scheduler stop, `lead cancel`, a cancelled task noticed through a lost lease, a run that started after its task lost the fence) goes through one function, `cancelTaskRun` (`src/runtime/scheduler/cancel.ts`). Asking is not stopping, so it reports what it could confirm:

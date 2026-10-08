@@ -324,7 +324,8 @@ async function awaitWithAbortGrace<T>(call: Promise<T>, signal: AbortSignal, gra
 export async function runCodingTask(taskInput: CodingTask, options: RunCodingTaskOptions): Promise<CodingTaskResult> {
   const task = codingTaskSchema.parse(taskInput);
   const { repoRoot, worker } = options;
-  const maxAttempts = options.maxAttempts ?? 3;
+  const maxAttempts = Math.min(options.maxAttempts ?? 3, worker.provider?.limits?.maxCodingAttempts ?? Number.POSITIVE_INFINITY);
+  const maxRuntimeRetries = worker.provider?.limits?.maxRuntimeRetries ?? MAX_RUNTIME_RETRIES;
   const timeoutMs = options.modelTimeoutMs ?? 300_000;
   const descriptor = worker.provider;
   const modelLabel = options.modelLabel ?? (descriptor ? `${descriptor.identity.id}:${descriptor.identity.model}` : 'worker');
@@ -381,7 +382,7 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
     allowedFiles: task.allowedFiles,
     model: modelLabel,
     maxAttempts,
-    maxRuntimeRetriesPerAttempt: MAX_RUNTIME_RETRIES,
+    maxRuntimeRetriesPerAttempt: maxRuntimeRetries,
   });
 
   const records: AttemptRecord[] = [];
@@ -423,7 +424,7 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
 
     // ---- model invocation with one bounded runtime retry ----
     let responded = false;
-    for (let runtimeTry = 0; runtimeTry <= MAX_RUNTIME_RETRIES && !responded; runtimeTry += 1) {
+    for (let runtimeTry = 0; runtimeTry <= maxRuntimeRetries && !responded; runtimeTry += 1) {
       const requestContext = new RequestContext();
       requestContext.set(REPOSITORY_ROOT_CONTEXT_KEY, repoRoot);
       const tracker = createRepairLoopTracker(3);
@@ -546,7 +547,7 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
 
       if (!responded) {
         // a spent wait budget is not retried inside the runner: the Lead decides (explicit capacity_wait_timeout)
-        if (runtimeTry < MAX_RUNTIME_RETRIES && !options.signal?.aborted && !capacityWaitExpired) {
+        if (runtimeTry < maxRuntimeRetries && !options.signal?.aborted && !capacityWaitExpired) {
           record.runtimeRetries += 1;
           metrics.retry('runtime');
           trace.emit('runtime_retry', { attempt: attemptNo, retry: record.runtimeRetries, reason: failure });
