@@ -1,6 +1,7 @@
 import { workerAgentIdFor } from '../../runtime/execution/delegation.ts';
 import { codingWorkerGo, codingWorkerJs } from '../coding-worker.ts';
 import { codexEntry } from './codex.ts';
+import { geminiEntry } from './gemini.ts';
 import { createOllamaProvider, ollamaDescriptor, probeOllama } from './ollama.ts';
 import { ProviderRegistry } from './registry.ts';
 
@@ -9,7 +10,7 @@ import { ProviderRegistry } from './registry.ts';
  * (probing makes no model call) but run a task only when that task explicitly names them; nothing falls back to them.
  */
 export function defaultProviderRegistry(): ProviderRegistry {
-  return new ProviderRegistry().register(codexEntry()).register({
+  return new ProviderRegistry().register(codexEntry()).register(geminiEntry()).register({
     id: 'ollama',
     describe: () => ollamaDescriptor(),
     probe: () => probeOllama(),

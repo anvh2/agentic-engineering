@@ -70,9 +70,9 @@ describe('availability probe (no model call)', () => {
     assert.deepEqual(g.missingFlags, ['--ignore-user-config'], 'without it the operator config could weaken the sandbox');
   });
 
-  it('the default registry lists codex as an optional cloud provider next to the default, without running anything', () => {
+  it('the default registry lists codex (and gemini) as optional cloud providers next to the default, without running anything', () => {
     const r = defaultProviderRegistry();
-    assert.deepEqual(r.ids(), ['codex', 'ollama']);
+    assert.deepEqual(r.ids(), ['codex', 'gemini', 'ollama']);
     assert.equal(r.get('codex').describe().identity.kind, 'cloud');
     assert.equal(r.get().id, 'ollama', 'the default stays the local model');
     assert.deepEqual(r.get('codex').describe().limits, { maxRuntimeRetries: 0, maxCodingAttempts: 2 });

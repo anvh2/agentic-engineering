@@ -9,6 +9,7 @@ import { Scheduler } from '../../src/runtime/scheduler/scheduler.ts';
 import { SchedulerStore } from '../../src/runtime/scheduler/store.ts';
 import { WorktreeManager } from '../../src/runtime/worktree/worktree.ts';
 import { codexEntry, type CodexConfig } from '../../src/workers/providers/codex.ts';
+import { geminiEntry, type GeminiConfig } from '../../src/workers/providers/gemini.ts';
 import { ProviderRegistry } from '../../src/workers/providers/registry.ts';
 import type { Executor } from '../../src/runtime/scheduler/scheduler.ts';
 import { createHttpBackend, groupAlive, type SmokeBackend } from './http-backend.ts';
@@ -41,7 +42,10 @@ export class SmokeCancellationUnconfirmed extends Error {
 }
 
 export interface SmokeOptions {
-  codex: CodexConfig;
+  /** The cloud provider under test (default `codex`). The fixture, the bounds and the acceptance checks are the same for both. */
+  provider?: 'codex' | 'gemini';
+  codex?: CodexConfig;
+  gemini?: GeminiConfig;
   /** `in-process` (default): the workflow runs in this process. `http`: through a dedicated Mastra server over HTTP (the production path). */
   transport?: 'in-process' | 'http';
   http?: {
@@ -56,7 +60,7 @@ export interface SmokeOptions {
     startTimeoutMs?: number;
     pollMs?: number;
   };
-  /** The scheduler's own operator allow-list (default: `codex:smoke-double`). */
+  /** The scheduler's own operator allow-list (default: `<provider>:smoke-double`). */
   schedulerAllowProviders?: string[];
   /** Active-execution budget of the task (default: modelTimeoutMs + 2 minutes). */
   taskTimeoutMs?: number;
@@ -91,14 +95,18 @@ export async function runSchedulerSmoke(options: SmokeOptions) {
   const schedulerLog: string[] = [];
   const taskTimeoutMs = options.taskTimeoutMs ?? modelTimeoutMs + 120_000;
   const maxCapacityWaitMs = 60_000;
-  const schedulerAllow = options.schedulerAllowProviders ?? [`codex:${TASK_ID}`];
+  const providerId = options.provider ?? 'codex';
+  const label = providerId === 'gemini' ? 'Gemini' : 'Codex';
+  const schedulerAllow = options.schedulerAllowProviders ?? [`${providerId}:${TASK_ID}`];
   const http = options.transport === 'http';
   // The backend is the only thing that differs between the in-process smoke and the HTTP smoke: how the workflow is reached and
   // how the provider processes it starts are accounted for. Everything below (scheduler, worktree, verifier, report) is shared.
   const backend: SmokeBackend = http
     ? await createHttpBackend({
         outDir,
+        provider: providerId,
         codex: options.codex,
+        gemini: options.gemini,
         serverAllowProviders: options.http?.serverAllowProviders ?? schedulerAllow,
         maxInvocations: options.http?.maxInvocations ?? 1,
         modelTimeoutMs,
@@ -116,7 +124,7 @@ export async function runSchedulerSmoke(options: SmokeOptions) {
     batchId: 'smoke',
     project: 'smoke',
     repository: repo,
-    description: 'Codex scheduler smoke',
+    description: `${label} scheduler smoke`,
     integrationCommands: [],
     tasks: [
       {
@@ -136,7 +144,7 @@ export async function runSchedulerSmoke(options: SmokeOptions) {
             constraints: ['tests are immutable'],
           },
           assessment: { complexity: 'small', risk: 'low', ambiguity: 'none', rationale: 'one function with an existing test' },
-          provider: 'codex',
+          provider: providerId,
         },
       },
     ],
@@ -169,7 +177,7 @@ export async function runSchedulerSmoke(options: SmokeOptions) {
     signals += 1;
     if (signals === 1) {
       interrupted = { signal: name, at: Date.now() };
-      log(`${name}: stopping. Nothing new is claimed; cancelling the Codex run and waiting up to ${Math.round(cancelDeadlineMs / 1000)}s for its process group to exit (send ${name} again to exit immediately).`);
+      log(`${name}: stopping. Nothing new is claimed; cancelling the ${label} run and waiting up to ${Math.round(cancelDeadlineMs / 1000)}s for its process group to exit (send ${name} again to exit immediately).`);
       deadlineTimer = setTimeout(hitDeadline, cancelDeadlineMs);
       scheduler.stop();
       return;
@@ -177,7 +185,7 @@ export async function runSchedulerSmoke(options: SmokeOptions) {
     const killed = backend.killOwned();
     const live = killed.sentSigkillTo;
     secondSignal = { signal: name, ...killed };
-    log(`${name} again: exiting without waiting. Codex process group(s) possibly still running (SIGKILL sent, NOT confirmed): ${live.length ? live.join(', ') : 'none'};${killed.server ? ` Mastra smoke server pid ${killed.server.pid} sent SIGTERM (NOT confirmed);` : ''} in flight: ${scheduler.inFlight().map((t) => `${t.taskId} (run ${t.runId ?? 'unknown'})`).join(', ') || 'none'}. Check with: ps -o pid,pgid,command -g <pid>`);
+    log(`${name} again: exiting without waiting. ${label} process group(s) possibly still running (SIGKILL sent, NOT confirmed): ${live.length ? live.join(', ') : 'none'};${killed.server ? ` Mastra smoke server pid ${killed.server.pid} sent SIGTERM (NOT confirmed);` : ''} in flight: ${scheduler.inFlight().map((t) => `${t.taskId} (run ${t.runId ?? 'unknown'})`).join(', ') || 'none'}. Check with: ps -o pid,pgid,command -g <pid>`);
     exit(130);
   };
   const handlers: [string, () => void][] = [['SIGINT', () => onSignal('SIGINT')], ['SIGTERM', () => onSignal('SIGTERM')]];
@@ -280,24 +288,22 @@ export async function runSchedulerSmoke(options: SmokeOptions) {
   return { report, store, outDir, repo };
 }
 
-/** The workflow runs in this process (no HTTP hop); Codex processes are reported by the adapter itself. */
+/** The workflow runs in this process (no HTTP hop); provider processes are reported by the adapter itself. */
 function inProcessBackend(options: SmokeOptions, outDir: string, modelTimeoutMs: number): SmokeBackend {
-  // Every Codex process this run starts, by pid (= process group id). Nothing else is ever signalled or reported on.
+  // Every provider process this run starts, by pid (= process group id). Nothing else is ever signalled or reported on.
   const owned = new Map<number, { exited: boolean }>();
-  const providers = new ProviderRegistry().register(
-    codexEntry({
-      ...options.codex,
-      onProcess: ({ pid, exited }) => {
-        owned.set(pid, { exited: false });
-        void exited.then(() => {
-          const e = owned.get(pid);
-          if (e) e.exited = true;
-        });
-        options.codex.onProcess?.({ pid, exited });
-      },
-    }),
-  );
-  const workflow = createCodingTaskWorkflow({ providers, allowProviders: () => options.schedulerAllowProviders ?? [`codex:${TASK_ID}`], artifactRoot: join(outDir, 'artifacts'), runOptions: { modelTimeoutMs, runtimeRetryDelayMs: 0 } });
+  const providerId = options.provider ?? 'codex';
+  const base = providerId === 'gemini' ? options.gemini : options.codex;
+  const onProcess = ({ pid, exited }: { pid: number; exited: Promise<void> }) => {
+    owned.set(pid, { exited: false });
+    void exited.then(() => {
+      const e = owned.get(pid);
+      if (e) e.exited = true;
+    });
+    base?.onProcess?.({ pid, exited });
+  };
+  const providers = new ProviderRegistry().register(providerId === 'gemini' ? geminiEntry({ ...options.gemini, onProcess }) : codexEntry({ ...options.codex, onProcess }));
+  const workflow = createCodingTaskWorkflow({ providers, allowProviders: () => options.schedulerAllowProviders ?? [`${providerId}:${TASK_ID}`], artifactRoot: join(outDir, 'artifacts'), runOptions: { modelTimeoutMs, runtimeRetryDelayMs: 0 } });
   const executor: Executor = createInProcessExecutor(workflow);
   return {
     executor,

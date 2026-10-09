@@ -21,7 +21,8 @@
     "lead:resume": "node --disable-warning=ExperimentalWarning --env-file=.env scripts/lead.ts resume",
     "lead:cancel": "node --disable-warning=ExperimentalWarning --env-file=.env scripts/lead.ts cancel",
     "smoke:codex": "AGENTIC_REAL_PROVIDER_SMOKE=codex node --disable-warning=ExperimentalWarning --test tests/provider-smoke/codex-scheduler-smoke.test.ts",
-    "smoke:codex-http": "node --disable-warning=ExperimentalWarning tests/provider-smoke/run-codex-http-smoke.ts"
+    "smoke:codex-http": "node --disable-warning=ExperimentalWarning tests/provider-smoke/run-codex-http-smoke.ts",
+    "smoke:gemini-http": "node --disable-warning=ExperimentalWarning tests/provider-smoke/run-gemini-http-smoke.ts"
   },
   "keywords": [],
   "author": "",

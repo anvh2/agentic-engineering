@@ -5,6 +5,7 @@ import { LibSQLStore } from '@mastra/libsql';
 import { createNodeServer } from '@mastra/deployer/server';
 import { createCodingTaskWorkflow } from '../../src/integrations/mastra/workflows/coding-task-workflow.ts';
 import { codexEntry, type CodexConfig } from '../../src/workers/providers/codex.ts';
+import { geminiEntry, type GeminiConfig } from '../../src/workers/providers/gemini.ts';
 import { ProviderRegistry } from '../../src/workers/providers/registry.ts';
 import type { WorkerProvider } from '../../src/workers/providers/provider.ts';
 
@@ -25,7 +26,10 @@ import type { WorkerProvider } from '../../src/workers/providers/provider.ts';
  */
 
 export interface SmokeServerConfig {
-  codex: Pick<CodexConfig, 'command' | 'model' | 'passEnv' | 'env' | 'termGraceMs'>;
+  /** The one cloud provider this server registers (default `codex`). */
+  provider?: 'codex' | 'gemini';
+  codex?: Pick<CodexConfig, 'command' | 'model' | 'passEnv' | 'env' | 'termGraceMs'>;
+  gemini?: Pick<GeminiConfig, 'command' | 'model' | 'passEnv' | 'env' | 'termGraceMs'>;
   artifactRoot: string;
   /** libsql url for Mastra's workflow snapshots (a file inside the smoke directory). */
   storageUrl: string;
@@ -56,7 +60,8 @@ export function limitInvocations(provider: WorkerProvider, max: number, note: (e
 export async function buildSmokeMastra(config: SmokeServerConfig): Promise<Mastra> {
   mkdirSync(dirname(config.ledgerPath), { recursive: true });
   const note = (event: Record<string, unknown>) => appendFileSync(config.ledgerPath, `${JSON.stringify({ ...event, at: new Date().toISOString(), serverPid: process.pid })}\n`);
-  const base = codexEntry({ ...config.codex, onProcess: ({ pid }) => note({ event: 'spawn', pid }) });
+  const onProcess = ({ pid }: { pid: number }) => note({ event: 'spawn', pid });
+  const base = config.provider === 'gemini' ? geminiEntry({ ...config.gemini, onProcess }) : codexEntry({ ...config.codex, onProcess });
   const providers = new ProviderRegistry().register({ ...base, create: (ctx) => limitInvocations(base.create(ctx) as WorkerProvider, config.maxInvocations, note) });
   const workflow = createCodingTaskWorkflow({
     providers,

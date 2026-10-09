@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createMastraExecutor } from '../../src/integrations/mastra/executor.ts';
 import type { Executor } from '../../src/runtime/scheduler/scheduler.ts';
 import type { CodexConfig } from '../../src/workers/providers/codex.ts';
+import type { GeminiConfig } from '../../src/workers/providers/gemini.ts';
 import { BASE_ENV_ALLOWLIST } from '../../src/workers/providers/process.ts';
 import type { SmokeServerConfig } from './smoke-server.ts';
 
@@ -81,7 +82,9 @@ const freePort = () =>
 
 export interface HttpBackendOptions {
   outDir: string;
-  codex: Pick<CodexConfig, 'command' | 'model' | 'passEnv' | 'env' | 'termGraceMs'>;
+  provider?: 'codex' | 'gemini';
+  codex?: Pick<CodexConfig, 'command' | 'model' | 'passEnv' | 'env' | 'termGraceMs'>;
+  gemini?: Pick<GeminiConfig, 'command' | 'model' | 'passEnv' | 'env' | 'termGraceMs'>;
   /** AGENTIC_ALLOW_PROVIDERS of the Mastra server process (the scheduler's own allow-list is separate). */
   serverAllowProviders: readonly string[];
   maxInvocations: number;
@@ -109,7 +112,9 @@ export async function createHttpBackend(options: HttpBackendOptions): Promise<Sm
 
   if (!url) {
     const config: SmokeServerConfig = {
+      provider: options.provider,
       codex: options.codex,
+      gemini: options.gemini,
       artifactRoot: join(options.outDir, 'artifacts'),
       storageUrl: `file:${join(serverDir, 'mastra.db')}`,
       ledgerPath,
@@ -121,7 +126,7 @@ export async function createHttpBackend(options: HttpBackendOptions): Promise<Sm
     const out = openSync(logPath, 'a');
     child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', SERVER_ENTRY], {
       cwd: serverDir,
-      env: serverEnvironment({ port, configPath, allowProviders: options.serverAllowProviders, capacityDb: options.capacityDb, passEnv: options.codex.passEnv }),
+      env: serverEnvironment({ port, configPath, allowProviders: options.serverAllowProviders, capacityDb: options.capacityDb, passEnv: (options.provider === 'gemini' ? options.gemini : options.codex)?.passEnv }),
       detached: true, // own process group: a terminal Ctrl-C reaches the harness only, which stops things in a controlled order
       stdio: ['ignore', out, out],
     });
