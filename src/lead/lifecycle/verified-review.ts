@@ -1,0 +1,254 @@
+import { existsSync } from 'node:fs';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { redact } from '../../runtime/execution/coding-task-trace.ts';
+import type { CommandRunner } from '../../runtime/integration/integrate.ts';
+import type { SchedulerStore } from '../../runtime/scheduler/store.ts';
+import { ownedFilesOf } from '../../runtime/scheduler/types.ts';
+import type { WorktreeManager } from '../../runtime/worktree/worktree.ts';
+import { canonicalJson, commandPolicyProblems, exportCommit, isInconclusive, linkDependencyPaths, sha256 } from './exec.ts';
+import type { CommandEvidence } from './oracle.ts';
+
+/**
+ * Verified review: the decision a reviewer takes on a task that reached REVIEW_PENDING, made from evidence the runtime
+ * itself can re-derive, never from the worker's account of itself.
+ *
+ *   APPROVE          every check holds and an independent re-run of the task verifier on the exact reviewed commit passed.
+ *   REPAIR_REQUIRED  the evidence is sound but the change is wrong or unacceptable in a way a correction can fix.
+ *   ESCALATE         the evidence itself cannot be trusted or the situation is ambiguous (stale epoch, moved branch, missing
+ *                    provenance, a verifier that gave no verdict, a security finding). A human decides; nothing is retried.
+ *
+ * The verdict maps onto the existing review decisions (APPROVED / REJECTED_WITH_FEEDBACK / ESCALATED_TO_HUMAN); there is no
+ * parallel review state. This module only reads and runs; it writes nothing to the scheduler or to the worker's worktree.
+ */
+
+export type ReviewVerdictKind = 'APPROVE' | 'REPAIR_REQUIRED' | 'ESCALATE';
+
+export interface ReviewCheck {
+  name: string;
+  ok: boolean;
+  /** What a failure of this check means: 'evidence' (untrustworthy/ambiguous -> ESCALATE), 'correctable' (-> REPAIR_REQUIRED), 'info' (recorded only). */
+  class: 'evidence' | 'correctable' | 'info';
+  detail: string;
+}
+
+export interface ReviewEvidence {
+  baseCommit: string | null;
+  headCommit: string | null;
+  branchTip: string | null;
+  claimEpoch: number;
+  /** The worker identity of the claim whose result this review is about (from the audit trail, not from the review request). */
+  claimOwner: string | null;
+  claimSeq: number | null;
+  reviewPendingSeq: number | null;
+  runId: string | null;
+  runIds: string[];
+  codingAttempts: number | null;
+  artifactDir: string | null;
+  /** sha256 of each worker artifact file that exists, so the evidence can be re-checked later. */
+  artifactHashes: Record<string, string>;
+  changedFiles: string[];
+  diffSha256: string | null;
+  /** What the worker's run reported about its own verifier. Recorded, never relied on. */
+  workerSelfReport: { command: string[]; exitCode: number | null } | null;
+  /** The runtime's own re-run of the task verifier on the exported reviewed commit. */
+  independentVerification: CommandEvidence[] | null;
+}
+
+export interface ReviewVerdict {
+  verdict: ReviewVerdictKind;
+  taskId: string;
+  reviewId: number;
+  round: number;
+  checks: ReviewCheck[];
+  /** Short machine-friendly causes of a non-APPROVE verdict. */
+  reasons: string[];
+  /** For REPAIR_REQUIRED: the bounded, redacted feedback handed to the correction task. */
+  feedback: string | null;
+  evidence: ReviewEvidence;
+  verifiedAt: number;
+  verdictHash: string;
+}
+
+export interface VerifiedReviewDeps {
+  store: SchedulerStore;
+  worktrees: WorktreeManager;
+  /** Runs one argv in a directory (production: sandbox runner). */
+  run: CommandRunner;
+  /** Warn-level findings the reviewer accepts without a correction. Default: whitespace_reindent. */
+  acknowledgeWarnings?: readonly string[];
+}
+
+const REPAIRABLE_WARNINGS = new Set(['comment_removed', 'too_large']);
+const MAX_FEEDBACK_CHARS = 2000;
+
+const clean = (text: string): string => redact(text).replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, ' ');
+
+export async function verifyReview(deps: VerifiedReviewDeps, taskId: string): Promise<ReviewVerdict> {
+  const { store, worktrees } = deps;
+  const task = store.requireTask(taskId);
+  if (task.state !== 'REVIEW_PENDING') throw new Error(`task ${taskId} is ${task.state}, not REVIEW_PENDING`);
+  const review = store.latestReview(taskId);
+  if (!review || review.decision) throw new Error(`task ${taskId} has no undecided review`);
+  const batch = store.getBatch(task.batchId);
+  if (!batch) throw new Error(`batch ${task.batchId} not found`);
+  const req = review.request as Record<string, any>;
+  const acknowledged = new Set(deps.acknowledgeWarnings ?? ['whitespace_reindent']);
+
+  const checks: ReviewCheck[] = [];
+  const add = (name: string, ok: boolean, cls: ReviewCheck['class'], detail: string) => checks.push({ name, ok, class: cls, detail });
+  const git = (args: string[]) => worktrees.git(batch.repository, args);
+
+  const evidence: ReviewEvidence = {
+    baseCommit: task.baseCommit,
+    headCommit: task.headCommit,
+    branchTip: null,
+    claimEpoch: task.claimEpoch,
+    claimOwner: null,
+    claimSeq: null,
+    reviewPendingSeq: null,
+    runId: typeof req.runId === 'string' ? req.runId : null,
+    runIds: task.runIds,
+    codingAttempts: typeof req.codingAttempts === 'number' ? req.codingAttempts : null,
+    artifactDir: typeof task.artifacts.artifactDir === 'string' ? task.artifacts.artifactDir : null,
+    artifactHashes: {},
+    changedFiles: [],
+    diffSha256: null,
+    workerSelfReport: req.verifier ? { command: req.verifier.command, exitCode: req.verifier.exitCode } : null,
+    independentVerification: null,
+  };
+
+  // ---- provenance: is this review really about the result of the current claim? --------------------------------------
+  const requestMatches = req.taskId === task.id && Boolean(task.headCommit) && req.headCommit === task.headCommit && req.baseCommit === task.baseCommit;
+  add('review_request_matches_task', requestMatches, 'evidence', requestMatches ? `review #${review.id} names ${task.headCommit!.slice(0, 10)}` : `review request (${String(req.taskId)}, ${String(req.headCommit)}) does not match the task row (${task.id}, ${String(task.headCommit)})`);
+
+  const events = store.events(taskId);
+  const reviewPending = [...events].reverse().find((e) => e.to === 'REVIEW_PENDING' && e.from === 'VERIFYING');
+  const claim = reviewPending ? [...events].reverse().find((e) => e.to === 'CLAIMED' && e.seq < reviewPending.seq) : undefined;
+  evidence.reviewPendingSeq = reviewPending?.seq ?? null;
+  evidence.claimSeq = claim?.seq ?? null;
+  evidence.claimOwner = claim?.actor ?? null;
+  const claimEpoch = (claim?.detail as { epoch?: number } | null)?.epoch;
+  const fenceOk = Boolean(reviewPending && claim && claimEpoch === task.claimEpoch && reviewPending.actor === claim.actor);
+  add(
+    'epoch_and_lease_evidence',
+    fenceOk,
+    'evidence',
+    fenceOk
+      ? `result written by ${claim!.actor} under claim epoch ${claimEpoch}, the task's current epoch`
+      : `the audit trail does not show REVIEW_PENDING written by the owner of the current claim epoch ${task.claimEpoch} (claim epoch ${String(claimEpoch)}, claim owner ${claim?.actor ?? 'none'}, result written by ${reviewPending?.actor ?? 'none'}): a stale or forged result`,
+  );
+
+  const runIdOk = Boolean(evidence.runId) && task.runIds.includes(evidence.runId!);
+  add('run_identity', runIdOk, 'evidence', runIdOk ? `workflow run ${evidence.runId} is recorded on the task` : `the review names run ${String(evidence.runId)}, which is not among the task's recorded runs (${task.runIds.join(', ') || 'none'})`);
+
+  if (evidence.artifactDir) {
+    const dir = evidence.artifactDir;
+    if (!existsSync(dir)) {
+      add('worker_artifacts', false, 'evidence', `artifact directory ${dir} is recorded but missing`);
+    } else {
+      for (const name of ['contract.json', 'attempts.json', 'result.json', 'final.diff']) {
+        const buf = await readFile(join(dir, name)).catch(() => undefined);
+        if (buf) evidence.artifactHashes[name] = sha256(buf);
+      }
+      let contradicts = '';
+      if (evidence.artifactHashes['result.json']) {
+        try {
+          const result = JSON.parse(await readFile(join(dir, 'result.json'), 'utf8')) as { status?: string };
+          if (result.status && result.status !== 'PASS') contradicts = `result.json says ${result.status}`;
+        } catch {
+          contradicts = 'result.json is not valid JSON';
+        }
+      }
+      add('worker_artifacts', contradicts === '', 'evidence', contradicts || `${Object.keys(evidence.artifactHashes).length} artifact file(s) hashed in ${dir}`);
+    }
+  } else {
+    add('worker_artifacts', true, 'info', 'no artifact directory recorded for this run (the review request and the audit trail are the provenance)');
+  }
+
+  // ---- the commit itself ---------------------------------------------------------------------------------------------
+  const branch = task.branch;
+  const tip = branch ? (await git(['rev-parse', '--verify', `refs/heads/${branch}`])).stdout.trim() : '';
+  evidence.branchTip = tip || null;
+  add('reviewed_commit_is_branch_tip', Boolean(tip) && tip === task.headCommit, 'evidence', tip === task.headCommit ? `${branch} is at the reviewed commit` : `${branch ?? '(no branch)'} is at ${tip || 'nothing'}, not at the reviewed ${String(task.headCommit)}`);
+
+  const base = task.baseCommit ?? '';
+  const head = task.headCommit ?? '';
+  let changed: string[] = [];
+  if (base && head) {
+    const lineage = (await git(['merge-base', '--is-ancestor', base, head])).success && head !== base;
+    add('commit_lineage', lineage, 'evidence', lineage ? 'the reviewed commit descends from the task base' : `${head.slice(0, 10)} does not descend from the task base ${base.slice(0, 10)}`);
+    changed = (await git(['diff', '--name-only', base, head])).stdout.split('\n').filter(Boolean);
+    evidence.changedFiles = changed;
+    const diff = await git(['diff', base, head]);
+    evidence.diffSha256 = sha256(diff.stdout);
+  } else {
+    add('commit_lineage', false, 'evidence', 'the task has no recorded base or head commit');
+  }
+
+  // ---- allowed-file compliance, recomputed from the commit (not from the worker's report) ------------------------------
+  const owned = ownedFilesOf(task.spec);
+  const outside = changed.filter((f) => !owned.includes(f));
+  add('allowed_files', changed.length > 0 && outside.length === 0, 'evidence', outside.length > 0 ? `the reviewed commit changes files outside the task's allowed files: ${outside.join(', ')}` : changed.length === 0 ? 'the reviewed commit changes nothing' : `only allowed files changed: ${changed.join(', ')}`);
+
+  // ---- deterministic findings recorded at PASS time -----------------------------------------------------------------
+  const findings = (Array.isArray(req.findings) ? req.findings : []) as { code: string; severity: string; detail: string }[];
+  for (const f of findings) {
+    if (f.severity === 'block') add(`finding:${f.code}`, false, 'evidence', `a blocking finding reached review: ${f.detail}`);
+    else if (acknowledged.has(f.code)) add(`finding:${f.code}`, true, 'info', `acknowledged: ${f.detail}`);
+    else if (REPAIRABLE_WARNINGS.has(f.code)) add(`finding:${f.code}`, false, 'correctable', f.detail);
+    else add(`finding:${f.code}`, false, 'evidence', `unacknowledged ${f.code} finding needs a human: ${f.detail}`);
+  }
+
+  // ---- independent verification, only when the evidence it would verify is itself sound ------------------------------
+  const contract = task.spec.request?.contract;
+  if (!contract) {
+    add('independent_verification', false, 'evidence', 'the task has no coding contract to verify against');
+  } else if (checks.some((c) => !c.ok && c.class === 'evidence')) {
+    add('independent_verification', false, 'info', 'skipped: the evidence above is already untrustworthy, so a verifier pass would prove nothing');
+  } else {
+    const refused = contract.verificationCommands.flatMap((c) => commandPolicyProblems(c).map((p) => `${c.join(' ')}: ${p}`));
+    if (refused.length > 0) {
+      add('independent_verification', false, 'evidence', `verification command refused by policy: ${refused.join('; ')}`);
+    } else {
+      const exported = await exportCommit(batch.repository, head, 'agentic-review-');
+      try {
+        await linkDependencyPaths(batch.repository, exported.tree, batch.linkPaths);
+        const hidden = Object.entries(contract.hiddenFiles ?? {});
+        const occupied = hidden.find(([path]) => existsSync(join(exported.tree, path)));
+        if (occupied) {
+          add('independent_verification', false, 'evidence', `the reviewed commit contains ${occupied[0]}, a path reserved for the runtime-owned test`);
+        } else {
+          for (const [path, content] of hidden) {
+            await mkdir(dirname(join(exported.tree, path)), { recursive: true });
+            await writeFile(join(exported.tree, path), content);
+          }
+          const results: CommandEvidence[] = [];
+          for (const command of contract.verificationCommands) {
+            const started = Date.now();
+            const r = await deps.run(command, exported.tree);
+            results.push({ command, exitCode: r.exitCode, timedOut: r.timedOut, durationMs: Date.now() - started, outputSha256: sha256(r.output), outputTail: redact(r.output.trim().slice(-1500)) });
+            if (r.exitCode !== 0) break;
+          }
+          evidence.independentVerification = results;
+          const last = results[results.length - 1];
+          if (results.some(isInconclusive)) add('independent_verification', false, 'evidence', `the verifier gave no verdict: ${last.command.join(' ')} -> ${last.timedOut ? 'timed out' : 'did not run'}`);
+          else if (last.exitCode !== 0) add('independent_verification', false, 'correctable', `$ ${last.command.join(' ')}\nexit code: ${last.exitCode}\n${clean(last.outputTail).slice(-800)}`);
+          else add('independent_verification', true, 'evidence', `${results.length} verification command(s) passed on the exported reviewed commit`);
+        }
+      } finally {
+        await exported.dispose();
+      }
+    }
+  }
+  add('worker_self_report', true, 'info', evidence.workerSelfReport ? `worker reported ${evidence.workerSelfReport.command.join(' ')} -> exit ${evidence.workerSelfReport.exitCode} (recorded, not relied on)` : 'the worker reported no verifier result');
+
+  // ---- verdict ---------------------------------------------------------------------------------------------------
+  const failedEvidence = checks.filter((c) => !c.ok && c.class === 'evidence');
+  const failedCorrectable = checks.filter((c) => !c.ok && c.class === 'correctable');
+  const verdict: ReviewVerdictKind = failedEvidence.length > 0 ? 'ESCALATE' : failedCorrectable.length > 0 ? 'REPAIR_REQUIRED' : 'APPROVE';
+  const reasons = verdict === 'ESCALATE' ? failedEvidence.map((c) => c.name) : verdict === 'REPAIR_REQUIRED' ? failedCorrectable.map((c) => c.name) : [];
+  const feedback = verdict === 'REPAIR_REQUIRED' ? clean(failedCorrectable.map((c) => `- ${c.name}: ${c.detail}`).join('\n')).slice(0, MAX_FEEDBACK_CHARS) : null;
+  const body = { verdict, taskId, reviewId: review.id, round: review.round, checks, reasons, feedback, evidence, verifiedAt: store.now() };
+  return { ...body, verdictHash: sha256(canonicalJson(body)) };
+}

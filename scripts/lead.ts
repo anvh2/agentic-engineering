@@ -19,6 +19,7 @@
 //   npm run lead -- claude take|start|done <task> ...   Claude-direct work, tracked with reasons
 //   npm run lead -- metrics [--batch B] | reconcile [--batch B]
 //   npm run lead -- objective <objective.json> [--draft F] | --show <id> | --submit <id>   M7.5: plan, then explicit submit; never executes
+//   npm run lead -- lifecycle pin|run|status|authorize|resume|cancel <objective-id> ...   M8.5: execute -> verified review -> integrate -> independent acceptance (see src/lead/lifecycle/cli.ts)
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -33,6 +34,7 @@ import { sharedModelCapacity } from '../src/runtime/capacity/model-capacity.ts';
 import { configFromEnv, resolveConfig, type SchedulerConfig } from '../src/runtime/scheduler/types.ts';
 import { WorktreeManager } from '../src/runtime/worktree/worktree.ts';
 import { runObjectiveCommand } from '../src/lead/objective/cli.ts';
+import { runLifecycleCommand } from '../src/lead/lifecycle/cli.ts';
 import { recoverRuntimeFailure } from '../src/lead/recovery.ts';
 import { cancelTask } from '../src/lead/cancel.ts';
 import { allowedProvidersFromEnv, parseAllowList, providerOf } from '../src/runtime/execution/worker-provider.ts';
@@ -84,6 +86,27 @@ async function main(): Promise<void> {
     case 'objective':
       process.exitCode = await runObjectiveCommand(rest, { out: (t) => console.log(t), err: (t) => console.error(t), cwd: process.cwd(), workdir, sink: store });
       break;
+    case 'lifecycle': {
+      const config = await loadConfig();
+      process.exitCode = await runLifecycleCommand(rest, {
+        store,
+        worktrees,
+        workdir,
+        cwd: process.cwd(),
+        out: (t) => console.log(t),
+        err: (t) => console.error(t),
+        config,
+        makeRuntime: () => {
+          const executor = createMastraExecutor({ server: flag('--server'), taskTimeoutMs: config.taskTimeoutMs + config.maxCapacityWaitMs });
+          const allowProviders = [...allowedProvidersFromEnv(), ...parseAllowList(flag('--allow-provider'))];
+          const scheduler = new Scheduler({ store, executor, workspace: worktrees, config, capacity: sharedModelCapacity(), allowProviders, log: (l) => console.log(`  ${l}`) });
+          process.on('SIGINT', () => scheduler.stop());
+          process.on('SIGTERM', () => scheduler.stop());
+          return { scheduler, executor, capacity: sharedModelCapacity() };
+        },
+      });
+      break;
+    }
     case 'plan': {
       const plan = store.createBatch(JSON.parse(await readFile(resolve(positional[0]), 'utf8')));
       const p = store.promote('plan');
@@ -224,7 +247,7 @@ async function main(): Promise<void> {
       console.log(JSON.stringify(await reconcileState(store, worktrees, flag('--batch')), null, 2));
       break;
     default:
-      console.error('usage: lead <objective|plan|tasks|run|status|review|integrate|resume|cancel|retry|claude|metrics|reconcile> ...');
+      console.error('usage: lead <objective|lifecycle|plan|tasks|run|status|review|integrate|resume|cancel|retry|claude|metrics|reconcile> ...');
       process.exit(2);
   }
 }
