@@ -1,7 +1,12 @@
 import { execFileSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { GEMINI_PASSABLE_ENV, geminiEntry } from '../../src/workers/providers/gemini.ts';
-import { GEMINI_HTTP_SMOKE_OPT_IN_VALUE, GEMINI_SMOKE_BUDGET, HTTP_SMOKE_LIMITS, HTTP_SMOKE_OPT_IN_ENV, HTTP_SMOKE_TASK_ID, checkGeminiSmokeModel, checkHttpSmokeAuthorization } from './http-smoke-guards.ts';
+import { GEMINI_HTTP_SMOKE_OPT_IN_VALUE, GEMINI_SMOKE_BUDGET, GEMINI_SMOKE_MAX_FORWARDED_REQUESTS, HTTP_SMOKE_LIMITS, HTTP_SMOKE_OPT_IN_ENV, HTTP_SMOKE_TASK_ID, checkGeminiSmokeModel, checkHttpSmokeAuthorization } from './http-smoke-guards.ts';
+import { guardVerdict, startModelGuard } from './gemini-model-guard.ts';
 import { SmokeCancellationUnconfirmed, runSchedulerSmoke } from './scheduler-smoke.ts';
+
+const GEMINI_API = 'https://generativelanguage.googleapis.com';
 
 /**
  * ONE real Gemini task through the production execution path:
@@ -33,6 +38,8 @@ const model = (pin as { model: string }).model;
 const passEnv = (process.env.AGENTIC_GEMINI_PASS_ENV ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 const notPassable = passEnv.filter((n) => !(GEMINI_PASSABLE_ENV as readonly string[]).includes(n));
 if (notPassable.length > 0) fail(2, `refused: AGENTIC_GEMINI_PASS_ENV names ${notPassable.join(', ')}, which the adapter will not forward (allowed: ${GEMINI_PASSABLE_ENV.join(', ')})`);
+// Free tier means an AI Studio API key. Vertex variables, project/location or credential files would select a billed Google Cloud path.
+if (passEnv.length !== 1 || !['GEMINI_API_KEY', 'GOOGLE_API_KEY'].includes(passEnv[0])) fail(2, 'refused: the free-tier smoke forwards exactly one variable, GEMINI_API_KEY (or GOOGLE_API_KEY); Vertex AI, project, location and credential-file variables are not accepted.');
 
 // Authentication. The adapter runs the CLI with a private GEMINI_CLI_HOME (so the operator's own settings, hooks and extensions are never
 // loaded), which also means there is no cached Google sign-in to find: an API key in the environment is the only way in. Only whether
@@ -53,7 +60,7 @@ try {
 
 console.log(
   [
-    `Real Gemini HTTP smoke (${HTTP_SMOKE_OPT_IN_ENV}=${GEMINI_HTTP_SMOKE_OPT_IN_VALUE}); Gemini CLI ${availability.version ?? 'unknown version'}; model ${model} (exact id; no alias, no routing)`,
+    `Real Gemini HTTP smoke (${HTTP_SMOKE_OPT_IN_ENV}=${GEMINI_HTTP_SMOKE_OPT_IN_VALUE}); Gemini CLI ${availability.version ?? 'unknown version'}; model ${model} (exact id, free tier only; a request guard on 127.0.0.1 forwards ONLY this model to ${GEMINI_API}, max ${GEMINI_SMOKE_MAX_FORWARDED_REQUESTS} requests, and stops the run on the first 4xx)`,
     `  objective: 1 disposable Go task (${HTTP_SMOKE_TASK_ID}); allow-list given to the scheduler AND the Mastra server: ${allowProviders.join(', ')}`,
     `  credentials forwarded to the CLI (names only): ${passEnv.join(', ')}`,
     `  budget ceilings: <= ${GEMINI_SMOKE_BUDGET.maxTurns} model turns (CLI exits 53 beyond), <= ${GEMINI_SMOKE_BUDGET.maxOutputTokens} generated tokens per request; the CLI's own API-level retries are NOT counted (bounded only by the per-call deadline)`,
@@ -63,12 +70,15 @@ console.log(
   ].join('\n'),
 );
 
+// The request guard: the CLI talks to it, never to Google directly. It is the enforcement of the model pin (the CLI cannot guarantee it).
+const guard = await startModelGuard({ pinnedModel: model, upstream: GEMINI_API, maxForwarded: GEMINI_SMOKE_MAX_FORWARDED_REQUESTS });
 let exitCode = 1;
+let outDir: string | undefined;
 try {
   const { report } = await runSchedulerSmoke({
     provider: 'gemini',
     transport: 'http',
-    gemini: { model, passEnv, ...GEMINI_SMOKE_BUDGET },
+    gemini: { model, passEnv, apiBaseUrl: guard.url, ...GEMINI_SMOKE_BUDGET },
     schedulerAllowProviders: allowProviders,
     http: { serverAllowProviders: allowProviders, maxInvocations: HTTP_SMOKE_LIMITS.maxProviderInvocations },
     modelTimeoutMs: HTTP_SMOKE_LIMITS.perCallTimeoutMs,
@@ -76,8 +86,11 @@ try {
     cancelDeadlineMs: HTTP_SMOKE_LIMITS.cancelConfirmationMs,
     log: (l) => console.error(l),
   });
+  outDir = report.paths.outDir;
   const backend = report.backend as Record<string, any>;
+  const gv = guardVerdict(guard.report());
   const clean =
+    gv.ok &&
     report.taskState === 'REVIEW_PENDING' &&
     report.git.sourceHeadUnchanged &&
     report.git.existingRefsUnchanged &&
@@ -100,6 +113,7 @@ try {
         git: report.git,
         processes: report.processes,
         serverStopped: backend.shutdown,
+        modelGuard: { ok: gv.ok, reasons: gv.reasons, modelsRequested: guard.report().modelsRequested, forwarded: guard.report().forwarded, blocked: guard.report().blocked, tripped: guard.report().tripped ?? null },
         report: `${report.paths.outDir}/report.json`,
       },
       null,
@@ -112,4 +126,9 @@ try {
   if (err instanceof SmokeCancellationUnconfirmed) console.error(err.message);
   else console.error(`smoke failed: ${(err as Error).stack ?? err}`);
 }
+// Evidence of exactly what the CLI asked the API for (models, decisions, statuses only: no headers, no bodies, no key).
+const final = guard.report();
+if (outDir) writeFileSync(join(outDir, 'model-guard-report.json'), JSON.stringify({ ...final, verdict: guardVerdict(final) }, null, 2));
+await guard.stop();
+if (final.tripped) console.error(`STOP: the API refused a request (HTTP ${final.tripped.status}: model not available to this project, quota, or key/permission). Do not rerun, do not switch model or project, and do not add billing. See model-guard-report.json.`);
 process.exit(exitCode);

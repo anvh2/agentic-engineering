@@ -36,8 +36,22 @@ if (args[0] === '--version') {
     homeInsideCwd: geminiHome ? geminiHome.startsWith(cd) : null,
     systemSettingsEnvSet: 'GEMINI_CLI_SYSTEM_SETTINGS_PATH' in process.env,
     policy: policyDir && existsSync(policyDir) ? Object.fromEntries(readdirSync(policyDir).map((f) => [f, readFileSync(join(policyDir, f), 'utf8')])) : null,
-    fixedEnv: Object.fromEntries(['SEATBELT_PROFILE', 'NO_BROWSER', 'GEMINI_TELEMETRY_ENABLED'].map((k) => [k, process.env[k] ?? null])),
+    fixedEnv: Object.fromEntries(['SEATBELT_PROFILE', 'NO_BROWSER', 'GEMINI_TELEMETRY_ENABLED', 'GOOGLE_GEMINI_BASE_URL'].map((k) => [k, process.env[k] ?? null])),
   });
+  // FAKE_API_PATHS: JSON list of request paths this "CLI" POSTs to GOOGLE_GEMINI_BASE_URL (a local guard) before it edits; statuses are logged.
+  if (process.env.FAKE_API_PATHS && process.env.GOOGLE_GEMINI_BASE_URL) {
+    const statuses = [];
+    for (const path of JSON.parse(process.env.FAKE_API_PATHS)) {
+      try {
+        const r = await fetch(process.env.GOOGLE_GEMINI_BASE_URL + path, { method: 'POST', headers: { 'x-goog-api-key': 'FAKE-DUMMY-KEY', 'content-type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: 'FAKE-PROMPT-BODY' }] }] }) });
+        statuses.push(r.status);
+        await r.text();
+      } catch (e) {
+        statuses.push(String(e.cause?.code ?? e.message));
+      }
+    }
+    record({ apiStatuses: statuses });
+  }
   if (mode === 'hang') {
     process.on('SIGTERM', () => {}); // ignores the polite request
     if (process.env.FAKE_PIDFILE) writeFileSync(process.env.FAKE_PIDFILE, String(process.pid));

@@ -29,7 +29,7 @@ export interface SmokeServerConfig {
   /** The one cloud provider this server registers (default `codex`). */
   provider?: 'codex' | 'gemini';
   codex?: Pick<CodexConfig, 'command' | 'model' | 'passEnv' | 'env' | 'termGraceMs'>;
-  gemini?: Pick<GeminiConfig, 'command' | 'model' | 'passEnv' | 'env' | 'termGraceMs'>;
+  gemini?: Pick<GeminiConfig, 'command' | 'model' | 'passEnv' | 'env' | 'termGraceMs' | 'maxTurns' | 'maxOutputTokens' | 'apiBaseUrl'>;
   artifactRoot: string;
   /** libsql url for Mastra's workflow snapshots (a file inside the smoke directory). */
   storageUrl: string;

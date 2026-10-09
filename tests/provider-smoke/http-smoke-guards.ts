@@ -1,5 +1,4 @@
 import { parseAllowList } from '../../src/runtime/execution/worker-provider.ts';
-import { GEMINI_MOVING_MODELS } from '../../src/workers/providers/gemini.ts';
 
 /**
  * The gates in front of the ONE real Codex-through-Mastra-HTTP smoke. It is disabled unless the operator opts in, it accepts
@@ -29,13 +28,19 @@ export const HTTP_SMOKE_LIMITS = {
   cancelConfirmationMs: 45_000, //       after SIGINT/SIGTERM
 } as const;
 
-/** Gemini smoke budget ceilings, enforced by the CLI (turn limit) and by the API (per-request output tokens). */
-export const GEMINI_SMOKE_BUDGET = { maxTurns: 8, maxOutputTokens: 16_384 } as const;
+/**
+ * The Gemini smoke runs on the FREE tier only, on exactly one model. A model with a price, an alias, a name the CLI may rewrite (it turns
+ * `flash` and `gemini-3.5-flash` into `gemini-3.8-flash` with an API key) or anything else is refused; nothing is substituted.
+ */
+export const GEMINI_FREE_TIER_MODEL = 'gemini-2.5-flash-lite';
 
-/** The Gemini smoke needs an exact model id: an alias, or a name the CLI may replace with a newer model, has no knowable price. */
+/** Ceilings: turns and per-request tokens are enforced by the CLI and the API; `maxForwardedRequests` by the request guard on the wire. */
+export const GEMINI_SMOKE_BUDGET = { maxTurns: 8, maxOutputTokens: 16_384 } as const;
+export const GEMINI_SMOKE_MAX_FORWARDED_REQUESTS = 12;
+
 export function checkGeminiSmokeModel(model: string | undefined): { ok: true; model: string } | { ok: false; reason: string } {
-  if (!model) return { ok: false, reason: 'AGENTIC_GEMINI_MODEL is required: name one exact model id (for example gemini-3.8-flash). The CLI default routes between models and cannot be priced.' };
-  if ((GEMINI_MOVING_MODELS as readonly string[]).includes(model)) return { ok: false, reason: `AGENTIC_GEMINI_MODEL=${model} is an alias or a name the CLI silently replaces with a newer model (flash and gemini-3.5-flash both became gemini-3.8-flash with an API key). Name the exact id instead, e.g. gemini-3.8-flash.` };
+  if (!model) return { ok: false, reason: `AGENTIC_GEMINI_MODEL is required and must be exactly ${GEMINI_FREE_TIER_MODEL}. The CLI default routes between models and cannot be priced.` };
+  if (model !== GEMINI_FREE_TIER_MODEL) return { ok: false, reason: `AGENTIC_GEMINI_MODEL=${model} is refused: this smoke runs on the free tier with exactly ${GEMINI_FREE_TIER_MODEL}, never an alias, a paid or any other model, and nothing is substituted.` };
   return { ok: true, model };
 }
 

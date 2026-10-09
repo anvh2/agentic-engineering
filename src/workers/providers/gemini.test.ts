@@ -142,6 +142,39 @@ describe('command and configuration construction', () => {
     assert.equal(s.security.folderTrust, undefined, 'trust is handled by --skip-trust, not by weakening the setting');
   });
 
+  it('switches off, explicitly, every default-off hidden model call and dynamic model chains', () => {
+    const s = buildGeminiRunSettings() as any;
+    assert.equal(s.tools.disableLLMCorrection, true, 'edit correction would call a flash-lite alias of the CLI\'s choosing');
+    assert.equal(s.model.skipNextSpeakerCheck, true, 'the next-speaker check would call a 3.x flash');
+    assert.equal(s.experimental.dynamicModelConfiguration, false, 'no settings-defined model chains or fallbacks');
+    assert.equal(s.security.auth, undefined, 'no auth type is forced unless a local request guard is used');
+  });
+
+  it('a request-guard base URL selects api-key auth in the private settings and reaches the child as the endpoint', async () => {
+    const s = buildGeminiRunSettings({ apiBaseUrl: 'http://127.0.0.1:4555' }) as any;
+    assert.equal(s.security.auth.selectedType, 'gemini-api-key');
+    assert.equal(s.security.disableYoloMode, true, 'the other security settings survive the merge');
+    const f = fake({}, { apiBaseUrl: 'http://127.0.0.1:4555' });
+    await runOnce(f.config).result;
+    const body = f.bodies()[0];
+    assert.equal(body.fixedEnv!.GOOGLE_GEMINI_BASE_URL, 'http://127.0.0.1:4555');
+    assert.equal(body.settings.security.auth.selectedType, 'gemini-api-key');
+  });
+
+  it('the base URL can only be a loopback guard, and cannot be set from config.env or passEnv', async () => {
+    for (const bad of ['https://generativelanguage.googleapis.com', 'http://localhost:4555', 'http://127.0.0.1', 'http://127.0.0.1:4555/v1beta', 'http://10.0.0.1:4555', 'http://127.0.0.1.evil.example:4555']) {
+      assert.throws(() => createGeminiProvider({ command: FAKE, apiBaseUrl: bad }), /apiBaseUrl must be http:\/\/127\.0\.0\.1/, bad);
+      assert.equal((await probeGemini(fake({}, { apiBaseUrl: bad }).config)).state, 'unavailable', bad);
+    }
+    assert.throws(() => createGeminiProvider({ command: FAKE, passEnv: ['GOOGLE_GEMINI_BASE_URL'] }), /refusing to forward/);
+  });
+
+  it('the exact model id is passed through unchanged, with no alias in the command', () => {
+    const args = buildGeminiArgs({ policyDir: '/p', model: 'gemini-2.5-flash-lite' });
+    assert.equal(args[args.indexOf('--model') + 1], 'gemini-2.5-flash-lite');
+    assert.equal(args.filter((a) => a === '--model').length, 1);
+  });
+
   it('turn and per-request output-token ceilings reach the private settings, attached to the exact model', () => {
     const s = buildGeminiRunSettings({ maxTurns: 8, maxOutputTokens: 16_384, model: 'gemini-3.8-flash' }) as any;
     assert.equal(s.model.maxSessionTurns, 8);
@@ -198,7 +231,7 @@ describe('end to end through the runner (mock CLI)', () => {
     assert.ok(!run.args!.some((a) => a.includes('PREAMBLE') || a.length > 120), 'the task is on stdin, not argv');
     const body = f.bodies()[0];
     assert.ok(body.stdinBytes! > 100 && /coding worker inside a runtime/.test(body.stdinHead!), 'the prompt arrived on stdin');
-    assert.deepEqual(body.fixedEnv, { SEATBELT_PROFILE: 'permissive-open', NO_BROWSER: '1', GEMINI_TELEMETRY_ENABLED: 'false' });
+    assert.deepEqual(body.fixedEnv, { SEATBELT_PROFILE: 'permissive-open', NO_BROWSER: '1', GEMINI_TELEMETRY_ENABLED: 'false', GOOGLE_GEMINI_BASE_URL: null });
   });
 
   it('hands the CLI a run-private home (its only settings) and policy outside the worktree, and removes them afterwards', async () => {
@@ -347,7 +380,7 @@ describe('end to end through the runner (mock CLI)', () => {
     const body = f.bodies()[0];
     assert.notEqual(body.geminiHome, '/Users/someone');
     assert.match(body.geminiHome!, /agentic-gemini-/);
-    assert.deepEqual(body.fixedEnv, { SEATBELT_PROFILE: 'permissive-open', NO_BROWSER: '1', GEMINI_TELEMETRY_ENABLED: 'false' });
+    assert.deepEqual(body.fixedEnv, { SEATBELT_PROFILE: 'permissive-open', NO_BROWSER: '1', GEMINI_TELEMETRY_ENABLED: 'false', GOOGLE_GEMINI_BASE_URL: null });
   });
 });
 

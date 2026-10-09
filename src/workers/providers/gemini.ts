@@ -83,6 +83,12 @@ export interface GeminiConfig {
   env?: Record<string, string>;
   /** Model/tool turns allowed in one invocation, 1..GEMINI_MAX_TURNS (default GEMINI_MAX_TURNS). The CLI exits 53 beyond it. */
   maxTurns?: number;
+  /**
+   * Send every API request to this loopback address instead of Google (a request-filtering guard, see tests/provider-smoke). Only
+   * `http://127.0.0.1:<port>`. The CLI would otherwise pick its "gateway" auth type, which headless mode rejects, so the private
+   * settings also select `gemini-api-key`; the key itself still comes from the environment.
+   */
+  apiBaseUrl?: string;
   /** Per-request ceiling on generated tokens (`generateContentConfig.maxOutputTokens` for `model`; requires `model`). Default: not set. */
   maxOutputTokens?: number;
   parentEnv?: NodeJS.ProcessEnv;
@@ -95,8 +101,11 @@ export interface GeminiConfig {
   onProcess?: (info: { pid: number; exited: Promise<void> }) => void;
 }
 
+const LOOPBACK_BASE_URL = /^http:\/\/127\.0\.0\.1:\d{2,5}$/;
+
 function checkLimits(config: GeminiConfig): void {
   const { maxTurns, maxOutputTokens, model } = config;
+  if (config.apiBaseUrl !== undefined && !LOOPBACK_BASE_URL.test(config.apiBaseUrl)) throw new Error('gemini provider: apiBaseUrl must be http://127.0.0.1:<port> (a local request guard), never a remote address');
   if (maxTurns !== undefined && !(Number.isInteger(maxTurns) && maxTurns >= 1 && maxTurns <= GEMINI_MAX_TURNS)) throw new Error(`gemini provider: maxTurns must be an integer from 1 to ${GEMINI_MAX_TURNS}`);
   if (maxOutputTokens !== undefined && !(Number.isInteger(maxOutputTokens) && maxOutputTokens >= 1_024 && maxOutputTokens <= 65_536)) throw new Error('gemini provider: maxOutputTokens must be an integer from 1024 to 65536');
   if (maxOutputTokens !== undefined && !model) throw new Error('gemini provider: maxOutputTokens needs an explicit model (the ceiling is attached to that model name)');
@@ -143,16 +152,19 @@ export function assertSafeGeminiArgs(args: readonly string[]): void {
  * sees (the operator's own is never loaded: different home). The one layer above it that could loosen it is the worktree's
  * `.gemini/settings.json`, and `vetWorkspace` refuses a worktree that has one.
  */
-export function buildGeminiRunSettings(options: { maxTurns?: number; maxOutputTokens?: number; model?: string } = {}): Record<string, unknown> {
+export function buildGeminiRunSettings(options: { maxTurns?: number; maxOutputTokens?: number; model?: string; apiBaseUrl?: string } = {}): Record<string, unknown> {
   return {
     // A hard ceiling on tokens generated per request, attached to the exact model name the run asks for.
     ...(options.maxOutputTokens && options.model ? { modelConfigs: { overrides: [{ match: { model: options.model }, modelConfig: { generateContentConfig: { maxOutputTokens: options.maxOutputTokens } } }] } } : {}),
     general: { defaultApprovalMode: 'auto_edit' },
-    tools: { core: [...GEMINI_ALLOWED_TOOLS], sandbox: true },
-    security: { disableYoloMode: true, disableAlwaysAllow: true, enablePermanentToolApproval: false },
+    // Switched off explicitly although they are the defaults: each is a hidden extra model call on a model of the CLI's own choosing.
+    // (edit-correction -> flash-lite alias; next-speaker check -> a 3.x flash; dynamic model chains/fallbacks.)
+    tools: { core: [...GEMINI_ALLOWED_TOOLS], sandbox: true, disableLLMCorrection: true },
+    experimental: { dynamicModelConfiguration: false },
+    security: { disableYoloMode: true, disableAlwaysAllow: true, enablePermanentToolApproval: false, ...(options.apiBaseUrl ? { auth: { selectedType: 'gemini-api-key' } } : {}) },
     // Without this the CLI loads the first `.env` found walking UP from the worktree, with credentials and endpoints in it.
     advanced: { ignoreLocalEnv: true },
-    model: { maxSessionTurns: options.maxTurns ?? GEMINI_MAX_TURNS },
+    model: { maxSessionTurns: options.maxTurns ?? GEMINI_MAX_TURNS, skipNextSpeakerCheck: true },
     privacy: { usageStatisticsEnabled: false },
     telemetry: { enabled: false },
     hooksConfig: { enabled: false },
@@ -360,7 +372,7 @@ export function createGeminiProvider(config: GeminiConfig = {}): WorkerProvider 
       writeFileSync(join(policyDir, 'agentic.toml'), buildGeminiAdminPolicy(), { mode: 0o600 });
       const geminiHome = join(configDir, 'home');
       mkdirSync(join(geminiHome, '.gemini'), { recursive: true, mode: 0o700 });
-      writeFileSync(join(geminiHome, '.gemini', 'settings.json'), JSON.stringify(buildGeminiRunSettings({ maxTurns: config.maxTurns, maxOutputTokens: config.maxOutputTokens, model: config.model }), null, 2), { mode: 0o600 });
+      writeFileSync(join(geminiHome, '.gemini', 'settings.json'), JSON.stringify(buildGeminiRunSettings({ maxTurns: config.maxTurns, maxOutputTokens: config.maxOutputTokens, model: config.model, apiBaseUrl: config.apiBaseUrl }), null, 2), { mode: 0o600 });
       const args = buildGeminiArgs({ policyDir, model: config.model });
 
       const headBefore = await headOf(request.workdir);
@@ -373,7 +385,7 @@ export function createGeminiProvider(config: GeminiConfig = {}): WorkerProvider 
         signal,
         passEnv: config.passEnv,
         // Fixed last, so nothing in `config.env` can displace them. NO_BROWSER: a headless run must never open an OAuth browser flow.
-        env: { ...config.env, GEMINI_CLI_HOME: geminiHome, SEATBELT_PROFILE: 'permissive-open', NO_BROWSER: '1', GEMINI_TELEMETRY_ENABLED: 'false' },
+        env: { ...config.env, GEMINI_CLI_HOME: geminiHome, SEATBELT_PROFILE: 'permissive-open', NO_BROWSER: '1', GEMINI_TELEMETRY_ENABLED: 'false', ...(config.apiBaseUrl ? { GOOGLE_GEMINI_BASE_URL: config.apiBaseUrl } : {}) },
         parentEnv: config.parentEnv,
         termGraceMs: config.termGraceMs,
         onProcess: config.onProcess,

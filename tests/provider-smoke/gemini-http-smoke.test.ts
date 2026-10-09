@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { capacityFor } from '../../src/runtime/capacity/model-capacity.ts';
 import { tempDir } from '../../src/runtime/scheduler/test-helpers.ts';
-import { GEMINI_HTTP_SMOKE_OPT_IN_VALUE, GEMINI_SMOKE_BUDGET, HTTP_SMOKE_LIMITS, checkGeminiSmokeModel, HTTP_SMOKE_OPT_IN_ENV, HTTP_SMOKE_OPT_IN_VALUE, checkHttpSmokeAuthorization } from './http-smoke-guards.ts';
+import { GEMINI_FREE_TIER_MODEL, GEMINI_HTTP_SMOKE_OPT_IN_VALUE, GEMINI_SMOKE_BUDGET, GEMINI_SMOKE_MAX_FORWARDED_REQUESTS, HTTP_SMOKE_LIMITS, checkGeminiSmokeModel, HTTP_SMOKE_OPT_IN_ENV, HTTP_SMOKE_OPT_IN_VALUE, checkHttpSmokeAuthorization } from './http-smoke-guards.ts';
+import { guardVerdict, startModelGuard } from './gemini-model-guard.ts';
 import { SmokeCancellationUnconfirmed, TASK_ID, runSchedulerSmoke, type SmokeOptions } from './scheduler-smoke.ts';
 
 /**
@@ -115,16 +116,19 @@ describe('Gemini HTTP smoke: gates (pure)', () => {
   });
 });
 
-describe('Gemini HTTP smoke: budget gates (pure)', () => {
-  it('requires one exact model id; aliases and silently-promoted names are refused', () => {
-    assert.equal(checkGeminiSmokeModel(undefined).ok, false);
-    assert.equal(checkGeminiSmokeModel('').ok, false);
-    for (const moving of ['flash', 'pro', 'auto', 'flash-lite', 'gemini-3.5-flash', 'gemini-3-flash-preview']) assert.equal(checkGeminiSmokeModel(moving).ok, false, moving);
-    assert.deepEqual(checkGeminiSmokeModel('gemini-3.8-flash'), { ok: true, model: 'gemini-3.8-flash' });
-    assert.deepEqual(checkGeminiSmokeModel('gemini-2.5-flash'), { ok: true, model: 'gemini-2.5-flash' });
+describe('Gemini HTTP smoke: free-tier model and budget gates (pure)', () => {
+  it('accepts exactly one model id, gemini-2.5-flash-lite, and nothing else: no alias, no paid or newer model, no default', () => {
+    assert.equal(GEMINI_FREE_TIER_MODEL, 'gemini-2.5-flash-lite');
+    assert.deepEqual(checkGeminiSmokeModel('gemini-2.5-flash-lite'), { ok: true, model: 'gemini-2.5-flash-lite' });
+    for (const bad of [undefined, '', 'flash', 'flash-lite', 'pro', 'auto', 'gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-pro-preview', 'GEMINI-2.5-FLASH-LITE', 'gemini-2.5-flash-lite ', 'gemini-2.5-flash-lite,gemini-2.5-flash', 'gemini-2.5-flash-lite-preview']) {
+      const r = checkGeminiSmokeModel(bad);
+      assert.equal(r.ok, false, JSON.stringify(bad));
+      assert.match((r as { reason: string }).reason, /gemini-2\.5-flash-lite/);
+    }
   });
   it('the smoke budget is small and fixed', () => {
     assert.deepEqual(GEMINI_SMOKE_BUDGET, { maxTurns: 8, maxOutputTokens: 16_384 });
+    assert.equal(GEMINI_SMOKE_MAX_FORWARDED_REQUESTS, 12);
   });
 });
 
@@ -256,6 +260,81 @@ describe('Gemini HTTP smoke: scheduler -> Mastra HTTP server -> workflow -> fake
     assert.notEqual(report.taskState, 'REVIEW_PENDING', 'a wrong answer is never a pass');
     assert.equal(execLines(join(s.outDir, 'fake-gemini.log')).length, 1);
     assert.ok(report.processes.every((p) => p.groupGone));
+  });
+});
+
+describe('Gemini HTTP smoke: ceilings and the request guard over real Mastra HTTP (deterministic)', () => {
+  it('the turn and token ceilings and the exact model reach the CLI through the Mastra server', async () => {
+    const s = smoke();
+    s.options.gemini = { ...s.options.gemini, model: GEMINI_FREE_TIER_MODEL, ...GEMINI_SMOKE_BUDGET };
+    const { report } = await s.run();
+    assert.equal(report.taskState, 'REVIEW_PENDING');
+    const lines = readFileSync(join(s.outDir, 'fake-gemini.log'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as { args?: string[]; settings?: any });
+    const run = lines.find((l) => l.args?.includes('--prompt'))!;
+    assert.equal(run.args![run.args!.indexOf('--model') + 1], 'gemini-2.5-flash-lite');
+    const settings = lines.find((l) => l.settings)!.settings;
+    assert.equal(settings.model.maxSessionTurns, 8);
+    assert.deepEqual(settings.modelConfigs.overrides[0], { match: { model: 'gemini-2.5-flash-lite' }, modelConfig: { generateContentConfig: { maxOutputTokens: 16_384 } } });
+    assert.equal(report.telemetry[0]?.model, 'gemini-2.5-flash-lite');
+  });
+
+  it('every request goes through the guard: the pinned model is forwarded, another model is blocked and never leaves, and the verdict says so', async () => {
+    const seen: string[] = [];
+    const api = createServer((req, res) => {
+      seen.push(req.url ?? '');
+      res.setHeader('content-type', 'application/json');
+      res.end('{}');
+    });
+    await new Promise<void>((r) => api.listen(0, '127.0.0.1', r));
+    const guard = await startModelGuard({ pinnedModel: GEMINI_FREE_TIER_MODEL, upstream: `http://127.0.0.1:${(api.address() as AddressInfo).port}`, maxForwarded: GEMINI_SMOKE_MAX_FORWARDED_REQUESTS });
+    try {
+      const s = smoke({ fake: { FAKE_API_PATHS: JSON.stringify([`/v1beta/models/${GEMINI_FREE_TIER_MODEL}:streamGenerateContent?alt=sse`, '/v1beta/models/gemini-3-pro-preview:generateContent', '/v1beta/models/flash:generateContent']) } });
+      s.options.gemini = { ...s.options.gemini, model: GEMINI_FREE_TIER_MODEL, apiBaseUrl: guard.url, ...GEMINI_SMOKE_BUDGET };
+      const { report } = await s.run();
+      assert.equal(report.taskState, 'REVIEW_PENDING', 'the verifier decides the task; the guard decides whether the smoke is clean');
+      const lines = readFileSync(join(s.outDir, 'fake-gemini.log'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as any);
+      assert.deepEqual(lines.find((l) => l.apiStatuses)!.apiStatuses, [200, 403, 403]);
+      const body = lines.find((l) => l.settings)!;
+      assert.equal(body.fixedEnv.GOOGLE_GEMINI_BASE_URL, guard.url);
+      assert.equal(body.settings.security.auth.selectedType, 'gemini-api-key');
+      assert.deepEqual(seen, [`/v1beta/models/${GEMINI_FREE_TIER_MODEL}:streamGenerateContent?alt=sse`], 'only the pinned model reached the API');
+      const rep = guard.report();
+      assert.deepEqual([rep.forwarded, rep.blocked, rep.modelsRequested], [1, 2, ['flash', GEMINI_FREE_TIER_MODEL, 'gemini-3-pro-preview']]);
+      const v = guardVerdict(rep);
+      assert.equal(v.ok, false);
+      assert.match(v.reasons.join(' '), /other models: flash, gemini-3-pro-preview/);
+      assert.ok(!JSON.stringify(rep).includes('FAKE-DUMMY-KEY') && !JSON.stringify(rep).includes('FAKE-PROMPT-BODY'));
+    } finally {
+      await guard.stop();
+      api.closeAllConnections();
+      await new Promise<void>((r) => api.close(() => r()));
+    }
+  });
+
+  it('an upstream refusal (404/429) trips the guard and ends the experiment: later requests never reach the API', async () => {
+    const seen: string[] = [];
+    const api = createServer((req, res) => {
+      seen.push(req.url ?? '');
+      res.statusCode = 429;
+      res.end('{"error":{"code":429,"status":"RESOURCE_EXHAUSTED"}}');
+    });
+    await new Promise<void>((r) => api.listen(0, '127.0.0.1', r));
+    const guard = await startModelGuard({ pinnedModel: GEMINI_FREE_TIER_MODEL, upstream: `http://127.0.0.1:${(api.address() as AddressInfo).port}`, maxForwarded: GEMINI_SMOKE_MAX_FORWARDED_REQUESTS });
+    try {
+      const path = `/v1beta/models/${GEMINI_FREE_TIER_MODEL}:streamGenerateContent`;
+      const s = smoke({ fake: { FAKE_API_PATHS: JSON.stringify([path, path, path]) } });
+      s.options.gemini = { ...s.options.gemini, model: GEMINI_FREE_TIER_MODEL, apiBaseUrl: guard.url };
+      await s.run();
+      assert.equal(seen.length, 1, 'one request reached the API, the other two were answered locally');
+      const rep = guard.report();
+      assert.deepEqual(rep.tripped && rep.tripped.status, 429);
+      assert.equal(guardVerdict(rep).ok, false);
+      assert.match(guardVerdict(rep).reasons.join(' '), /stop and do not rerun/);
+    } finally {
+      await guard.stop();
+      api.closeAllConnections();
+      await new Promise<void>((r) => api.close(() => r()));
+    }
   });
 });
 
