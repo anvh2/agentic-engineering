@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { findProjectRoot } from '../../src/core/paths.ts';
@@ -10,6 +10,8 @@ import { SchedulerStore } from '../../src/runtime/scheduler/store.ts';
 import { WorktreeManager } from '../../src/runtime/worktree/worktree.ts';
 import { codexEntry, type CodexConfig } from '../../src/workers/providers/codex.ts';
 import { ProviderRegistry } from '../../src/workers/providers/registry.ts';
+import type { Executor } from '../../src/runtime/scheduler/scheduler.ts';
+import { createHttpBackend, groupAlive, type SmokeBackend } from './http-backend.ts';
 
 /**
  * One task through the real scheduler on a disposable Go repository:
@@ -38,17 +40,26 @@ export class SmokeCancellationUnconfirmed extends Error {
   }
 }
 
-const groupAlive = (pid: number) => {
-  try {
-    process.kill(-pid, 0);
-    return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'EPERM';
-  }
-};
-
 export interface SmokeOptions {
   codex: CodexConfig;
+  /** `in-process` (default): the workflow runs in this process. `http`: through a dedicated Mastra server over HTTP (the production path). */
+  transport?: 'in-process' | 'http';
+  http?: {
+    /** AGENTIC_ALLOW_PROVIDERS of the Mastra server process. Default: the same entry the scheduler gets. */
+    serverAllowProviders?: string[];
+    /** Hard cap on provider invocations enforced inside the server (default 1). */
+    maxInvocations?: number;
+    /** Talk to this address instead of starting a server (stubs; an address nothing listens on). */
+    existingServer?: string;
+    /** Capacity database shared by the scheduler and the server (default: the machine-wide one, as in production). */
+    capacityDb?: string;
+    startTimeoutMs?: number;
+    pollMs?: number;
+  };
+  /** The scheduler's own operator allow-list (default: `codex:smoke-double`). */
+  schedulerAllowProviders?: string[];
+  /** Active-execution budget of the task (default: modelTimeoutMs + 2 minutes). */
+  taskTimeoutMs?: number;
   /** Where SIGINT/SIGTERM are heard (default: this process). Tests inject an emitter. */
   signalSource?: { on(event: string, listener: (...a: unknown[]) => void): unknown; off(event: string, listener: (...a: unknown[]) => void): unknown };
   /** Called on the SECOND signal, after owned process groups were sent SIGKILL (default: process.exit). */
@@ -76,25 +87,30 @@ export async function runSchedulerSmoke(options: SmokeOptions) {
   const before = { head: sh(repo, 'rev-parse', 'HEAD'), refs: refs() };
 
   const modelTimeoutMs = options.modelTimeoutMs ?? 300_000;
-  // Every Codex process this run starts, by pid (= process group id). Nothing else is ever signalled or reported on.
-  const owned = new Map<number, { exited: boolean }>();
   const log = options.log ?? ((l: string) => console.error(l));
-  const providers = new ProviderRegistry().register(
-    codexEntry({
-      ...options.codex,
-      onProcess: ({ pid, exited }) => {
-        owned.set(pid, { exited: false });
-        void exited.then(() => {
-          const e = owned.get(pid);
-          if (e) e.exited = true;
-        });
-        options.codex.onProcess?.({ pid, exited });
-      },
-    }),
-  );
-  const stillAlive = () => [...owned].filter(([pid, e]) => !e.exited && groupAlive(pid)).map(([pid]) => pid);
-  const workflow = createCodingTaskWorkflow({ providers, allowProviders: () => [`codex:${TASK_ID}`], artifactRoot: join(outDir, 'artifacts'), runOptions: { modelTimeoutMs, runtimeRetryDelayMs: 0 } });
-  const executor = createInProcessExecutor(workflow);
+  const schedulerLog: string[] = [];
+  const taskTimeoutMs = options.taskTimeoutMs ?? modelTimeoutMs + 120_000;
+  const maxCapacityWaitMs = 60_000;
+  const schedulerAllow = options.schedulerAllowProviders ?? [`codex:${TASK_ID}`];
+  const http = options.transport === 'http';
+  // The backend is the only thing that differs between the in-process smoke and the HTTP smoke: how the workflow is reached and
+  // how the provider processes it starts are accounted for. Everything below (scheduler, worktree, verifier, report) is shared.
+  const backend: SmokeBackend = http
+    ? await createHttpBackend({
+        outDir,
+        codex: options.codex,
+        serverAllowProviders: options.http?.serverAllowProviders ?? schedulerAllow,
+        maxInvocations: options.http?.maxInvocations ?? 1,
+        modelTimeoutMs,
+        capacityDb: options.http?.capacityDb,
+        existingServer: options.http?.existingServer,
+        startTimeoutMs: options.http?.startTimeoutMs,
+        executor: { pollMs: options.http?.pollMs, taskTimeoutMs: taskTimeoutMs + maxCapacityWaitMs },
+        log,
+      })
+    : inProcessBackend(options, outDir, modelTimeoutMs);
+  const executor = backend.executor;
+  const stillAlive = () => backend.stillAlive();
   const store = new SchedulerStore(join(outDir, 'scheduler.db'));
   store.createBatch({
     batchId: 'smoke',
@@ -131,17 +147,20 @@ export async function runSchedulerSmoke(options: SmokeOptions) {
     store,
     executor,
     workspace: new WorktreeManager(join(outDir, 'worktrees')),
-    capacity: capacityFor(),
-    allowProviders: [`codex:${TASK_ID}`],
-    config: { maxConcurrentWorkers: 1, pollMs: 500, workerLeaseTimeoutMs: 60_000, taskTimeoutMs: modelTimeoutMs + 120_000, maxCapacityWaitMs: 60_000 },
-    log: (l) => console.log(`  ${l}`),
+    capacity: capacityFor(undefined, options.http?.capacityDb),
+    allowProviders: schedulerAllow,
+    config: { maxConcurrentWorkers: 1, pollMs: 500, workerLeaseTimeoutMs: 60_000, taskTimeoutMs, maxCapacityWaitMs },
+    log: (l) => {
+      schedulerLog.push(l);
+      console.log(`  ${l}`);
+    },
   });
   // ---- signals: first = graceful stop with confirmation, second = prompt exit with a report of what may be orphaned ----
   const source = options.signalSource ?? process;
   const exit = options.exit ?? ((code: number) => process.exit(code));
   const cancelDeadlineMs = options.cancelDeadlineMs ?? 45_000;
   let interrupted: { signal: string; at: number } | undefined;
-  let secondSignal: { signal: string; sentSigkillTo: number[] } | undefined;
+  let secondSignal: { signal: string; sentSigkillTo: number[]; server?: { pid: number; sigtermSent: boolean } } | undefined;
   let signals = 0;
   let hitDeadline!: () => void;
   const deadlineReached = new Promise<'deadline'>((r) => (hitDeadline = () => r('deadline')));
@@ -155,16 +174,10 @@ export async function runSchedulerSmoke(options: SmokeOptions) {
       scheduler.stop();
       return;
     }
-    const live = stillAlive();
-    for (const pid of live) {
-      try {
-        process.kill(-pid, 'SIGKILL'); // our own group, best effort; not confirmed here
-      } catch {
-        /* already gone */
-      }
-    }
-    secondSignal = { signal: name, sentSigkillTo: live };
-    log(`${name} again: exiting without waiting. Codex process group(s) possibly still running (SIGKILL sent, NOT confirmed): ${live.length ? live.join(', ') : 'none'}; in flight: ${scheduler.inFlight().map((t) => `${t.taskId} (run ${t.runId ?? 'unknown'})`).join(', ') || 'none'}. Check with: ps -o pid,pgid,command -g <pid>`);
+    const killed = backend.killOwned();
+    const live = killed.sentSigkillTo;
+    secondSignal = { signal: name, ...killed };
+    log(`${name} again: exiting without waiting. Codex process group(s) possibly still running (SIGKILL sent, NOT confirmed): ${live.length ? live.join(', ') : 'none'};${killed.server ? ` Mastra smoke server pid ${killed.server.pid} sent SIGTERM (NOT confirmed);` : ''} in flight: ${scheduler.inFlight().map((t) => `${t.taskId} (run ${t.runId ?? 'unknown'})`).join(', ') || 'none'}. Check with: ps -o pid,pgid,command -g <pid>`);
     exit(130);
   };
   const handlers: [string, () => void][] = [['SIGINT', () => onSignal('SIGINT')], ['SIGTERM', () => onSignal('SIGTERM')]];
@@ -193,7 +206,7 @@ export async function runSchedulerSmoke(options: SmokeOptions) {
       signal: interrupted.signal,
       confirmed: live.length === 0 && runStopped && summary.stillActive.length === 0,
       elapsedMs: Date.now() - interrupted.at,
-      ownedProcessGroups: [...owned.keys()].map((pid) => ({ pid, groupGone: !groupAlive(pid) })),
+      ownedProcessGroups: backend.ownedPids().map((pid) => ({ pid, groupGone: !groupAlive(pid) })),
       stillAlive: live,
       runStillInFlight: scheduler.inFlight(),
       unconfirmedRuns: summary.stillActive,
@@ -202,10 +215,15 @@ export async function runSchedulerSmoke(options: SmokeOptions) {
   }
   const elapsedMs = Date.now() - started;
 
+  // The server this harness started is stopped last, and only if no provider process is left: while one may still run, its
+  // supervisor (the server's runner, which holds the permit and escalates to SIGKILL) must keep running.
+  const providerLeftRunning = stillAlive().length > 0;
+  const backendShutdown = providerLeftRunning ? { skipped: 'a provider process is not confirmed gone: the smoke server was left running so its runner keeps supervising it' } : await backend.shutdown();
+
   const task = store.requireTask(TASK_ID);
   const worktree = task.worktreePath ?? undefined;
   const artifactDir = typeof task.artifacts.artifactDir === 'string' ? task.artifacts.artifactDir : undefined;
-  const attempts = artifactDir ? (JSON.parse(readFileSync(join(artifactDir, 'attempts.json'), 'utf8')) as Record<string, any>[]) : [];
+  const attempts = artifactDir && existsSync(join(artifactDir, 'attempts.json')) ? (JSON.parse(readFileSync(join(artifactDir, 'attempts.json'), 'utf8')) as Record<string, any>[]) : [];
   const afterRefs = refs();
   const beforeLines = new Set(before.refs.split('\n'));
   const newRefs = afterRefs.split('\n').filter((l) => !beforeLines.has(l)).map((l) => l.split(' ')[0]);
@@ -214,13 +232,20 @@ export async function runSchedulerSmoke(options: SmokeOptions) {
     taskState: task.state,
     failureCategory: task.failureCategory,
     stateReason: task.stateReason,
+    transport: http ? 'http' : 'in-process',
+    runId: task.runId,
+    studioUrl: typeof task.artifacts.studioUrl === 'string' ? task.artifacts.studioUrl : null,
     claims: task.claims,
     requeued: summary.requeued,
     stillActive: summary.stillActive,
     elapsedMs,
     cancellation: cancellation ?? null,
+    backend: { ...backend.describe(), shutdown: backendShutdown },
+    schedulerAllowProviders: schedulerAllow,
+    schedulerEvents: store.events(TASK_ID).map((e) => ({ at: new Date(e.at).toISOString(), from: e.from, to: e.to, actor: e.actor, reason: e.reason, detail: e.detail })),
+    schedulerLog,
     // evidence for a normal finish too: every Codex process group this run started must be gone
-    processes: [...owned.keys()].map((pid) => ({ pid, groupGone: !groupAlive(pid) })),
+    processes: backend.ownedPids().map((pid) => ({ pid, groupGone: !groupAlive(pid) })),
     codingAttempts: attempts.length,
     runtimeRetries: attempts.reduce((n, a) => n + (a.runtimeRetries ?? 0), 0),
     telemetry: attempts.map((a) => a.telemetry ?? null),
@@ -253,4 +278,43 @@ export async function runSchedulerSmoke(options: SmokeOptions) {
     throw new SmokeCancellationUnconfirmed(`cancellation NOT confirmed (${JSON.stringify({ stillAlive: cancellation.stillAlive, runStillInFlight: cancellation.runStillInFlight })}); evidence kept in ${join(outDir, 'report.json')}. Do not rerun until these processes are accounted for.`, report);
   }
   return { report, store, outDir, repo };
+}
+
+/** The workflow runs in this process (no HTTP hop); Codex processes are reported by the adapter itself. */
+function inProcessBackend(options: SmokeOptions, outDir: string, modelTimeoutMs: number): SmokeBackend {
+  // Every Codex process this run starts, by pid (= process group id). Nothing else is ever signalled or reported on.
+  const owned = new Map<number, { exited: boolean }>();
+  const providers = new ProviderRegistry().register(
+    codexEntry({
+      ...options.codex,
+      onProcess: ({ pid, exited }) => {
+        owned.set(pid, { exited: false });
+        void exited.then(() => {
+          const e = owned.get(pid);
+          if (e) e.exited = true;
+        });
+        options.codex.onProcess?.({ pid, exited });
+      },
+    }),
+  );
+  const workflow = createCodingTaskWorkflow({ providers, allowProviders: () => options.schedulerAllowProviders ?? [`codex:${TASK_ID}`], artifactRoot: join(outDir, 'artifacts'), runOptions: { modelTimeoutMs, runtimeRetryDelayMs: 0 } });
+  const executor: Executor = createInProcessExecutor(workflow);
+  return {
+    executor,
+    ownedPids: () => [...owned.keys()],
+    stillAlive: () => [...owned].filter(([pid, e]) => !e.exited && groupAlive(pid)).map(([pid]) => pid),
+    killOwned() {
+      const live = [...owned].filter(([pid, e]) => !e.exited && groupAlive(pid)).map(([pid]) => pid);
+      for (const pid of live) {
+        try {
+          process.kill(-pid, 'SIGKILL'); // our own group, best effort; not confirmed here
+        } catch {
+          /* already gone */
+        }
+      }
+      return { sentSigkillTo: live };
+    },
+    shutdown: async () => ({ started: false }),
+    describe: () => ({ transport: 'in-process' }),
+  };
 }
