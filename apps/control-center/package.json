@@ -1,0 +1,24 @@
+{
+  "name": "@agentic/control-center",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "start": "node --disable-warning=ExperimentalWarning ../../src/integrations/control-center/cli.ts",
+    "test": "node --disable-warning=ExperimentalWarning --test ../../src/integrations/control-center/*.test.ts",
+    "test:ui": "node --disable-warning=ExperimentalWarning --test browser.test.mjs"
+  },
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "esbuild": "^0.25.0",
+    "playwright-core": "^1.64.0",
+    "typescript": "^6.0.3"
+  }
+}
