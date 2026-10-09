@@ -28,8 +28,34 @@ const TEST_SRC = 'package smoke\n\nimport "testing"\n\nfunc TestDouble(t *testin
 const sh = (cwd: string, ...args: string[]) =>
   execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_AUTHOR_NAME: 'smoke', GIT_AUTHOR_EMAIL: 's@s', GIT_COMMITTER_NAME: 'smoke', GIT_COMMITTER_EMAIL: 's@s' } }).trim();
 
+/** Cancellation could not be confirmed within its deadline: a Codex process (or run) may still be alive. The report on disk says which. */
+export class SmokeCancellationUnconfirmed extends Error {
+  report: Record<string, unknown>;
+  constructor(message: string, report: Record<string, unknown>) {
+    super(message);
+    this.name = 'SmokeCancellationUnconfirmed';
+    this.report = report;
+  }
+}
+
+const groupAlive = (pid: number) => {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+};
+
 export interface SmokeOptions {
   codex: CodexConfig;
+  /** Where SIGINT/SIGTERM are heard (default: this process). Tests inject an emitter. */
+  signalSource?: { on(event: string, listener: (...a: unknown[]) => void): unknown; off(event: string, listener: (...a: unknown[]) => void): unknown };
+  /** Called on the SECOND signal, after owned process groups were sent SIGKILL (default: process.exit). */
+  exit?: (code: number) => void;
+  /** Time allowed, after the first signal, for the run to stop AND every Codex process group to be gone (default 45 s). */
+  cancelDeadlineMs?: number;
+  log?: (line: string) => void;
   /** Directory for the fixture, state and report. Default: .workdir/m8.2-smoke/<timestamp>. */
   outDir?: string;
   modelTimeoutMs?: number;
@@ -50,7 +76,23 @@ export async function runSchedulerSmoke(options: SmokeOptions) {
   const before = { head: sh(repo, 'rev-parse', 'HEAD'), refs: refs() };
 
   const modelTimeoutMs = options.modelTimeoutMs ?? 300_000;
-  const providers = new ProviderRegistry().register(codexEntry(options.codex));
+  // Every Codex process this run starts, by pid (= process group id). Nothing else is ever signalled or reported on.
+  const owned = new Map<number, { exited: boolean }>();
+  const log = options.log ?? ((l: string) => console.error(l));
+  const providers = new ProviderRegistry().register(
+    codexEntry({
+      ...options.codex,
+      onProcess: ({ pid, exited }) => {
+        owned.set(pid, { exited: false });
+        void exited.then(() => {
+          const e = owned.get(pid);
+          if (e) e.exited = true;
+        });
+        options.codex.onProcess?.({ pid, exited });
+      },
+    }),
+  );
+  const stillAlive = () => [...owned].filter(([pid, e]) => !e.exited && groupAlive(pid)).map(([pid]) => pid);
   const workflow = createCodingTaskWorkflow({ providers, allowProviders: () => [`codex:${TASK_ID}`], artifactRoot: join(outDir, 'artifacts'), runOptions: { modelTimeoutMs, runtimeRetryDelayMs: 0 } });
   const executor = createInProcessExecutor(workflow);
   const store = new SchedulerStore(join(outDir, 'scheduler.db'));
@@ -94,8 +136,70 @@ export async function runSchedulerSmoke(options: SmokeOptions) {
     config: { maxConcurrentWorkers: 1, pollMs: 500, workerLeaseTimeoutMs: 60_000, taskTimeoutMs: modelTimeoutMs + 120_000, maxCapacityWaitMs: 60_000 },
     log: (l) => console.log(`  ${l}`),
   });
+  // ---- signals: first = graceful stop with confirmation, second = prompt exit with a report of what may be orphaned ----
+  const source = options.signalSource ?? process;
+  const exit = options.exit ?? ((code: number) => process.exit(code));
+  const cancelDeadlineMs = options.cancelDeadlineMs ?? 45_000;
+  let interrupted: { signal: string; at: number } | undefined;
+  let secondSignal: { signal: string; sentSigkillTo: number[] } | undefined;
+  let signals = 0;
+  let hitDeadline!: () => void;
+  const deadlineReached = new Promise<'deadline'>((r) => (hitDeadline = () => r('deadline')));
+  let deadlineTimer: NodeJS.Timeout | undefined;
+  const onSignal = (name: string) => {
+    signals += 1;
+    if (signals === 1) {
+      interrupted = { signal: name, at: Date.now() };
+      log(`${name}: stopping. Nothing new is claimed; cancelling the Codex run and waiting up to ${Math.round(cancelDeadlineMs / 1000)}s for its process group to exit (send ${name} again to exit immediately).`);
+      deadlineTimer = setTimeout(hitDeadline, cancelDeadlineMs);
+      scheduler.stop();
+      return;
+    }
+    const live = stillAlive();
+    for (const pid of live) {
+      try {
+        process.kill(-pid, 'SIGKILL'); // our own group, best effort; not confirmed here
+      } catch {
+        /* already gone */
+      }
+    }
+    secondSignal = { signal: name, sentSigkillTo: live };
+    log(`${name} again: exiting without waiting. Codex process group(s) possibly still running (SIGKILL sent, NOT confirmed): ${live.length ? live.join(', ') : 'none'}; in flight: ${scheduler.inFlight().map((t) => `${t.taskId} (run ${t.runId ?? 'unknown'})`).join(', ') || 'none'}. Check with: ps -o pid,pgid,command -g <pid>`);
+    exit(130);
+  };
+  const handlers: [string, () => void][] = [['SIGINT', () => onSignal('SIGINT')], ['SIGTERM', () => onSignal('SIGTERM')]];
+  for (const [name, h] of handlers) source.on(name, h);
+
   const started = Date.now();
-  const summary = await scheduler.run();
+  let summary: Awaited<ReturnType<Scheduler['run']>>;
+  const runPromise = scheduler.run();
+  runPromise.catch(() => {});
+  try {
+    const first = await Promise.race([runPromise, deadlineReached]);
+    if (first === 'deadline') summary = { claimed: [], reviewPending: [], failed: [], requeued: [], peakInFlight: 0, stopReason: 'aborted', stillActive: [] };
+    else summary = first;
+  } finally {
+    for (const [name, h] of handlers) source.off(name, h);
+  }
+  // After a stop, the run has settled, but "settled" is not "gone": confirm every owned process group independently, within the deadline.
+  let cancellation: Record<string, unknown> | undefined;
+  if (interrupted) {
+    const deadline = interrupted.at + cancelDeadlineMs;
+    while (stillAlive().length > 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+    clearTimeout(deadlineTimer);
+    const live = stillAlive();
+    const runStopped = Date.now() < deadline && scheduler.inFlight().length === 0;
+    cancellation = {
+      signal: interrupted.signal,
+      confirmed: live.length === 0 && runStopped && summary.stillActive.length === 0,
+      elapsedMs: Date.now() - interrupted.at,
+      ownedProcessGroups: [...owned.keys()].map((pid) => ({ pid, groupGone: !groupAlive(pid) })),
+      stillAlive: live,
+      runStillInFlight: scheduler.inFlight(),
+      unconfirmedRuns: summary.stillActive,
+      secondSignal: secondSignal ?? null,
+    };
+  }
   const elapsedMs = Date.now() - started;
 
   const task = store.requireTask(TASK_ID);
@@ -114,6 +218,9 @@ export async function runSchedulerSmoke(options: SmokeOptions) {
     requeued: summary.requeued,
     stillActive: summary.stillActive,
     elapsedMs,
+    cancellation: cancellation ?? null,
+    // evidence for a normal finish too: every Codex process group this run started must be gone
+    processes: [...owned.keys()].map((pid) => ({ pid, groupGone: !groupAlive(pid) })),
     codingAttempts: attempts.length,
     runtimeRetries: attempts.reduce((n, a) => n + (a.runtimeRetries ?? 0), 0),
     telemetry: attempts.map((a) => a.telemetry ?? null),
@@ -142,5 +249,8 @@ export async function runSchedulerSmoke(options: SmokeOptions) {
     paths: { outDir, repo, worktree, artifactDir },
   };
   writeFileSync(join(outDir, 'report.json'), JSON.stringify(report, null, 2));
+  if (cancellation && cancellation.confirmed !== true) {
+    throw new SmokeCancellationUnconfirmed(`cancellation NOT confirmed (${JSON.stringify({ stillAlive: cancellation.stillAlive, runStillInFlight: cancellation.runStillInFlight })}); evidence kept in ${join(outDir, 'report.json')}. Do not rerun until these processes are accounted for.`, report);
+  }
   return { report, store, outDir, repo };
 }

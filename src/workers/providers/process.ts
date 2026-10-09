@@ -35,6 +35,11 @@ export interface ProviderProcessOptions {
   maxOutputBytes?: number;
   /** Parent environment to build from (tests inject one). */
   parentEnv?: NodeJS.ProcessEnv;
+  /**
+   * Called once the process exists, with its pid (= its process group id) and a promise that settles when the call is over
+   * and the group has been swept. Lets an owner account for exactly the processes it started, and nothing else.
+   */
+  onProcess?: (info: { pid: number; exited: Promise<void> }) => void;
 }
 
 export interface ProviderProcessResult {
@@ -87,6 +92,9 @@ export function runProviderProcess(options: ProviderProcessOptions): Promise<Pro
       return;
     }
 
+    let markExited!: () => void;
+    const exited = new Promise<void>((r) => (markExited = r));
+    if (child.pid !== undefined) options.onProcess?.({ pid: child.pid, exited });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     let bytes = 0;
@@ -159,6 +167,7 @@ export function runProviderProcess(options: ProviderProcessOptions): Promise<Pro
       clearTimeout(escalation);
       clearTimeout(finishTimer);
       options.signal?.removeEventListener('abort', onAbort);
+      markExited();
       resolve({
         spawnError,
         pid: child.pid,
@@ -182,9 +191,10 @@ export function runProviderProcess(options: ProviderProcessOptions): Promise<Pro
     });
     child.on('close', async (code, signal) => {
       closed = true;
-      // The leader exited; a helper it left behind in the group must not outlive the call.
-      if (terminatedBy === 'exit') signalGroup('SIGKILL');
-      else await sleep(0);
+      // The leader exited; a helper it left behind in the group must not outlive the call, whether the leader left by itself
+      // or after our SIGTERM (a child that ignores SIGTERM would otherwise survive its parent).
+      signalGroup('SIGKILL');
+      await sleep(0);
       finish(code, signal);
     });
   });

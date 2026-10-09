@@ -47,6 +47,8 @@ export interface CodexConfig {
   env?: Record<string, string>;
   parentEnv?: NodeJS.ProcessEnv;
   termGraceMs?: number;
+  /** Receives the pid/process group of every CLI process this provider starts (for owner-side accounting and cleanup). */
+  onProcess?: (info: { pid: number; exited: Promise<void> }) => void;
 }
 
 /**
@@ -172,7 +174,7 @@ export function createCodexProvider(config: CodexConfig = {}): WorkerProvider {
     const args = buildCodexArgs(request.workdir, { model: config.model, json: probed!.advertises('--json'), ephemeral: probed!.advertises('--ephemeral'), colorNever: probed!.advertises('--color') });
 
     const headBefore = await headOf(request.workdir);
-    const r: ProviderProcessResult = await runProviderProcess({ command, args, stdin: `${PREAMBLE(request)}\n\n${prompt}`, cwd: request.workdir, timeoutMs: request.timeoutMs, signal, passEnv: config.passEnv, env: config.env, parentEnv: config.parentEnv, termGraceMs: config.termGraceMs });
+    const r: ProviderProcessResult = await runProviderProcess({ command, args, stdin: `${PREAMBLE(request)}\n\n${prompt}`, cwd: request.workdir, timeoutMs: request.timeoutMs, signal, passEnv: config.passEnv, env: config.env, parentEnv: config.parentEnv, termGraceMs: config.termGraceMs, onProcess: config.onProcess });
 
     if (r.stillRunning && r.pid) {
       // The CLI could not be confirmed dead. Do not report the call as over: stay pending until the group is gone, so the

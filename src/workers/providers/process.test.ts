@@ -85,6 +85,22 @@ describe('runProviderProcess', () => {
     assert.equal(await waitDead(Number(r.stdout.trim())), true);
   });
 
+  it('a SIGTERM-ignoring child that outlives a leader which exits on SIGTERM is killed, not left behind', async () => {
+    // the child inherits the output pipe, so the call cannot end until it dies: the grace deadline escalates to SIGKILL for the group
+    const r = await sh(`trap 'exit 0' TERM; (trap '' TERM; exec sleep 60) & echo $!; wait`, { timeoutMs: 100, termGraceMs: 400 });
+    assert.equal(r.terminatedBy, 'SIGKILL');
+    assert.equal(await waitDead(Number(r.stdout.trim())), true);
+    assert.equal(r.stillRunning, false);
+  });
+
+  it('reports the owned pid and settles `exited` only after the group is gone', async () => {
+    let seen: { pid: number; exited: Promise<void> } | undefined;
+    const r = await sh('sleep 0.1', { onProcess: (p) => (seen = p) });
+    assert.equal(seen?.pid, r.pid);
+    await seen!.exited;
+    assert.equal(alive(-seen!.pid), false);
+  });
+
   it('bounds captured output', async () => {
     const r = await sh('yes x | head -c 500000', { maxOutputBytes: 1_000 });
     assert.ok(r.stdout.length <= 1_000);
