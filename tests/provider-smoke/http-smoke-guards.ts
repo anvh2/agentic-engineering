@@ -32,7 +32,13 @@ export const HTTP_SMOKE_LIMITS = {
  * The Gemini smoke runs on the FREE tier only, on exactly one model. A model with a price, an alias, a name the CLI may rewrite (it turns
  * `flash` and `gemini-3.5-flash` into `gemini-3.8-flash` with an API key) or anything else is refused; nothing is substituted.
  */
-export const GEMINI_FREE_TIER_MODEL = 'gemini-2.5-flash-lite';
+export const GEMINI_FREE_TIER_MODEL = 'gemini-3.5-flash-lite';
+
+/**
+ * Refused by name, with the reason, because it was the previous pin: on 2026-10-09 the first real request for it returned HTTP 404
+ * "This model models/gemini-2.5-flash-lite is no longer available to new users" (evidence: docs/reports/m8.2-gemini-404-postmortem.md).
+ */
+export const GEMINI_RETIRED_FOR_NEW_USERS = 'gemini-2.5-flash-lite';
 
 /** Ceilings: turns and per-request tokens are enforced by the CLI and the API; `maxForwardedRequests` by the request guard on the wire. */
 export const GEMINI_SMOKE_BUDGET = { maxTurns: 8, maxOutputTokens: 16_384 } as const;
@@ -40,6 +46,7 @@ export const GEMINI_SMOKE_MAX_FORWARDED_REQUESTS = 12;
 
 export function checkGeminiSmokeModel(model: string | undefined): { ok: true; model: string } | { ok: false; reason: string } {
   if (!model) return { ok: false, reason: `AGENTIC_GEMINI_MODEL is required and must be exactly ${GEMINI_FREE_TIER_MODEL}. The CLI default routes between models and cannot be priced.` };
+  if (model === GEMINI_RETIRED_FOR_NEW_USERS) return { ok: false, reason: `AGENTIC_GEMINI_MODEL=${model} is refused: Google answered HTTP 404 "no longer available to new users" for it on the first real smoke. Use exactly ${GEMINI_FREE_TIER_MODEL}; nothing is substituted.` };
   if (model !== GEMINI_FREE_TIER_MODEL) return { ok: false, reason: `AGENTIC_GEMINI_MODEL=${model} is refused: this smoke runs on the free tier with exactly ${GEMINI_FREE_TIER_MODEL}, never an alias, a paid or any other model, and nothing is substituted.` };
   return { ok: true, model };
 }

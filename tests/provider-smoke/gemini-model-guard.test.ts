@@ -6,7 +6,7 @@ import { guardVerdict, startModelGuard, type ModelGuard } from './gemini-model-g
 
 /** The guard against a LOCAL stand-in for the Gemini API. Nothing here reaches Google. */
 
-const PIN = 'gemini-2.5-flash-lite';
+const PIN = 'gemini-3.5-flash-lite';
 const KEY = 'DUMMY-KEY-MUST-NOT-APPEAR-ANYWHERE';
 const BODY_MARKER = 'PRIVATE-TASK-TEXT-MUST-NOT-APPEAR-ANYWHERE';
 
@@ -67,7 +67,7 @@ describe('model guard: exact outbound model', () => {
 
   it('blocks every other model locally, never forwards it and never substitutes the pinned one', async () => {
     await withGuard(async (g, up) => {
-      for (const model of ['gemini-3.8-flash', 'gemini-3-pro-preview', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-3.1-flash-lite', 'gemini-3.5-flash-lite', 'flash', 'flash-lite', 'auto', 'gemini-2.5-flash-lite-preview', 'GEMINI-2.5-FLASH-LITE', `${PIN}x`]) {
+      for (const model of ['gemini-3.8-flash', 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.5-flash', 'flash', 'flash-lite', 'auto', 'gemini-3.5-flash-lite-preview', 'GEMINI-3.5-FLASH-LITE', `${PIN}x`]) {
         const r = await post(g, `/v1beta/models/${model}:streamGenerateContent?alt=sse`);
         assert.equal(r.status, 403, model);
         assert.match(await r.text(), /not the pinned model/);
@@ -75,7 +75,7 @@ describe('model guard: exact outbound model', () => {
       assert.equal(up.seen.length, 0, 'not one request left the machine');
       const rep = g.report();
       assert.equal(rep.forwarded, 0);
-      assert.equal(rep.blocked, 12);
+      assert.equal(rep.blocked, 14);
       assert.equal(guardVerdict(rep).ok, false);
       assert.ok(guardVerdict(rep).reasons.some((r) => /other models/.test(r)));
     });
@@ -93,7 +93,7 @@ describe('model guard: exact outbound model', () => {
 
   it('a percent-encoded different model does not slip past the exact comparison', async () => {
     await withGuard(async (g, up) => {
-      const r = await post(g, `/v1beta/models/gemini-2.5-flash-lit%65:generateContent`); // decodes to the pinned id: allowed, and the upstream URL is unchanged
+      const r = await post(g, `/v1beta/models/gemini-3.5-flash-lit%65:generateContent`); // decodes to the pinned id: allowed, and the upstream URL is unchanged
       assert.equal(r.status, 200);
       const evil = await post(g, `/v1beta/models/gemini-3-pro-preview%3AgenerateContent:generateContent`);
       assert.equal(evil.status, 403);
@@ -131,6 +131,21 @@ describe('model guard: ceilings and stop conditions', () => {
         assert.ok(v.reasons.some((r) => /stop and do not rerun/.test(r)));
       }, { respond: () => ({ status, body: '{"error":{"message":"refused"}}' }) });
     }
+  });
+
+  it('the CLI\'s own fallback chain is blocked on the wire: after a 404 for the pinned model, a request for flash or Pro never reaches the API', async () => {
+    await withGuard(async (g, up) => {
+      assert.equal((await post(g, `/v1beta/models/${PIN}:streamGenerateContent?alt=sse`)).status, 404);
+      for (const fallback of ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-flash-preview']) assert.equal((await post(g, `/v1beta/models/${fallback}:streamGenerateContent?alt=sse`)).status, 403, fallback);
+      assert.equal((await post(g, `/v1beta/models/${PIN}:streamGenerateContent?alt=sse`)).status, 403, 'and not even the pinned model again');
+      assert.equal(up.seen.length, 1, 'exactly one request ever reached the API');
+      const rep = g.report();
+      assert.deepEqual(rep.entries.map((e) => e.decision), ['forwarded', 'blocked-model', 'blocked-model', 'blocked-model', 'blocked-model', 'blocked-tripped']);
+      const v = guardVerdict(rep);
+      assert.equal(v.ok, false);
+      assert.match(v.reasons.join(' '), /other models: gemini-2\.5-flash, gemini-2\.5-pro, gemini-3-flash-preview, gemini-3\.8-flash/);
+      assert.match(v.reasons.join(' '), /refused with 404/);
+    }, { respond: () => ({ status: 404, body: '{"error":{"code":404,"message":"This model is no longer available to new users."}}' }) });
   });
 
   it('a transient 5xx does not trip it (the CLI may retry, within the ceiling)', async () => {

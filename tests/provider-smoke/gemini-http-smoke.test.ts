@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { capacityFor } from '../../src/runtime/capacity/model-capacity.ts';
 import { tempDir } from '../../src/runtime/scheduler/test-helpers.ts';
-import { GEMINI_FREE_TIER_MODEL, GEMINI_HTTP_SMOKE_OPT_IN_VALUE, GEMINI_SMOKE_BUDGET, GEMINI_SMOKE_MAX_FORWARDED_REQUESTS, HTTP_SMOKE_LIMITS, checkGeminiSmokeModel, HTTP_SMOKE_OPT_IN_ENV, HTTP_SMOKE_OPT_IN_VALUE, checkHttpSmokeAuthorization } from './http-smoke-guards.ts';
+import { GEMINI_FREE_TIER_MODEL, GEMINI_HTTP_SMOKE_OPT_IN_VALUE, GEMINI_RETIRED_FOR_NEW_USERS, GEMINI_SMOKE_BUDGET, GEMINI_SMOKE_MAX_FORWARDED_REQUESTS, HTTP_SMOKE_LIMITS, checkGeminiSmokeModel, HTTP_SMOKE_OPT_IN_ENV, HTTP_SMOKE_OPT_IN_VALUE, checkHttpSmokeAuthorization } from './http-smoke-guards.ts';
 import { guardVerdict, startModelGuard } from './gemini-model-guard.ts';
 import { SmokeCancellationUnconfirmed, TASK_ID, runSchedulerSmoke, type SmokeOptions } from './scheduler-smoke.ts';
 
@@ -117,14 +117,20 @@ describe('Gemini HTTP smoke: gates (pure)', () => {
 });
 
 describe('Gemini HTTP smoke: free-tier model and budget gates (pure)', () => {
-  it('accepts exactly one model id, gemini-2.5-flash-lite, and nothing else: no alias, no paid or newer model, no default', () => {
-    assert.equal(GEMINI_FREE_TIER_MODEL, 'gemini-2.5-flash-lite');
-    assert.deepEqual(checkGeminiSmokeModel('gemini-2.5-flash-lite'), { ok: true, model: 'gemini-2.5-flash-lite' });
-    for (const bad of [undefined, '', 'flash', 'flash-lite', 'pro', 'auto', 'gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-pro-preview', 'GEMINI-2.5-FLASH-LITE', 'gemini-2.5-flash-lite ', 'gemini-2.5-flash-lite,gemini-2.5-flash', 'gemini-2.5-flash-lite-preview']) {
+  it('accepts exactly one model id, gemini-3.5-flash-lite, and nothing else: no alias, no paid or other model, no default', () => {
+    assert.equal(GEMINI_FREE_TIER_MODEL, 'gemini-3.5-flash-lite');
+    assert.deepEqual(checkGeminiSmokeModel('gemini-3.5-flash-lite'), { ok: true, model: 'gemini-3.5-flash-lite' });
+    for (const bad of [undefined, '', 'flash', 'flash-lite', 'pro', 'auto', 'gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-pro-preview', 'gemini-3-flash-preview', 'GEMINI-3.5-FLASH-LITE', 'gemini-3.5-flash-lite ', 'gemini-3.5-flash-lite,gemini-3.8-flash', 'gemini-3.5-flash-lite-preview', 'gemini-2.5-flash-lite']) {
       const r = checkGeminiSmokeModel(bad);
       assert.equal(r.ok, false, JSON.stringify(bad));
-      assert.match((r as { reason: string }).reason, /gemini-2\.5-flash-lite/);
+      assert.match((r as { reason: string }).reason, /gemini-3\.5-flash-lite/);
     }
+  });
+  it('the model that returned HTTP 404 on the first real smoke is refused by name, with the reason', () => {
+    assert.equal(GEMINI_RETIRED_FOR_NEW_USERS, 'gemini-2.5-flash-lite');
+    const r = checkGeminiSmokeModel('gemini-2.5-flash-lite');
+    assert.equal(r.ok, false);
+    assert.match((r as { reason: string }).reason, /404 "no longer available to new users"/);
   });
   it('the smoke budget is small and fixed', () => {
     assert.deepEqual(GEMINI_SMOKE_BUDGET, { maxTurns: 8, maxOutputTokens: 16_384 });
@@ -271,11 +277,11 @@ describe('Gemini HTTP smoke: ceilings and the request guard over real Mastra HTT
     assert.equal(report.taskState, 'REVIEW_PENDING');
     const lines = readFileSync(join(s.outDir, 'fake-gemini.log'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as { args?: string[]; settings?: any });
     const run = lines.find((l) => l.args?.includes('--prompt'))!;
-    assert.equal(run.args![run.args!.indexOf('--model') + 1], 'gemini-2.5-flash-lite');
+    assert.equal(run.args![run.args!.indexOf('--model') + 1], 'gemini-3.5-flash-lite');
     const settings = lines.find((l) => l.settings)!.settings;
     assert.equal(settings.model.maxSessionTurns, 8);
-    assert.deepEqual(settings.modelConfigs.overrides[0], { match: { model: 'gemini-2.5-flash-lite' }, modelConfig: { generateContentConfig: { maxOutputTokens: 16_384 } } });
-    assert.equal(report.telemetry[0]?.model, 'gemini-2.5-flash-lite');
+    assert.deepEqual(settings.modelConfigs.overrides[0], { match: { model: 'gemini-3.5-flash-lite' }, modelConfig: { generateContentConfig: { maxOutputTokens: 16_384 } } });
+    assert.equal(report.telemetry[0]?.model, 'gemini-3.5-flash-lite');
   });
 
   it('every request goes through the guard: the pinned model is forwarded, another model is blocked and never leaves, and the verdict says so', async () => {
@@ -299,7 +305,7 @@ describe('Gemini HTTP smoke: ceilings and the request guard over real Mastra HTT
       assert.equal(body.settings.security.auth.selectedType, 'gemini-api-key');
       assert.deepEqual(seen, [`/v1beta/models/${GEMINI_FREE_TIER_MODEL}:streamGenerateContent?alt=sse`], 'only the pinned model reached the API');
       const rep = guard.report();
-      assert.deepEqual([rep.forwarded, rep.blocked, rep.modelsRequested], [1, 2, ['flash', GEMINI_FREE_TIER_MODEL, 'gemini-3-pro-preview']]);
+      assert.deepEqual([rep.forwarded, rep.blocked, rep.modelsRequested], [1, 2, ['flash', 'gemini-3-pro-preview', GEMINI_FREE_TIER_MODEL]]);
       const v = guardVerdict(rep);
       assert.equal(v.ok, false);
       assert.match(v.reasons.join(' '), /other models: flash, gemini-3-pro-preview/);
@@ -336,6 +342,65 @@ describe('Gemini HTTP smoke: ceilings and the request guard over real Mastra HTT
       await new Promise<void>((r) => api.close(() => r()));
     }
   });
+});
+
+describe('Gemini HTTP smoke: the 404/429 postmortem as a regression (deterministic)', () => {
+  for (const status of [404, 429]) {
+    it(`upstream HTTP ${status} on the first request: one invocation, one forwarded request, no fallback, no retry, no verifier, clean shutdown`, async () => {
+      const seen: string[] = [];
+      const api = createServer((req, res) => {
+        seen.push(req.url ?? '');
+        res.statusCode = status;
+        res.setHeader('content-type', 'application/json');
+        res.end(`{"error":{"code":${status},"message":"This model is no longer available to new users."}}`);
+      });
+      await new Promise<void>((r) => api.listen(0, '127.0.0.1', r));
+      const guard = await startModelGuard({ pinnedModel: GEMINI_FREE_TIER_MODEL, upstream: `http://127.0.0.1:${(api.address() as AddressInfo).port}`, maxForwarded: GEMINI_SMOKE_MAX_FORWARDED_REQUESTS });
+      try {
+        // The CLI asks for the pinned model, then does what the real one does after a failure: tries its fallback chain (flash, then Pro).
+        const paths = [`/v1beta/models/${GEMINI_FREE_TIER_MODEL}:streamGenerateContent?alt=sse`, '/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse', '/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse'];
+        const s = smoke({ fake: { FAKE_MODE: 'fail', FAKE_API_PATHS: JSON.stringify(paths) } });
+        s.options.gemini = { ...s.options.gemini, model: GEMINI_FREE_TIER_MODEL, apiBaseUrl: guard.url, ...GEMINI_SMOKE_BUDGET };
+        const { report } = await s.run();
+
+        assert.equal(report.taskState, 'RUNTIME_FAILURE');
+        assert.equal(report.claims, 1);
+        assert.deepEqual(report.requeued, []);
+        assert.equal(report.codingAttempts, 1);
+        assert.equal(report.runtimeRetries, 0, 'no retry');
+        const b = report.backend as Record<string, any>;
+        assert.equal(b.providerInvocations, 1, 'one Gemini invocation');
+        assert.equal(b.providerInvocationsRefused, 0, 'and no second attempt was even asked for');
+        assert.equal(execLines(join(s.outDir, 'fake-gemini.log')).length, 1);
+
+        assert.deepEqual(seen, [paths[0]], 'exactly one request reached the API: the fallbacks never left the machine');
+        const lines = readFileSync(join(s.outDir, 'fake-gemini.log'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as any);
+        assert.deepEqual(lines.find((l) => l.apiStatuses)!.apiStatuses, [status, 403, 403]);
+        const rep = guard.report();
+        assert.deepEqual([rep.forwarded, rep.blocked, rep.tripped?.status], [1, 2, status]);
+        const v = guardVerdict(rep);
+        assert.equal(v.ok, false);
+        assert.match(v.reasons.join(' '), /stop and do not rerun/);
+
+        assert.ok(!report.verifier[0], 'the verifier never ran');
+        const trace = readFileSync(join(String(report.paths.artifactDir), 'trace.jsonl'), 'utf8');
+        assert.ok(!/verification_started/.test(trace) && !/task_passed/.test(trace));
+        assert.equal(report.git.sourceHeadUnchanged, true);
+        assert.equal(report.git.sourceStatusClean, true);
+        assert.equal(report.git.fsckOk, true);
+        assert.equal(report.git.worktreeStatus, '');
+        assert.deepEqual(report.git.unexpectedNewRefs, []);
+        assert.ok(report.processes.length === 1 && report.processes.every((p) => p.groupGone), 'no orphaned provider process');
+        assert.equal(b.shutdown.exited, true, 'the server exited');
+        assert.ok(!alive(b.serverPid));
+      } finally {
+        await guard.stop();
+        api.closeAllConnections();
+        await new Promise<void>((r) => api.close(() => r()));
+      }
+      await assert.rejects(fetch(guard.url + '/x'), 'the guard released its port');
+    });
+  }
 });
 
 describe('Gemini HTTP smoke: cancellation and timeouts through HTTP (deterministic)', () => {

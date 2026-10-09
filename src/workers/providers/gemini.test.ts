@@ -170,8 +170,8 @@ describe('command and configuration construction', () => {
   });
 
   it('the exact model id is passed through unchanged, with no alias in the command', () => {
-    const args = buildGeminiArgs({ policyDir: '/p', model: 'gemini-2.5-flash-lite' });
-    assert.equal(args[args.indexOf('--model') + 1], 'gemini-2.5-flash-lite');
+    const args = buildGeminiArgs({ policyDir: '/p', model: 'gemini-3.5-flash-lite' });
+    assert.equal(args[args.indexOf('--model') + 1], 'gemini-3.5-flash-lite');
     assert.equal(args.filter((a) => a === '--model').length, 1);
   });
 
