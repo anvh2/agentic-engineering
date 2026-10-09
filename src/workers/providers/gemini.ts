@@ -69,6 +69,9 @@ const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
 const NO_MCP_SERVER = 'agentic-no-mcp-servers';
 const PROMPT_STUB = 'Complete the task described above by editing the allowed files, then stop.';
 
+/** Model names that are aliases or that the CLI may silently replace with a newer model (observed on 0.63.0: `flash` and `gemini-3.5-flash` both became `gemini-3.8-flash` with an API key). A budget cannot be reasoned about for these. */
+export const GEMINI_MOVING_MODELS = ['auto', 'pro', 'flash', 'flash-lite', 'gemini-3.5-flash', 'gemini-3-flash-preview'] as const;
+
 export interface GeminiConfig {
   /** Binary to run (default `gemini`). */
   command?: string;
@@ -78,6 +81,10 @@ export interface GeminiConfig {
   passEnv?: readonly string[];
   /** Fixed variables for the CLI process (tests). */
   env?: Record<string, string>;
+  /** Model/tool turns allowed in one invocation, 1..GEMINI_MAX_TURNS (default GEMINI_MAX_TURNS). The CLI exits 53 beyond it. */
+  maxTurns?: number;
+  /** Per-request ceiling on generated tokens (`generateContentConfig.maxOutputTokens` for `model`; requires `model`). Default: not set. */
+  maxOutputTokens?: number;
   parentEnv?: NodeJS.ProcessEnv;
   termGraceMs?: number;
   /** Platform whose sandbox is required (default: this one). Only `darwin` (Seatbelt) is supported. */
@@ -86,6 +93,13 @@ export interface GeminiConfig {
   configRoot?: string;
   /** Receives the pid/process group of every CLI process this provider starts (for owner-side accounting and cleanup). */
   onProcess?: (info: { pid: number; exited: Promise<void> }) => void;
+}
+
+function checkLimits(config: GeminiConfig): void {
+  const { maxTurns, maxOutputTokens, model } = config;
+  if (maxTurns !== undefined && !(Number.isInteger(maxTurns) && maxTurns >= 1 && maxTurns <= GEMINI_MAX_TURNS)) throw new Error(`gemini provider: maxTurns must be an integer from 1 to ${GEMINI_MAX_TURNS}`);
+  if (maxOutputTokens !== undefined && !(Number.isInteger(maxOutputTokens) && maxOutputTokens >= 1_024 && maxOutputTokens <= 65_536)) throw new Error('gemini provider: maxOutputTokens must be an integer from 1024 to 65536');
+  if (maxOutputTokens !== undefined && !model) throw new Error('gemini provider: maxOutputTokens needs an explicit model (the ceiling is attached to that model name)');
 }
 
 function checkPassEnv(passEnv: readonly string[] = []): void {
@@ -129,14 +143,16 @@ export function assertSafeGeminiArgs(args: readonly string[]): void {
  * sees (the operator's own is never loaded: different home). The one layer above it that could loosen it is the worktree's
  * `.gemini/settings.json`, and `vetWorkspace` refuses a worktree that has one.
  */
-export function buildGeminiRunSettings(): Record<string, unknown> {
+export function buildGeminiRunSettings(options: { maxTurns?: number; maxOutputTokens?: number; model?: string } = {}): Record<string, unknown> {
   return {
+    // A hard ceiling on tokens generated per request, attached to the exact model name the run asks for.
+    ...(options.maxOutputTokens && options.model ? { modelConfigs: { overrides: [{ match: { model: options.model }, modelConfig: { generateContentConfig: { maxOutputTokens: options.maxOutputTokens } } }] } } : {}),
     general: { defaultApprovalMode: 'auto_edit' },
     tools: { core: [...GEMINI_ALLOWED_TOOLS], sandbox: true },
     security: { disableYoloMode: true, disableAlwaysAllow: true, enablePermanentToolApproval: false },
     // Without this the CLI loads the first `.env` found walking UP from the worktree, with credentials and endpoints in it.
     advanced: { ignoreLocalEnv: true },
-    model: { maxSessionTurns: GEMINI_MAX_TURNS },
+    model: { maxSessionTurns: options.maxTurns ?? GEMINI_MAX_TURNS },
     privacy: { usageStatisticsEnabled: false },
     telemetry: { enabled: false },
     hooksConfig: { enabled: false },
@@ -285,6 +301,7 @@ async function probeSandbox(config: GeminiConfig, cwd: string): Promise<{ ok: bo
 export async function probeGemini(config: GeminiConfig = {}, cwd = process.cwd()): Promise<CliProbeResult> {
   try {
     checkPassEnv(config.passEnv);
+    checkLimits(config);
   } catch (err) {
     return { state: 'unavailable', detail: (err as Error).message, missingFlags: [], advertises: () => false };
   }
@@ -307,6 +324,7 @@ export async function probeGemini(config: GeminiConfig = {}, cwd = process.cwd()
 
 export function createGeminiProvider(config: GeminiConfig = {}): WorkerProvider {
   checkPassEnv(config.passEnv);
+  checkLimits(config);
   const command = config.command ?? 'gemini';
   const descriptor = geminiDescriptor(config);
   let probed: CliProbeResult | undefined;
@@ -342,7 +360,7 @@ export function createGeminiProvider(config: GeminiConfig = {}): WorkerProvider 
       writeFileSync(join(policyDir, 'agentic.toml'), buildGeminiAdminPolicy(), { mode: 0o600 });
       const geminiHome = join(configDir, 'home');
       mkdirSync(join(geminiHome, '.gemini'), { recursive: true, mode: 0o700 });
-      writeFileSync(join(geminiHome, '.gemini', 'settings.json'), JSON.stringify(buildGeminiRunSettings(), null, 2), { mode: 0o600 });
+      writeFileSync(join(geminiHome, '.gemini', 'settings.json'), JSON.stringify(buildGeminiRunSettings({ maxTurns: config.maxTurns, maxOutputTokens: config.maxOutputTokens, model: config.model }), null, 2), { mode: 0o600 });
       const args = buildGeminiArgs({ policyDir, model: config.model });
 
       const headBefore = await headOf(request.workdir);

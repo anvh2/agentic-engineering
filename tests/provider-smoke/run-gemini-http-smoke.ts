@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { GEMINI_PASSABLE_ENV, geminiEntry } from '../../src/workers/providers/gemini.ts';
-import { GEMINI_HTTP_SMOKE_OPT_IN_VALUE, HTTP_SMOKE_LIMITS, HTTP_SMOKE_OPT_IN_ENV, HTTP_SMOKE_TASK_ID, checkHttpSmokeAuthorization } from './http-smoke-guards.ts';
+import { GEMINI_HTTP_SMOKE_OPT_IN_VALUE, GEMINI_SMOKE_BUDGET, HTTP_SMOKE_LIMITS, HTTP_SMOKE_OPT_IN_ENV, HTTP_SMOKE_TASK_ID, checkGeminiSmokeModel, checkHttpSmokeAuthorization } from './http-smoke-guards.ts';
 import { SmokeCancellationUnconfirmed, runSchedulerSmoke } from './scheduler-smoke.ts';
 
 /**
@@ -27,7 +27,9 @@ const auth = checkHttpSmokeAuthorization(process.env, process.argv.slice(2), 'ge
 if (!auth.ok) fail(2, `refused: ${auth.reason}`);
 const allowProviders = (auth as { allowProviders: string[] }).allowProviders;
 
-const model = process.env.AGENTIC_GEMINI_MODEL || undefined;
+const pin = checkGeminiSmokeModel(process.env.AGENTIC_GEMINI_MODEL || undefined);
+if (!pin.ok) fail(2, `refused: ${pin.reason}`);
+const model = (pin as { model: string }).model;
 const passEnv = (process.env.AGENTIC_GEMINI_PASS_ENV ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 const notPassable = passEnv.filter((n) => !(GEMINI_PASSABLE_ENV as readonly string[]).includes(n));
 if (notPassable.length > 0) fail(2, `refused: AGENTIC_GEMINI_PASS_ENV names ${notPassable.join(', ')}, which the adapter will not forward (allowed: ${GEMINI_PASSABLE_ENV.join(', ')})`);
@@ -41,7 +43,7 @@ if (!passEnv.some((n) => apiKeyNames.includes(n) && process.env[n])) {
 }
 
 // Free, local, no model call: is Gemini installed, does it advertise every control the adapter needs, does Seatbelt run; is Go there for the verifier?
-const availability = await geminiEntry({ model, passEnv }).probe();
+const availability = await geminiEntry({ model, passEnv, ...GEMINI_SMOKE_BUDGET }).probe();
 if (availability.state !== 'available') fail(3, `refused: Gemini is ${availability.state}: ${availability.detail}`);
 try {
   execFileSync('go', ['version'], { stdio: 'ignore' });
@@ -51,9 +53,10 @@ try {
 
 console.log(
   [
-    `Real Gemini HTTP smoke (${HTTP_SMOKE_OPT_IN_ENV}=${GEMINI_HTTP_SMOKE_OPT_IN_VALUE}); Gemini CLI ${availability.version ?? 'unknown version'}; model ${model ?? 'CLI default (the model it reports is recorded)'}`,
+    `Real Gemini HTTP smoke (${HTTP_SMOKE_OPT_IN_ENV}=${GEMINI_HTTP_SMOKE_OPT_IN_VALUE}); Gemini CLI ${availability.version ?? 'unknown version'}; model ${model} (exact id; no alias, no routing)`,
     `  objective: 1 disposable Go task (${HTTP_SMOKE_TASK_ID}); allow-list given to the scheduler AND the Mastra server: ${allowProviders.join(', ')}`,
     `  credentials forwarded to the CLI (names only): ${passEnv.join(', ')}`,
+    `  budget ceilings: <= ${GEMINI_SMOKE_BUDGET.maxTurns} model turns (CLI exits 53 beyond), <= ${GEMINI_SMOKE_BUDGET.maxOutputTokens} generated tokens per request; the CLI's own API-level retries are NOT counted (bounded only by the per-call deadline)`,
     `  bounds: <= ${HTTP_SMOKE_LIMITS.maxProviderInvocations} Gemini invocation (enforced in the server), ${HTTP_SMOKE_LIMITS.automaticRuntimeRetries} automatic retries, no provider fallback, ${HTTP_SMOKE_LIMITS.maxClaims} claim,`,
     `          ${HTTP_SMOKE_LIMITS.perCallTimeoutMs / 1000}s per call, ${HTTP_SMOKE_LIMITS.taskActiveTimeoutMs / 1000}s active execution, ${HTTP_SMOKE_LIMITS.cancelConfirmationMs / 1000}s to confirm a cancel`,
     '  sandbox: --sandbox (macOS Seatbelt permissive-open) --approval-mode auto_edit, private home + admin policy generated per run, no bypass flags (enforced by the adapter); Ctrl-C once = cancel and confirm, twice = exit and report',
@@ -65,7 +68,7 @@ try {
   const { report } = await runSchedulerSmoke({
     provider: 'gemini',
     transport: 'http',
-    gemini: { model, passEnv },
+    gemini: { model, passEnv, ...GEMINI_SMOKE_BUDGET },
     schedulerAllowProviders: allowProviders,
     http: { serverAllowProviders: allowProviders, maxInvocations: HTTP_SMOKE_LIMITS.maxProviderInvocations },
     modelTimeoutMs: HTTP_SMOKE_LIMITS.perCallTimeoutMs,

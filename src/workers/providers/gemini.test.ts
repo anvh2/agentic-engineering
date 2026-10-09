@@ -142,6 +142,21 @@ describe('command and configuration construction', () => {
     assert.equal(s.security.folderTrust, undefined, 'trust is handled by --skip-trust, not by weakening the setting');
   });
 
+  it('turn and per-request output-token ceilings reach the private settings, attached to the exact model', () => {
+    const s = buildGeminiRunSettings({ maxTurns: 8, maxOutputTokens: 16_384, model: 'gemini-3.8-flash' }) as any;
+    assert.equal(s.model.maxSessionTurns, 8);
+    assert.deepEqual(s.modelConfigs, { overrides: [{ match: { model: 'gemini-3.8-flash' }, modelConfig: { generateContentConfig: { maxOutputTokens: 16_384 } } }] });
+    assert.equal((buildGeminiRunSettings() as any).modelConfigs, undefined, 'no ceiling is invented when none is configured');
+    assert.equal((buildGeminiRunSettings() as any).model.maxSessionTurns, GEMINI_MAX_TURNS);
+  });
+
+  it('invalid ceilings are refused at construction and make the provider unavailable', async () => {
+    for (const bad of [{ maxTurns: 0 }, { maxTurns: GEMINI_MAX_TURNS + 1 }, { maxTurns: 1.5 }, { maxOutputTokens: 100, model: 'm' }, { maxOutputTokens: 4096 }]) {
+      assert.throws(() => createGeminiProvider({ command: FAKE, ...bad }), /gemini provider:/, JSON.stringify(bad));
+      assert.equal((await probeGemini(fake({}, bad).config)).state, 'unavailable', JSON.stringify(bad));
+    }
+  });
+
   it('the admin policy denies everything first and then allows only the file tools', () => {
     const toml = buildGeminiAdminPolicy();
     const rules = toml.split('[[rule]]').slice(1);
@@ -201,6 +216,15 @@ describe('end to end through the runner (mock CLI)', () => {
     assert.equal(existsSync(body.settingsPath!), false, 'the settings file is gone');
     assert.equal(existsSync(body.geminiHome!), false, 'and so is the private home');
     assert.equal(existsSync(join(repo, '.gemini')), false, 'nothing was written into the worktree');
+  });
+
+  it('configured ceilings arrive in the private settings the CLI is handed', async () => {
+    const f = fake({}, { model: 'gemini-pinned', maxTurns: 6, maxOutputTokens: 8_192 });
+    await runOnce(f.config).result;
+    const body = f.bodies()[0];
+    assert.equal(body.settings.model.maxSessionTurns, 6);
+    assert.equal(body.settings.modelConfigs.overrides[0].match.model, 'gemini-pinned');
+    assert.equal(body.settings.modelConfigs.overrides[0].modelConfig.generateContentConfig.maxOutputTokens, 8_192);
   });
 
   it('a configured model is passed and used as the label; the CLI-reported one does not override it', async () => {

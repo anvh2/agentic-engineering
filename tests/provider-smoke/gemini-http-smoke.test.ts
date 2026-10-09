@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { capacityFor } from '../../src/runtime/capacity/model-capacity.ts';
 import { tempDir } from '../../src/runtime/scheduler/test-helpers.ts';
-import { GEMINI_HTTP_SMOKE_OPT_IN_VALUE, HTTP_SMOKE_LIMITS, HTTP_SMOKE_OPT_IN_ENV, HTTP_SMOKE_OPT_IN_VALUE, checkHttpSmokeAuthorization } from './http-smoke-guards.ts';
+import { GEMINI_HTTP_SMOKE_OPT_IN_VALUE, GEMINI_SMOKE_BUDGET, HTTP_SMOKE_LIMITS, checkGeminiSmokeModel, HTTP_SMOKE_OPT_IN_ENV, HTTP_SMOKE_OPT_IN_VALUE, checkHttpSmokeAuthorization } from './http-smoke-guards.ts';
 import { SmokeCancellationUnconfirmed, TASK_ID, runSchedulerSmoke, type SmokeOptions } from './scheduler-smoke.ts';
 
 /**
@@ -112,6 +112,19 @@ describe('Gemini HTTP smoke: gates (pure)', () => {
     }
     assert.equal(HTTP_SMOKE_LIMITS.maxProviderInvocations, 1);
     assert.equal(HTTP_SMOKE_LIMITS.automaticRuntimeRetries, 0);
+  });
+});
+
+describe('Gemini HTTP smoke: budget gates (pure)', () => {
+  it('requires one exact model id; aliases and silently-promoted names are refused', () => {
+    assert.equal(checkGeminiSmokeModel(undefined).ok, false);
+    assert.equal(checkGeminiSmokeModel('').ok, false);
+    for (const moving of ['flash', 'pro', 'auto', 'flash-lite', 'gemini-3.5-flash', 'gemini-3-flash-preview']) assert.equal(checkGeminiSmokeModel(moving).ok, false, moving);
+    assert.deepEqual(checkGeminiSmokeModel('gemini-3.8-flash'), { ok: true, model: 'gemini-3.8-flash' });
+    assert.deepEqual(checkGeminiSmokeModel('gemini-2.5-flash'), { ok: true, model: 'gemini-2.5-flash' });
+  });
+  it('the smoke budget is small and fixed', () => {
+    assert.deepEqual(GEMINI_SMOKE_BUDGET, { maxTurns: 8, maxOutputTokens: 16_384 });
   });
 });
 
