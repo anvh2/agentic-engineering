@@ -109,6 +109,33 @@ export interface EventRow {
   detail: Record<string, unknown> | null;
 }
 
+/** One fact about whether a DONE task's implementation is still integrated. Append-only. */
+export interface IntegrationFact {
+  seq: number;
+  taskId: string;
+  at: number;
+  kind: 'reverted' | 'reinstated';
+  actor: string;
+  reason: string;
+  /** The commit that reverted (or re-integrated) the implementation, when the recorder knew it. */
+  commit: string | null;
+}
+
+export type IntegrationState = 'integrated' | 'reverted' | 'not_integrated';
+
+/**
+ * Execution, integration and acceptance are three facts, not one:
+ *   execution   what the scheduler lifecycle recorded (DONE is terminal and never rewritten);
+ *   integration whether the implementation is STILL in the integration branch (an append-only fact; DONE alone claims nothing);
+ *   accepted    derived: DONE and currently integrated. A reverted implementation is never currently accepted.
+ */
+export interface TaskProjection {
+  taskId: string;
+  execution: { state: TaskState; finishedAt: number | null };
+  integration: { state: IntegrationState; since: number | null; history: IntegrationFact[] };
+  accepted: boolean;
+}
+
 export interface ReviewRow {
   id: number;
   taskId: string;
@@ -183,6 +210,15 @@ CREATE TABLE IF NOT EXISTS reviews (
   request TEXT NOT NULL, decision TEXT, feedback TEXT, reviewer TEXT, decided_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS locks (name TEXT PRIMARY KEY, owner TEXT NOT NULL, expires_at INTEGER NOT NULL);
+-- M10.1: whether a DONE task's implementation is STILL integrated is a separate, append-only fact. DONE is terminal and the
+-- task row and its events are history; a revert is recorded here (and as one audit event), never by rewriting them.
+CREATE TABLE IF NOT EXISTS integration_facts (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(id), at INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('reverted', 'reinstated')), actor TEXT NOT NULL, reason TEXT NOT NULL, commit_sha TEXT
+);
+CREATE INDEX IF NOT EXISTS integration_facts_task ON integration_facts(task_id);
+CREATE TRIGGER IF NOT EXISTS integration_facts_no_update BEFORE UPDATE ON integration_facts BEGIN SELECT RAISE(ABORT, 'integration_facts is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS integration_facts_no_delete BEFORE DELETE ON integration_facts BEGIN SELECT RAISE(ABORT, 'integration_facts is append-only'); END;
 `;
 
 const json = (v: unknown) => JSON.stringify(v);
@@ -400,6 +436,74 @@ export class SchedulerStore {
     }));
   }
 
+  // ---- integration facts (execution vs integration vs acceptance) -------------------------------------------------
+
+  integrationFacts(taskId: string): IntegrationFact[] {
+    const rows = this.db.prepare('SELECT * FROM integration_facts WHERE task_id = ? ORDER BY seq').all(taskId) as Record<string, any>[];
+    return rows.map((r) => ({ seq: r.seq, taskId: r.task_id, at: r.at, kind: r.kind, actor: r.actor, reason: r.reason, commit: r.commit_sha }));
+  }
+
+  /** The newest integration fact of a task, if any. */
+  private latestFact(taskId: string): IntegrationFact | undefined {
+    return this.integrationFacts(taskId).at(-1);
+  }
+
+  /** True while the task's implementation is recorded as reverted (its latest fact is a revert). */
+  isReverted(taskId: string): boolean {
+    return this.latestFact(taskId)?.kind === 'reverted';
+  }
+
+  /** Every task whose implementation is currently recorded as reverted. One query, for list views and metrics. */
+  revertedTaskIds(): Set<string> {
+    const rows = this.db.prepare("SELECT task_id FROM integration_facts f WHERE kind = 'reverted' AND seq = (SELECT MAX(seq) FROM integration_facts WHERE task_id = f.task_id)").all() as { task_id: string }[];
+    return new Set(rows.map((r) => r.task_id));
+  }
+
+  projection(taskId: string): TaskProjection {
+    const task = this.requireTask(taskId);
+    const history = this.integrationFacts(taskId);
+    const integration: IntegrationState = task.state !== 'DONE' ? 'not_integrated' : history.at(-1)?.kind === 'reverted' ? 'reverted' : 'integrated';
+    return {
+      taskId,
+      execution: { state: task.state, finishedAt: task.finishedAt },
+      integration: { state: integration, since: history.at(-1)?.at ?? null, history },
+      accepted: integration === 'integrated',
+    };
+  }
+
+  /**
+   * Records that a DONE task's implementation is no longer integrated (typically a `git revert` after DONE). The task row and
+   * every earlier event stay exactly as they were: DONE is terminal and is history. One fact and one audit event are appended,
+   * atomically. Refused for a task that is not DONE, that is already reverted, or without a reason.
+   */
+  recordRevert(taskId: string, input: { actor: string; reason: string; commit?: string }): TaskProjection {
+    return this.recordIntegrationFact(taskId, 'reverted', input);
+  }
+
+  /** The opposing fact: the implementation was integrated again. Only a reverted implementation can be reinstated. */
+  recordReinstatement(taskId: string, input: { actor: string; reason: string; commit?: string }): TaskProjection {
+    return this.recordIntegrationFact(taskId, 'reinstated', input);
+  }
+
+  private recordIntegrationFact(taskId: string, kind: IntegrationFact['kind'], input: { actor: string; reason: string; commit?: string }): TaskProjection {
+    const reason = input.reason?.trim();
+    if (!reason) throw new StoreError('invalid', `an integration ${kind === 'reverted' ? 'revert' : 'reinstatement'} needs a reason (it is part of the audit trail)`);
+    if (!input.actor?.trim()) throw new StoreError('invalid', 'an integration fact needs an actor');
+    return this.tx(() => {
+      const task = this.requireTask(taskId);
+      if (task.state !== 'DONE') throw new StoreError('state_mismatch', `task ${taskId} is ${task.state}; only a DONE task has an implementation to ${kind === 'reverted' ? 'revert' : 'reinstate'}`);
+      const reverted = this.latestFact(taskId)?.kind === 'reverted';
+      if (kind === 'reverted' && reverted) throw new StoreError('state_mismatch', `task ${taskId}: the implementation is already recorded as reverted`);
+      if (kind === 'reinstated' && !reverted) throw new StoreError('state_mismatch', `task ${taskId}: the implementation is not recorded as reverted, so there is nothing to reinstate`);
+      const now = this.now();
+      this.db.prepare('INSERT INTO integration_facts (task_id, at, kind, actor, reason, commit_sha) VALUES (?,?,?,?,?,?)').run(taskId, now, kind, input.actor, reason, input.commit ?? null);
+      this.db
+        .prepare('INSERT INTO events (task_id, at, from_state, to_state, actor, reason, detail) VALUES (?,?,?,?,?,?,?)')
+        .run(taskId, now, 'DONE', 'DONE', input.actor, `integration ${kind}: ${reason}${input.commit ? ` (${input.commit})` : ''}`, json({ integration: kind, commit: input.commit ?? null }));
+      return this.projection(taskId);
+    });
+  }
+
   // ---- planning ----------------------------------------------------------------------------------------------
 
   /** Creates a batch and its tasks in BACKLOG. Plans are append-only: an existing batch/task id is an error. */
@@ -486,7 +590,12 @@ export class SchedulerStore {
         throw err;
       }
       if (!dep) return { status: 'failed', reason: `dependency ${depId} does not exist`, waitingOn: [] };
-      if (dep.state === 'DONE') continue;
+      if (dep.state === 'DONE') {
+        // DONE is history; whether the code is still there is the integration fact. A reverted dependency satisfies nobody.
+        const fact = this.latestFact(dep.id);
+        if (fact?.kind === 'reverted') return { status: 'failed', reason: `dependency ${dep.id} is DONE but its implementation was reverted${fact.commit ? ` (${fact.commit})` : ''}: ${fact.reason}`, waitingOn: [] };
+        continue;
+      }
       if (['ESCALATED', 'CANCELLED', 'BLOCKED'].includes(dep.state) || (dep.state === 'REVIEW_REJECTED' && !dep.supersededBy)) {
         const cause = dep.state === 'BLOCKED' && dep.failureCategory === 'dependency_failed' && dep.stateReason ? ` (${dep.stateReason})` : '';
         return { status: 'failed', reason: `dependency ${dep.id} is ${dep.state}${cause}`, waitingOn: [] };

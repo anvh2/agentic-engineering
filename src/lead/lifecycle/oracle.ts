@@ -209,6 +209,9 @@ export async function runAcceptance(deps: AcceptanceDeps, objectiveId: string): 
   const required = requiredTasks(store, lc.batchId);
   const notDone = required.filter((t) => t.state !== 'DONE');
   if (notDone.length > 0) throw new LifecycleError('invalid', `acceptance needs every required task DONE; not done: ${notDone.map((t) => `${t.id} (${t.state})`).join(', ')}`);
+  // DONE is history: the code must still be there. A reverted implementation is not part of what the oracle would judge.
+  const reverted = required.filter((t) => store.isReverted(t.id));
+  if (reverted.length > 0) throw new LifecycleError('invalid', `acceptance needs every required task's implementation integrated; reverted after DONE: ${reverted.map((t) => t.id).join(', ')}`);
 
   const tip = await worktrees.integrationTip(batch);
   const integrationBranch = `lead-integration/${batch.id}`;

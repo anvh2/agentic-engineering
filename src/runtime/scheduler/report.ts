@@ -17,8 +17,11 @@ export interface Metrics {
   workerPassRate: number | null;
   reviewsDecided: number;
   reviewAcceptanceRate: number | null;
+  /** DONE by a local worker whose implementation is still integrated (a reverted one is counted in revertedAfterDone instead). */
   doneByWorker: number;
   doneByClaude: number;
+  /** Tasks that reached DONE but whose implementation was later recorded as reverted: history, not currently accepted. */
+  revertedAfterDone: number;
   /** DONE by a local worker / implementation tasks planned (corrections excluded): the number to optimize. */
   acceptedLocalImplementationRate: number | null;
   avgCodingMs: number | null;
@@ -44,14 +47,17 @@ export function computeMetrics(store: SchedulerStore, batchId?: string): Metrics
   const verdicts = delegated.filter((t) => reached(t.id, 'VERIFYING') || (reached(t.id, 'ESCALATED') && t.failureCategory !== 'runtime_unavailable'));
   const passed = delegated.filter((t) => reached(t.id, 'VERIFYING'));
   const reviews = store.listReviews().filter((r) => r.decision && tasks.some((t) => t.id === r.taskId));
-  const doneByWorker = tasks.filter((t) => t.state === 'DONE' && t.implementedBy === 'worker');
-  const doneByClaude = tasks.filter((t) => t.state === 'DONE' && t.implementedBy === 'claude');
+  // DONE is history; a task whose implementation was reverted afterwards is not a currently accepted implementation
+  const reverted = store.revertedTaskIds();
+  const integrated = (t: TaskRow) => t.state === 'DONE' && !reverted.has(t.id);
+  const doneByWorker = tasks.filter((t) => integrated(t) && t.implementedBy === 'worker');
+  const doneByClaude = tasks.filter((t) => integrated(t) && t.implementedBy === 'claude');
   const implementation = originals.filter((t) => t.spec.kind === 'implementation');
   // a correction chain counts once: the original is "accepted by a worker" if it or a descendant correction is DONE by a worker
   const acceptedOriginals = implementation.filter((o) => {
     let t: TaskRow | undefined = o;
     for (let i = 0; t && i < 10; i++) {
-      if (t.state === 'DONE') return t.implementedBy === 'worker';
+      if (t.state === 'DONE') return t.implementedBy === 'worker' && !reverted.has(t.id);
       t = t.supersededBy ? store.getTask(t.supersededBy) : undefined;
     }
     return false;
@@ -71,11 +77,12 @@ export function computeMetrics(store: SchedulerStore, batchId?: string): Metrics
     reviewAcceptanceRate: rate(reviews.filter((r) => r.decision === 'APPROVED').length, reviews.length),
     doneByWorker: doneByWorker.length,
     doneByClaude: doneByClaude.length,
+    revertedAfterDone: tasks.filter((t) => t.state === 'DONE' && reverted.has(t.id)).length,
     acceptedLocalImplementationRate: rate(acceptedOriginals.length, implementation.length),
     avgCodingMs: avg(delegated.filter((t) => t.codingMs > 0).map((t) => t.codingMs)),
     avgVerifyMs: avg(delegated.filter((t) => t.verifyMs > 0).map((t) => t.verifyMs)),
     localInferenceMs: delegated.reduce((a, t) => a + t.codingMs, 0),
-    avgEndToEndMs: avg(tasks.filter((t) => t.state === 'DONE' && t.finishedAt).map((t) => t.finishedAt! - t.createdAt)),
+    avgEndToEndMs: avg(tasks.filter((t) => integrated(t) && t.finishedAt).map((t) => t.finishedAt! - t.createdAt)),
     integrationAttempts: integrationEnded.length,
     integrationFailureRate: rate(integrationFailed.length, integrationEnded.length),
     runtimeRetries: delegated.reduce((a, t) => a + t.runtimeRetries, 0),
@@ -84,6 +91,14 @@ export function computeMetrics(store: SchedulerStore, batchId?: string): Metrics
     byState,
     claudeReviewTokens: null,
   };
+}
+
+/** One line for views: says plainly when a DONE task's implementation is no longer integrated; undefined otherwise. */
+export function integrationNote(store: SchedulerStore, task: TaskRow): string | undefined {
+  if (task.state !== 'DONE') return undefined;
+  const fact = store.integrationFacts(task.id).at(-1);
+  if (fact?.kind !== 'reverted') return undefined;
+  return `integration REVERTED${fact.commit ? ` by ${fact.commit}` : ''} (${fact.actor}): ${fact.reason}; completed earlier, not currently integrated`;
 }
 
 /** Human-readable backlog: a generated VIEW of the database, never read back as state. */
@@ -97,7 +112,7 @@ export function renderBacklog(store: SchedulerStore, batchId?: string): string {
     const c = t.spec.request?.contract;
     return [
       `### ${t.id}: ${t.title}`,
-      `State **${t.state}**${t.stateReason ? ` (${t.stateReason})` : ''}${t.failureCategory ? `, failure: ${t.failureCategory}` : ''}. Executor: ${t.executor}${t.spec.keptReason ? ` (kept: ${t.spec.keptReason})` : ''}.`,
+      `State **${t.state}**${t.stateReason ? ` (${t.stateReason})` : ''}${t.failureCategory ? `, failure: ${t.failureCategory}` : ''}${integrationNote(store, t) ? `. **${integrationNote(store, t)}**` : ''}. Executor: ${t.executor}${t.spec.keptReason ? ` (kept: ${t.spec.keptReason})` : ''}.`,
       c ? `\n**Objective:** ${c.objective}\n\n**Acceptance:**\n${c.acceptanceCriteria.map((a) => `- ${a}`).join('\n')}\n\n**Verification:** ${c.verificationCommands.map((v) => `\`${v.join(' ')}\``).join(', ')}\n\n**Constraints:** ${c.constraints.join('; ')}\n\n**Context files:** ${c.contextFiles.join(', ') || '-'}` : '',
       '',
     ].join('\n');

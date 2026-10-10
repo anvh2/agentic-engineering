@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { CommandRunner } from '../../runtime/integration/integrate.ts';
 import type { Executor } from '../../runtime/scheduler/scheduler.ts';
+import { integrationNote } from '../../runtime/scheduler/report.ts';
 import type { SchedulerStore } from '../../runtime/scheduler/store.ts';
 import type { SchedulerConfig } from '../../runtime/scheduler/types.ts';
 import type { WorktreeManager } from '../../runtime/worktree/worktree.ts';
@@ -93,9 +94,17 @@ export async function runLifecycleCommand(args: string[], ctx: LifecycleCliConte
       }
       case 'status': {
         const lc = lifecycle.require(objectiveId);
-        ctx.out(`objective ${objectiveId}: ${lc.phase}${lc.result && (lc.result as { reason?: string }).reason ? ` (${(lc.result as { reason?: string }).reason})` : ''}`);
+        const tasks = ctx.store.listTasks({ batchId: lc.batchId });
+        // a recorded ACCEPTED is history; it says nothing about code reverted afterwards (execution, integration and acceptance are separate facts)
+        const reverted = tasks.filter((t) => t.state === 'DONE' && ctx.store.isReverted(t.id));
+        const caveat = reverted.length > 0 ? ` [not currently accepted: ${reverted.length} required task(s) reverted since: ${reverted.map((t) => t.id).join(', ')}]` : '';
+        ctx.out(`objective ${objectiveId}: ${lc.phase}${lc.result && (lc.result as { reason?: string }).reason ? ` (${(lc.result as { reason?: string }).reason})` : ''}${caveat}`);
         ctx.out(`oracle ${lc.oracle.specHash.slice(0, 12)}  base ${lc.baseCommit.slice(0, 10)}  negative control: ${lc.oracle.negativeControl.mode}`);
-        for (const t of ctx.store.listTasks({ batchId: lc.batchId })) ctx.out(`  ${t.state.padEnd(15)} ${t.id}${t.correctionOf ? ` (correction of ${t.correctionOf})` : ''}${t.stateReason && !['READY', 'BACKLOG', 'DONE'].includes(t.state) ? `  ${t.stateReason.slice(0, 120)}` : ''}`);
+        for (const t of tasks) {
+          ctx.out(`  ${t.state.padEnd(15)} ${t.id}${t.correctionOf ? ` (correction of ${t.correctionOf})` : ''}${t.stateReason && !['READY', 'BACKLOG', 'DONE'].includes(t.state) ? `  ${t.stateReason.slice(0, 120)}` : ''}`);
+          const note = integrationNote(ctx.store, t);
+          if (note) ctx.out(`                  ${note}`);
+        }
         for (const a of lc.authorizations) ctx.out(`  authorization: ${a.kind} ${a.taskId} ${a.remaining} use(s) left (${a.actor}: ${a.reason})`);
         for (const e of lifecycle.events(objectiveId).slice(-15)) ctx.out(`  #${e.seq} ${e.kind.padEnd(22)} ${e.fromPhase}->${e.toPhase} ${e.actor}: ${e.reason ?? ''}`);
         return 0;
