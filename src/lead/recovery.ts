@@ -37,7 +37,7 @@ export function recoverRuntimeFailure(store: SchedulerStore, taskId: string, opt
       expectFrom: 'RUNTIME_FAILURE',
       patch: { failureCategory: 'runtime_failure_escalated', artifacts: { recoveries: record(before, 'escalate') } },
     });
-    store.promote('recovery');
+    store.promote('recovery', { batchId: before.batchId });
     return { task, action: 'escalate', grantedClaims: 0 };
   }
 
@@ -52,6 +52,6 @@ export function recoverRuntimeFailure(store: SchedulerStore, taskId: string, opt
     expectFrom: 'RUNTIME_FAILURE',
     patch: { runtimeRequeues: current.runtimeRequeues + 1, failureCategory: null, artifacts: { recoveries: record(current, 'retry') } },
   });
-  store.promote('recovery');
+  store.promote('recovery', { batchId: before.batchId });
   return { task: store.requireTask(taskId), action: 'retry', grantedClaims: granted };
 }

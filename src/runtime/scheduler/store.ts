@@ -609,12 +609,40 @@ export class SchedulerStore {
   }
 
   /**
+   * The ids a scoped promotion may touch: every task of the batch, plus every task that depends on one of them, directly or
+   * transitively, in any batch. A task outside that set cannot be affected by the batch's state and is none of its business.
+   */
+  private promotionScope(batchId: string): Set<string> {
+    if (typeof batchId !== 'string' || batchId === '') throw new StoreError('invalid', 'promote: a scope needs a non-empty batch id (an empty scope is never "everything")');
+    if (!this.getBatch(batchId)) throw new StoreError('not_found', `promote: batch ${batchId} not found`);
+    const all = this.listTasks();
+    const inScope = new Set(all.filter((t) => t.batchId === batchId).map((t) => t.id));
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const t of all) {
+        if (!inScope.has(t.id) && t.spec.dependsOn.some((d) => inScope.has(d))) {
+          inScope.add(t.id);
+          grew = true;
+        }
+      }
+    }
+    return inScope;
+  }
+
+  /**
    * BACKLOG -> READY when all dependencies are DONE; BACKLOG -> BLOCKED when one failed for good; a task that was
    * BLOCKED only because of a dependency returns to BACKLOG/READY once that dependency recovers.
+   *
+   * Without a scope this evaluates every task (the scheduler's own global pass). With `{ batchId }` it evaluates only that
+   * batch and the tasks that depend on it (see promotionScope): planning, cancelling, reviewing or integrating one objective
+   * must not move the tasks of an unrelated one (M10: `lead plan` blocked three tasks of another objective). An empty or
+   * unknown batch id is an error, never a silent fallback to "everything".
    */
-  promote(actor = 'scheduler'): { ready: string[]; blocked: string[]; unblocked: string[] } {
+  promote(actor = 'scheduler', scope: { batchId?: string } = {}): { ready: string[]; blocked: string[]; unblocked: string[] } {
     const out = { ready: [] as string[], blocked: [] as string[], unblocked: [] as string[] };
+    const inScope = scope.batchId === undefined ? undefined : this.promotionScope(scope.batchId);
     for (const task of this.listTasks({ states: ['BACKLOG', 'BLOCKED'] })) {
+      if (inScope && !inScope.has(task.id)) continue;
       if (task.state === 'BLOCKED' && task.failureCategory !== 'dependency_failed') continue;
       const dep = this.dependencyStatus(task);
       try {

@@ -93,7 +93,7 @@ export function reviewDecision(
     maxCorrections: config.maxReviewCorrections,
     correctionSpec,
   });
-  store.promote('review');
+  store.promote('review', { batchId: task.batchId });
   return result;
 }
 

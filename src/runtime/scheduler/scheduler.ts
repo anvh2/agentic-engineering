@@ -147,6 +147,7 @@ export class Scheduler {
    */
   async run(options: { batchId?: string; workerPrefix?: string } = {}): Promise<RunSummary> {
     const summary: RunSummary = { claimed: [], reviewPending: [], failed: [], requeued: [], peakInFlight: 0, stopReason: 'idle', stillActive: [] };
+    if (options.batchId !== undefined && !this.store.getBatch(options.batchId)) throw new Error(`unknown batch ${options.batchId}: nothing to run`);
     const prefix = options.workerPrefix ?? `worker-${process.pid}`;
     const inflight = new Map<string, Promise<void>>();
     const slots = new Set<number>(); // worker slots in use
@@ -156,7 +157,7 @@ export class Scheduler {
       try {
         const reaped = this.store.reapExpired();
         summary.requeued.push(...reaped.requeued);
-        this.store.promote();
+        this.store.promote('scheduler', options.batchId === undefined ? {} : { batchId: options.batchId }); // a run limited to one batch promotes only that batch (and its dependents)
 
         // Shutdown gate: re-checked per claim, so no task is claimed once stop() has been called.
         while (inflight.size < this.config.maxConcurrentWorkers && !this.abort.signal.aborted) {

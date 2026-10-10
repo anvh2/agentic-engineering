@@ -117,7 +117,7 @@ export async function integrateBatch(store: SchedulerStore, worktrees: WorktreeM
         continue;
       }
       reports.push(await integrateOne(ctx, task));
-      store.promote('integrator');
+      store.promote('integrator', { batchId: batch.id });
     }
     return { reports, locked: false };
   } finally {
