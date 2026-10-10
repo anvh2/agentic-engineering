@@ -1,5 +1,7 @@
 # Local Engineering Control Center
 
+**Studio integration status:** the standalone slice below is preserved and validated, but it does not satisfy the subsequent mandatory localhost:4111 Studio-sidebar requirement. See the [version-pinned integration proposal](../plans/m8.4-studio-integration.md); implementation is awaiting explicit approval for a Studio source fork.
+
 A local, read-only Gateway and React UI for the existing scheduler. The Organization page is the main slice: compact agent table and keyboard-accessible inspector, task and run evidence, scoped token fields, provider summary and scheduler timeline. Overview/Objectives/Runs/Reviews are small views of that same snapshot. Token telemetry and live inference remain UNKNOWN until Core exposes the required read models.
 
 ## Start
