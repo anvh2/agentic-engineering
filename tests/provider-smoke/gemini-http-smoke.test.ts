@@ -72,7 +72,7 @@ function hanging(extra: Parameters<typeof smoke>[0] = {}) {
     await waitFor(() => existsSync(pidfile), 'the (fake) Gemini CLI to be running under the Mastra server');
     return Number(readFileSync(pidfile, 'utf8'));
   };
-  return { ...s, emitter, exits, logs, run, pid };
+  return { ...s, emitter, exits, logs, run, pid, pidfile };
 }
 
 const execLines = (log: string) =>
@@ -457,18 +457,48 @@ describe('Gemini HTTP smoke: cancellation and timeouts through HTTP (determinist
     assert.ok(((err as SmokeCancellationUnconfirmed).report.processes as { groupGone: boolean }[]).every((p) => p.groupGone));
   });
 
-  it('active-execution timeout: the run is cancelled over HTTP and confirmed; no late result can complete the task', async () => {
-    const h = hanging({ termGraceMs: 200, taskTimeoutMs: 2_500 });
-    const pid = await h.pid();
-    const { report } = await h.run;
+  // The active-execution budget (2.5 s, unchanged) covers worktree preparation, the workflow's first step, the provider probe,
+  // the permit and the spawn, so WHERE the timeout lands depends on machine load. The product's contract is the same in
+  // every case; the test used to assume one of them (the CLI running before the budget ran out) and failed under load
+  // (M10 F1). Now each interleaving is forced deterministically, and the unforced case asserts only the invariants.
+  const timedOutCleanly = (report: Awaited<ReturnType<typeof runSchedulerSmoke>>['report']) => {
     assert.equal(report.taskState, 'RUNTIME_FAILURE');
     assert.equal(report.failureCategory, 'task_timeout');
-    assert.equal(alive(pid), false);
     assert.deepEqual(report.stillActive, [], 'the cancel was confirmed (run terminal, permit released)');
     assert.ok(report.schedulerEvents.some((e) => /run cancellation \(task timeout\): stopped/.test(e.reason ?? '')), JSON.stringify(report.schedulerEvents));
-    assert.deepEqual(report.processes, [{ pid, groupGone: true }]);
+    assert.ok(report.processes.every((p) => p.groupGone && !alive(p.pid)), `every started provider group is gone: ${JSON.stringify(report.processes)}`);
     assert.equal(report.claims, 1);
     assert.deepEqual(report.requeued, []);
+  };
+
+  it('active-execution timeout: the run is cancelled over HTTP and confirmed; no late result can complete the task', async () => {
+    const h = hanging({ termGraceMs: 200, taskTimeoutMs: 2_500 });
+    const { report } = await h.run;
+    timedOutCleanly(report);
+    // Whichever interleaving this machine produced: at most one provider process, and if the CLI got as far as reporting in, it is that one.
+    assert.ok(report.processes.length <= 1, JSON.stringify(report.processes));
+    if (existsSync(h.pidfile)) assert.deepEqual(report.processes, [{ pid: Number(readFileSync(h.pidfile, 'utf8')), groupGone: true }]);
+  });
+
+  it('active-execution timeout forced BEFORE the CLI is spawned (provider.before-spawn): nothing is ever started', async () => {
+    const h = hanging({ termGraceMs: 200, taskTimeoutMs: 2_500, http: { faults: { 'provider.before-spawn': { delayMs: 60_000 } } } });
+    const { report } = await h.run;
+    timedOutCleanly(report);
+    const fired = readFileSync(join(h.outDir, 'faults.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l).point);
+    assert.deepEqual(fired, ['provider.before-spawn'], 'the run was held at the boundary when the budget ran out');
+    assert.deepEqual(report.processes, [], 'no provider process was started, before or after the cancel');
+    assert.equal(execLines(join(h.outDir, 'fake-gemini.log')).length, 0, 'the CLI never received a prompt');
+    assert.equal(existsSync(h.pidfile), false);
+  });
+
+  it('active-execution timeout forced while the CLI is starting (spawned, not ready): the group is killed although it never reported in', async () => {
+    // Forced by the CLI's 60 s start delay: the budget only has to land AFTER the spawn, so it is sized for spawn latency under
+    // full-suite load (2.5 s was not always enough: M10 full regression on 94f5239), not for readiness, which never comes.
+    const h = hanging({ termGraceMs: 200, taskTimeoutMs: 15_000, fake: { FAKE_START_DELAY_MS: '60000' } });
+    const { report } = await h.run;
+    timedOutCleanly(report);
+    assert.equal(existsSync(h.pidfile), false, 'the CLI never became ready');
+    assert.equal(report.processes.length, 1, 'the one started process is accounted for and gone');
   });
 
   it('cancellation that cannot be confirmed fails loudly, keeps the evidence and LEAVES the server (the process supervisor) running', async () => {

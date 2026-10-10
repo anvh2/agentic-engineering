@@ -212,7 +212,7 @@ export function createCodexProvider(config: CodexConfig = {}): WorkerProvider {
       const args = buildCodexArgs(request.workdir, { model: config.model, json: probed!.advertises('--json'), ephemeral: probed!.advertises('--ephemeral'), colorNever: probed!.advertises('--color'), isolation });
 
       const headBefore = await headOf(request.workdir);
-      const r: ProviderProcessResult = await runProviderProcess({ command, args, stdin: `${PREAMBLE(request)}\n\n${prompt}`, cwd: request.workdir, timeoutMs: request.timeoutMs, signal, passEnv: config.passEnv, env: config.env, parentEnv: config.parentEnv, termGraceMs: config.termGraceMs, onProcess: config.onProcess });
+      const r: ProviderProcessResult = await runProviderProcess({ command, args, stdin: `${PREAMBLE(request)}\n\n${prompt}`, cwd: request.workdir, timeoutMs: request.timeoutMs, signal, passEnv: config.passEnv, env: config.env, parentEnv: config.parentEnv, termGraceMs: config.termGraceMs, onProcess: config.onProcess, faultPoint: 'provider.before-spawn' });
 
       if (r.stillRunning && r.pid) {
         // The CLI could not be confirmed dead. Do not report the call as over: stay pending until the group is gone, so the

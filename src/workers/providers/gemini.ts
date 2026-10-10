@@ -389,6 +389,7 @@ export function createGeminiProvider(config: GeminiConfig = {}): WorkerProvider 
         parentEnv: config.parentEnv,
         termGraceMs: config.termGraceMs,
         onProcess: config.onProcess,
+        faultPoint: 'provider.before-spawn',
       });
 
       if (r.stillRunning && r.pid) {

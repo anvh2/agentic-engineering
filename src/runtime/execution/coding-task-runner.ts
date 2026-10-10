@@ -13,6 +13,7 @@ import { CapacityWaitTimeout, capacityFor, modelWaitBudgetMs, permitHolder, type
 import { createRepairLoopTracker } from './repair-loop-tracker.ts';
 import { runtimeMetrics, type RuntimeMetrics } from '../../observability/metrics.ts';
 import { createTraceSink, type TraceEvent, type TraceSink } from './coding-task-trace.ts';
+import { faultPoint } from '../reliability/faults.ts';
 import { normalizeUsage, type ProviderDescriptor, type ProviderRequest, type ProviderTelemetry, type RawUsage } from './worker-provider.ts';
 
 /**
@@ -471,6 +472,7 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
           // the budget is cumulative over the whole task run (every attempt and retry), so a task cannot queue forever one call at a time
           const spent = records.reduce((a, r) => a + r.capacityWaitMs, 0);
           const remaining = Math.max(1, waitBudgetMs - spent);
+          await faultPoint('runner.before-permit', { signal: options.signal });
           permit = await (options.capacity ?? capacityFor(descriptor?.capacity)).acquire(permitHolder({ label: modelLabel, taskId: task.taskId, runId: options.runId }), options.signal, { tag: task.taskId, maxWaitMs: remaining });
           waitOutcome = 'acquired';
         } catch (err) {
@@ -484,6 +486,7 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
           record.capacityWaitMs += waitedMs;
           metrics.modelCapacityWait(waitedMs / 1000, waitOutcome);
         }
+        await faultPoint('runner.after-permit', { signal: options.signal }); // the permit is held: the finally below releases it
         inferenceStart = Date.now();
         trace.emit('model_started', { model: modelLabel, ...(descriptor ? { provider: descriptor.identity.id, providerModel: descriptor.identity.model } : {}), attempt: attemptNo, runtimeTry, capacityWaitMs: inferenceStart - waitStart });
         const callSignal = options.signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), options.signal]) : AbortSignal.timeout(timeoutMs);

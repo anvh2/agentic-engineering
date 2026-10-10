@@ -21,6 +21,7 @@
 //   npm run lead -- integration revert|reinstate <task> --reason "..." [--commit <sha>]   a DONE task's code was reverted (or re-integrated): an append-only fact, no state change
 //   npm run lead -- objective <objective.json> [--draft F] | --show <id> | --submit <id>   M7.5: plan, then explicit submit; never executes
 //   npm run lead -- lifecycle pin|run|status|authorize|resume|cancel <objective-id> ...   M8.5: execute -> verified review -> integrate -> independent acceptance (see src/lead/lifecycle/cli.ts)
+//   npm run lead -- meeting open|run|status|record|cancel <session-id> ...   M10: model-backed engineering meetings (see src/lead/collaboration/meeting-cli.ts)
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -36,6 +37,7 @@ import { configFromEnv, resolveConfig, type SchedulerConfig } from '../src/runti
 import { WorktreeManager } from '../src/runtime/worktree/worktree.ts';
 import { runObjectiveCommand } from '../src/lead/objective/cli.ts';
 import { runLifecycleCommand } from '../src/lead/lifecycle/cli.ts';
+import { runMeetingCommand } from '../src/lead/collaboration/meeting-cli.ts';
 import { recoverRuntimeFailure } from '../src/lead/recovery.ts';
 import { cancelTask } from '../src/lead/cancel.ts';
 import { allowedProvidersFromEnv, parseAllowList, providerOf } from '../src/runtime/execution/worker-provider.ts';
@@ -112,7 +114,7 @@ async function main(): Promise<void> {
     }
     case 'plan': {
       const plan = store.createBatch(JSON.parse(await readFile(resolve(positional[0]), 'utf8')));
-      const p = store.promote('plan');
+      const p = store.promote('plan', { batchId: plan.batchId }); // only the plan just created: never another objective's tasks
       console.log(`batch ${plan.batchId}: ${plan.tasks.length} task(s); READY: ${p.ready.join(', ') || '-'}; BLOCKED: ${p.blocked.join(', ') || '-'}`);
       table(plan.batchId);
       break;
@@ -259,8 +261,11 @@ async function main(): Promise<void> {
     case 'reconcile':
       console.log(JSON.stringify(await reconcileState(store, worktrees, flag('--batch')), null, 2));
       break;
+    case 'meeting':
+      process.exitCode = await runMeetingCommand(rest, { store, meetingsDir: process.env.AGENTIC_MEETINGS_DIR ?? join(workdir, 'meetings') });
+      break;
     default:
-      console.error('usage: lead <objective|lifecycle|plan|tasks|run|status|review|integrate|integration|resume|cancel|retry|claude|metrics|reconcile> ...');
+      console.error('usage: lead <objective|lifecycle|meeting|plan|tasks|run|status|review|integrate|integration|resume|cancel|retry|claude|metrics|reconcile> ...');
       process.exit(2);
   }
 }

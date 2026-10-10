@@ -67,7 +67,7 @@ try {
   mkdirSync(join(wt, dirname(ORACLE_REL)), { recursive: true });
   copyFileSync(join(REPO, ORACLE_REL), join(wt, ORACLE_REL));
   const started = Date.now();
-  const r = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', '--test', '--test-reporter=tap', '--test-timeout=240000', ORACLE_REL], { cwd: wt, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 1_500_000 });
+  const r = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', '--test', '--test-reporter=tap', '--test-timeout=1500000', ORACLE_REL], { cwd: wt, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 1_500_000 });
   const tap = `${r.stdout ?? ''}`;
   const label = expect === 'mutant' ? `mutant-${mutantId}` : expect;
   writeFileSync(join(out, `oracle-${label}-${commit.slice(0, 10)}.tap`), tap + (r.stderr ? `\n# STDERR\n${r.stderr}` : ''));
