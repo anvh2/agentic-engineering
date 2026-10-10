@@ -769,22 +769,36 @@ describe('O-SA scheduler acceptance truth', () => {
   });
 
   it('a reverted dependency does not satisfy its dependents, nothing can claim them, and reinstating it releases them', CASE, async () => {
-    const store = await claudeBatch('B', [{ id: 't1' }, { id: 't2', dependsOn: ['t1'] }]);
+    const { SchedulerStore } = await mod('src/runtime/scheduler/store.ts');
+    const { workerTask } = await mod('src/runtime/scheduler/test-helpers.ts');
+    const store = new SchedulerStore(':memory:');
+    store.createBatch({
+      batchId: 'B',
+      project: 'p',
+      repository: '/tmp/none',
+      tasks: [
+        { id: 't1', title: 't1', executor: 'claude', keptReason: 'oracle fixture' },
+        workerTask('w2', { dependsOn: ['t1'] }), // a worker task that waits for t1 and is claimable once READY
+        { id: 't3', title: 't3', executor: 'claude', keptReason: 'oracle fixture', dependsOn: ['t1'] },
+      ],
+    });
     finishClaude(store, 't1');
-    assert.equal(store.dependencyStatus(store.requireTask('t2')).status, 'ready', 'a DONE, integrated dependency satisfies its dependent');
+    assert.equal(store.dependencyStatus(store.requireTask('w2')).status, 'ready', 'a DONE, integrated dependency satisfies its dependent');
     store.recordRevert('t1', { actor: 'lead', reason: 'reverted' });
-    const dep = store.dependencyStatus(store.requireTask('t2'));
+    const dep = store.dependencyStatus(store.requireTask('w2'));
     assert.notEqual(dep.status, 'ready', 'a reverted dependency does not satisfy it');
     assert.match(dep.reason ?? '', /revert/i);
-    store.transition('t2', 'READY', { actor: 'oracle', reason: 'forced READY before the revert was noticed', expectFrom: 'BACKLOG' });
-    assert.equal(store.claim({ workerId: 'w', languages: ['go', 'js'], leaseMs: 1_000, maxActive: 3 }), undefined, 'a worker cannot claim work built on a reverted dependency');
-    store.transition('t2', 'BACKLOG', { actor: 'oracle', reason: 'back', expectFrom: 'READY' }).state;
+    // w2 was promoted READY before the revert was noticed: no worker may claim work built on a reverted dependency
+    store.transition('w2', 'READY', { actor: 'oracle', reason: 'promoted before the revert was noticed', expectFrom: 'BACKLOG' });
+    assert.equal(store.claim({ workerId: 'w', languages: ['go', 'js'], leaseMs: 1_000, maxActive: 3 }), undefined, 'nothing is claimable');
+    // a dependent still waiting is blocked, with the standard category
     store.promote('oracle');
-    assert.equal(store.requireTask('t2').state, 'BLOCKED');
-    assert.equal(store.requireTask('t2').failureCategory, 'dependency_failed');
+    assert.equal(store.requireTask('t3').state, 'BLOCKED');
+    assert.equal(store.requireTask('t3').failureCategory, 'dependency_failed');
     store.recordReinstatement('t1', { actor: 'lead', reason: 'reinstated' });
     store.promote('oracle');
-    assert.ok(['BACKLOG', 'READY'].includes(store.requireTask('t2').state), `the dependent returns once the implementation is back (is ${store.requireTask('t2').state})`);
+    assert.ok(['BACKLOG', 'READY'].includes(store.requireTask('t3').state), `the blocked dependent returns once the implementation is back (is ${store.requireTask('t3').state})`);
+    assert.equal(store.claim({ workerId: 'w', languages: ['go', 'js'], leaseMs: 1_000, maxActive: 3 })?.task.id, 'w2', 'and the worker task is claimable again');
   });
 
   it('metrics do not count a reverted implementation as done, for either implementer, and report the revert', CASE, async () => {

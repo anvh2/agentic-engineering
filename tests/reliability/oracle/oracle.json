@@ -1,7 +1,7 @@
 {
   "schema": "agentic.m10_1-oracle/1",
   "version": 3,
-  "sha256": "eae51c9b416444731c4cc33282528e983f95a44afe36143a599adafcd192c8b0",
+  "sha256": "b487d7c9d99e2d50d45042d7f5153edb2588ff4b0cb71314427e84be87091682",
   "pinnedAt": "2026-10-10",
   "baselineRef": "c77ffdd",
   "owner": "Claude (Engineering Lead session of M10.1, Sonnet 5.5): wrote the oracle AND will write the implementation. Disclosed; independence comes from the reviewer, the pinned-before-implementation order, the protected files and the mutants below.",
@@ -27,6 +27,12 @@
       "from": "e28f26b7401f050a1e61ca68b6826b9ef5883728b4a8bb552be651ddb67f8cf7",
       "sha256": "eae51c9b416444731c4cc33282528e983f95a44afe36143a599adafcd192c8b0",
       "note": "Type annotation only (`const copy: Record<string, any>`), required for `tsc --noEmit` to pass on the oracle file. No runtime change: node strips types. Made by the implementer before any candidate verdict, disclosed here; the baseline negative control was re-run on the new hash."
+    },
+    {
+      "version": "3.2",
+      "from": "eae51c9b416444731c4cc33282528e983f95a44afe36143a599adafcd192c8b0",
+      "sha256": "b487d7c9d99e2d50d45042d7f5153edb2588ff4b0cb71314427e84be87091682",
+      "note": "One case amended (O-SA: 'a reverted dependency does not satisfy its dependents'). As pinned it could not pass under ANY implementation: it moved a task READY->BACKLOG (illegal in the state machine), expected promote() to act on a READY task (promote only evaluates BACKLOG/BLOCKED), and its claim() assertion was vacuous because claim() only considers executor 'worker' tasks while the fixture used Claude-kept ones. Found by the implementer when the case failed with the implementation in place (error: 'READY -> BACKLOG is not allowed'); the independent reviewer missed it. The requirement (SA-c) is unchanged and now stronger: a real worker task must be unclaimable while its dependency is reverted and claimable again after reinstatement. The baseline negative control and the mutant control were re-run on the new hash. Disclosed: the amendment author is the implementer."
     }
   ],
   "reviewFindings": {
