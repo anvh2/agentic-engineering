@@ -1,0 +1,80 @@
+diff --git a/src/runtime/capacity/model-capacity.ts b/src/runtime/capacity/model-capacity.ts
+index d9b68e2..24da4e5 100644
+--- a/src/runtime/capacity/model-capacity.ts
++++ b/src/runtime/capacity/model-capacity.ts
+@@ -175,14 +175,20 @@ export class ModelCapacity {
+   /**
+    * Permits held, or queue entries waiting, on behalf of work tagged `tag` (the task's contract id). The runner names its
+    * holder `<model>:<taskId>:pid<pid>`. Used to confirm that a cancelled run really released the model.
++   *
++   * Without `resource` this looks across every resource: a caller that does not know which provider the task used must
++   * see all of them (it may then report a permit of an unrelated run that shares the task id as still engaged, never the
++   * reverse). With `resource` (the caller knows the task's provider) it looks only there, so a permit another run holds on
++   * another provider under the same task id - task ids are unique per plan, not per machine - is not mistaken for this one.
+    */
+-  engagedBy(tag: string): { kind: 'lease' | 'waiter'; holder: string; pid: number }[] {
++  engagedBy(tag: string, options: { resource?: string } = {}): { kind: 'lease' | 'waiter'; holder: string; pid: number }[] {
+     const marker = `:${tag}:pid`;
+     const now = this.now();
+-    // Across every resource: a cancelled task must have released the permit of whichever provider it was using.
++    const scope = options.resource === undefined ? '' : ' AND resource = ?';
++    const params = options.resource === undefined ? [now] : [now, options.resource];
+     // Matched in code, not with LIKE, so task ids containing '_' or '%' cannot match each other.
+-    const leases = (this.db.prepare('SELECT holder, pid FROM leases WHERE expires_at > ? ORDER BY acquired_at').all(now) as { holder: string; pid: number }[]).filter((l) => l.holder.includes(marker));
+-    const waiters = (this.db.prepare('SELECT holder, pid, tag FROM waiters WHERE expires_at > ? ORDER BY ticket').all(now) as { holder: string; pid: number; tag: string | null }[]).filter((w) => w.tag === tag || w.holder.includes(marker));
++    const leases = (this.db.prepare(`SELECT holder, pid FROM leases WHERE expires_at > ?${scope} ORDER BY acquired_at`).all(...params) as { holder: string; pid: number }[]).filter((l) => l.holder.includes(marker));
++    const waiters = (this.db.prepare(`SELECT holder, pid, tag FROM waiters WHERE expires_at > ?${scope} ORDER BY ticket`).all(...params) as { holder: string; pid: number; tag: string | null }[]).filter((w) => w.tag === tag || w.holder.includes(marker));
+     return [...leases.map((l) => ({ kind: 'lease' as const, holder: l.holder, pid: l.pid })), ...waiters.map((w) => ({ kind: 'waiter' as const, holder: w.holder, pid: w.pid }))];
+   }
+ 
+diff --git a/src/runtime/scheduler/cancel.ts b/src/runtime/scheduler/cancel.ts
+index db06e14..7d09f48 100644
+--- a/src/runtime/scheduler/cancel.ts
++++ b/src/runtime/scheduler/cancel.ts
+@@ -1,3 +1,4 @@
++import { providerOf } from '../execution/worker-provider.ts';
+ import type { SchedulerStore, TaskRow } from './store.ts';
+ import type { Executor } from './scheduler.ts';
+ 
+@@ -38,7 +39,7 @@ export interface CancelRunOptions {
+   store: SchedulerStore;
+   executor: Pick<Executor, 'cancel'>;
+   /** Machine-wide model capacity probe; without it only the run's own status is confirmed. */
+-  capacity?: { engagedBy?(tag: string): { kind: 'lease' | 'waiter'; holder: string; pid: number }[] };
++  capacity?: { engagedBy?(tag: string, options?: { resource?: string }): { kind: 'lease' | 'waiter'; holder: string; pid: number }[] };
+   task: TaskRow;
+   /** The run to stop when the task row does not carry it (a run started after the task lost its lease was never recorded). */
+   runId?: string;
+@@ -61,6 +62,11 @@ export async function cancelTaskRun(options: CancelRunOptions): Promise<CancelRu
+   const task = store.getTask(options.task.id) ?? options.task;
+   const runId = options.runId ?? task.runId ?? undefined;
+   const tag = task.spec.request?.contract.taskId ?? task.id; // what the runner names its permit/queue entry after
++  // The provider's capacity resource: every registered provider queues on a resource named after its id
++  // (src/workers/providers/*: capacity.resource === identity.id, guarded by engaged-scope.test.ts). Scoping to it keeps a
++  // permit another run holds on another provider under the same task id from blocking this confirmation.
++  const resource = providerOf(task.spec.request);
++  const engagedNow = () => capacity?.engagedBy?.(tag, { resource }) ?? [];
+   const record = (result: CancelRunResult): CancelRunResult => {
+     log(`${task.id}: cancel (${reason}): ${result.outcome}${result.runId ? ` run ${result.runId}` : ''}${result.detail ? ` - ${result.detail}` : ''}`);
+     try {
+@@ -78,17 +84,17 @@ export async function cancelTaskRun(options: CancelRunOptions): Promise<CancelRu
+   try {
+     report = await executor.cancel({ task, runId, log });
+   } catch (err) {
+-    return record({ taskId: task.id, runId, outcome: 'unreachable', engaged: capacity?.engagedBy?.(tag) ?? [], detail: `cancel request failed: ${(err as Error).message}; the run may still be executing` });
++    return record({ taskId: task.id, runId, outcome: 'unreachable', engaged: engagedNow(), detail: `cancel request failed: ${(err as Error).message}; the run may still be executing` });
+   }
+   const runReport: CancelReport = report ?? { run: 'unconfirmed' };
+ 
+   // The run being terminal does not prove the model is free: the step may still be unwinding. Wait for the permit to go.
+   const deadline = Date.now() + (options.graceMs ?? DEFAULT_GRACE_MS);
+   const pollMs = options.pollMs ?? 250;
+-  let engaged = capacity?.engagedBy?.(tag) ?? [];
++  let engaged = engagedNow();
+   while (engaged.length > 0 && Date.now() < deadline) {
+     await sleep(pollMs);
+-    engaged = capacity?.engagedBy?.(tag) ?? [];
++    engaged = engagedNow();
+   }
+ 
+   const stoppedRun = runReport.run === 'terminal';

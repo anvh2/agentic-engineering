@@ -1,0 +1,147 @@
+{
+  "schema": "agentic.m10_1-oracle/1",
+  "version": 3,
+  "sha256": "e28f26b7401f050a1e61ca68b6826b9ef5883728b4a8bb552be651ddb67f8cf7",
+  "pinnedAt": "2026-10-10",
+  "baselineRef": "c77ffdd",
+  "owner": "Claude (Engineering Lead session of M10.1, Sonnet 5.5): wrote the oracle AND will write the implementation. Disclosed; independence comes from the reviewer, the pinned-before-implementation order, the protected files and the mutants below.",
+  "reviewer": "A separate fresh-context Claude subagent (general-purpose, read-only, no test runs, no repository writes). It saw the draft oracle, the baseline code and the history of the two earlier oracles; no implementation existed. Full report: docs/reports/m10.1-oracle-review.md. It returned ORACLE_REJECTED for the first draft; the amendments below are the response.",
+  "authorization": "The M10.1 mission prompt, Phase 4: 'Create a corrected acceptance specification for F2' and 'Use a separate reviewer or independently prepared deterministic oracle'. The same prompt authorises the Phase 2 and 3 cases and the not-ready budget amendment ('Review the historical M10 oracle versions').",
+  "lineage": [
+    {
+      "version": 1,
+      "sha256": "e2fc10c44125ce564d19f96a41aef987764f6a062a8594dc7acdaf9b8a03622a",
+      "note": "M10, pinned before implementation; O-F2 asserted a handle-scoped engagedBy, which makes the scheduler's cross-resource cancel confirmation vacuous"
+    },
+    {
+      "version": 2,
+      "sha256": "480e9fc89066d1e77a927a670a08f15d6535e5d5c90eeb27d6615c9a49dea47c",
+      "note": "M10, O-F2 amended to 'scope to the task's resource when known'; that fix produced a false STOPPED against http-boundary.test.ts:132 and was reverted; v2 case 'gemini task + unrelated codex permit -> stopped' contradicts the existing contract; its not-ready case (2.5 s) landed before the spawn under load"
+    },
+    {
+      "version": 3,
+      "note": "M10.1: O-F2 replaced by run-scoped ownership (16 cases + 3 guards), O-SA and O-PR added, O-FP/O-SM/O-RL carried; not-ready budget 15 s; lease-isolation must carry evidence of what it proves. Amendment reason: v2's O-F2 asserted behaviour that is itself unsafe; the operator's M10.1 mission specifies the corrected properties."
+    }
+  ],
+  "reviewFindings": {
+    "B1 overlapping run ids": "accepted: case 12 (8 concurrent runs with prefix/delimiter/holder-part ids, idle probes with substrings)",
+    "B2 foreign queue entry harmless": "accepted: case 3 asserts A's and an idle run's cancel while B is still queued",
+    "B3 holder replay over-pins": "accepted: 9a/9b copy the whole lease row with node:sqlite; only case 10b pins the legacy holder syntax, and says so",
+    "B4 hangs instead of failing": "accepted: ready() races the run's own result and a timeout; every case has a timeout; 8b asserts the permit was really granted",
+    "B5 sleep races": "accepted: cases 3 and 8a poll the queue",
+    "B6 lifecycle ACCEPTED": "accepted: O-SA lifecycle case (status output, untouched verdict and events, acceptance refused)",
+    "B7 line pin": "accepted: lead tasks checks the task's block",
+    "G1 scheduler-level identity": "accepted: case 14 (Scheduler + in-process executor + workflow, foreign run and unmarked variants)",
+    "G2 revert details": "accepted: whole-row comparison, actor/commit/reason/at kept, durability via reopen, worker-path metrics, claim() refused",
+    "G3 malformed marker": "accepted: case 10b",
+    "G4 promotion gaps": "accepted: recovered-BLOCKED fixture, empty/unknown batch, cross-objective reads, transitive dependents",
+    "G5 scenario evidence": "accepted: lease-isolation evidence must carry detail.proves and two distinct run ids",
+    "G6 protected contracts": "accepted: protectedFiles below, checked by run-oracle.ts for candidate and mutant runs",
+    "G7 retry loop": "accepted: case 13",
+    "G8 real concurrent provider processes sharing a task id": "deferred: not in the oracle; reported as a known limitation (the O-SM cases run one run)",
+    "N1 message regexes": "accepted: error-wording assertions removed",
+    "N2 BLOCKED weak check": "accepted: BACKLOG or READY",
+    "N3 DONE->DONE event shape": "kept as a stated design choice (header SA-a); the 'failed' dependency status is relaxed to 'not ready'",
+    "N4 in-memory store in cancelRun": "left: the audit call fails harmlessly there; the audit path is exercised by case 14 with a real store",
+    "N5 classifier signature": "kept, retained for historical evidence",
+    "N6 path assumption": "n/a once copied"
+  },
+  "baselineMustFail": [
+    "1. same task id, different runs: each run is confirmed against its own permit only",
+    "2. same task id, different providers: a codex run does not block a gemini cancel, and the reverse",
+    "3. same task id, same provider: a sibling run's permit AND queue entry never block, a run's own always do",
+    "4. missing or default provider: a task with no provider is confirmed on its own permit, not a foreign one",
+    "5. injected handle / resource mismatch can neither hide the target's permit nor adopt a foreign one",
+    "9b. recovery: a re-run of the same task is not blocked by the previous run's stale permit, and the previous run still is",
+    "10b. an unreadable ownership marker is unknown ownership, not \"some other run\" (pins the holder syntax, see the header)",
+    "11. the Mastra workflow carries its own run id into the permit it takes (scheduler -> workflow run -> capacity)",
+    "12. overlapping run ids never match each other (whole-value comparison, not substring or prefix)",
+    "13. the runner's own retry takes a second permit for the SAME run, and that permit carries the run id too",
+    "14. scheduler -> executor -> workflow: the run id the scheduler stores is the one that owns the permit, so a foreign run of the same task never blocks the scheduler's own cancel and an unattributable permit still does",
+    "a DONE task whose implementation was reverted keeps its history and is not currently accepted; reinstating it restores acceptance",
+    "a revert needs a reason and a DONE task; nothing else is accepted",
+    "a reverted dependency does not satisfy its dependents, nothing can claim them, and reinstating it releases them",
+    "metrics do not count a reverted implementation as done, for either implementer, and report the revert",
+    "`lead tasks` shows the historical completion without claiming the code is still integrated",
+    "an objective recorded as ACCEPTED says a required task has since been reverted, keeps its history, and cannot be accepted again",
+    "promoting one objective mutates nothing in an unrelated objective",
+    "a BLOCKED task of another objective whose dependency has recovered is not released by someone else's promote either",
+    "an empty or unknown objective id is an error, never \"global\"",
+    "dependencies across objectives are read both ways: a scoped task sees a dead or finished dependency elsewhere",
+    "after the dependency is done, scoped promotion of its objective releases dependents in other objectives, transitively, and leaves strangers alone",
+    "history is append-only: earlier events are untouched by a scoped promotion",
+    "`lead plan` promotes the plan it created and nothing else (the M10 side effect)",
+    "declares the named boundaries",
+    "is inert without the explicit test enable, even when a plan is present (production cannot be affected)",
+    "when enabled: delays, can throw, logs one JSON line per firing, and an abort ends the delay at once",
+    "a plan naming an unknown boundary is refused, never silently ignored",
+    "timeout BEFORE the CLI is spawned: no provider process ever exists, no late spawn",
+    "timeout AFTER spawn but before the CLI is ready: the started group is killed although it never reported in",
+    "classifies the two known signatures and the environmental and unknown cases",
+    "runs a scenario N times with bounded concurrency and writes one evidence record per run plus a summary",
+    "knows the scenarios the mission requires"
+  ],
+  "baselineMustPass": [
+    "6. target permit still active: STOPPED is never reported, however terminal the run looks",
+    "7. target process still active: a provider call that outlived its abort keeps the permit, and the cancel waits for it",
+    "8a. cancellation while queued for the permit: nothing is held, and no permit is taken later",
+    "8b. cancellation landing right after the permit is granted, before the call: the permit is released and the cancel is confirmed",
+    "9a. lease expiry: a crashed, un-renewed permit blocks while live and stops blocking when it expires",
+    "10. unknown or legacy ownership fails closed for every run, for permits and for queue entries",
+    "a permit nobody can attribute to a run, held on ANOTHER resource than the probe's, still blocks (http-boundary.test.ts:132 in miniature)",
+    "once that permit is released the same cancellation is confirmed",
+    "the task-level probe (no run id) still reports every permit and queue entry carrying the task id, on every resource",
+    "promote() with no scope keeps its global behaviour"
+  ],
+  "informationalOnBaseline": [
+    "the original scenario, original 2.5 s budget, NO forcing: whichever interleaving the machine produces, the timeout is clean"
+  ],
+  "protectedFiles": {
+    "src/integrations/mastra/http-boundary.test.ts": "3f14e0840f3c8fdd45de41fedcf437148c34e709f228ea5e52b54dd71a08044a",
+    "src/runtime/scheduler/cancellation.test.ts": "5bdedcb27ce3ac6b290135b4df3957716fa03a8b0cc728e3cd0d199011a3d263",
+    "src/runtime/execution/worker-provider.test.ts": "f02e6175821cc35df275f0a0a77a791c03d5872f2871244c4962dd07eecb8e79",
+    "src/integrations/mastra/gemini-scheduler.test.ts": "3e5b74b44f3f47ab05c833df8f632bd46af3dae479710058d1827e8aff54d90a",
+    "src/integrations/mastra/codex-scheduler.test.ts": "24a22e131b35d9d35354bd2df9966e2423db29dce6d19f6c60e5c7a7154dd1e6",
+    "src/runtime/capacity/model-capacity.test.ts": "ab16e8d6505fdc90f025692e5bc6a466e6bdb68483f1684f247b238102d9c664",
+    "src/runtime/capacity/model-capacity-fifo.test.ts": "bb3e85c959aff94df5cdc25d56c62a8d6dcf886be99333ccd6a90f8b298c7287"
+  },
+  "mutants": [
+    {
+      "id": "m10-resource-scope",
+      "description": "The M10 F2 fix (e8448dd, reverted by 94f5239): engagedBy(tag,{resource}) with cancel scoped to the provider's resource. The oracle must reject it: it reports STOPPED while the target's permit is held.",
+      "patch": "m10-resource-scope.patch",
+      "appliesTo": "baseline",
+      "mustFail": [
+        "1. same task id, different runs: each run is confirmed against its own permit only",
+        "3. same task id, same provider: a sibling run's permit AND queue entry never block, a run's own always do",
+        "5. injected handle / resource mismatch can neither hide the target's permit nor adopt a foreign one",
+        "9b. recovery: a re-run of the same task is not blocked by the previous run's stale permit, and the previous run still is",
+        "10. unknown or legacy ownership fails closed for every run, for permits and for queue entries",
+        "10b. an unreadable ownership marker is unknown ownership, not \"some other run\" (pins the holder syntax, see the header)",
+        "11. the Mastra workflow carries its own run id into the permit it takes (scheduler -> workflow run -> capacity)",
+        "12. overlapping run ids never match each other (whole-value comparison, not substring or prefix)",
+        "13. the runner's own retry takes a second permit for the SAME run, and that permit carries the run id too",
+        "14. scheduler -> executor -> workflow: the run id the scheduler stores is the one that owns the permit, so a foreign run of the same task never blocks the scheduler's own cancel and an unattributable permit still does",
+        "a permit nobody can attribute to a run, held on ANOTHER resource than the probe's, still blocks (http-boundary.test.ts:132 in miniature)"
+      ],
+      "mustPass": [
+        "2. same task id, different providers: a codex run does not block a gemini cancel, and the reverse",
+        "4. missing or default provider: a task with no provider is confirmed on its own permit, not a foreign one",
+        "6. target permit still active: STOPPED is never reported, however terminal the run looks",
+        "7. target process still active: a provider call that outlived its abort keeps the permit, and the cancel waits for it",
+        "8a. cancellation while queued for the permit: nothing is held, and no permit is taken later",
+        "8b. cancellation landing right after the permit is granted, before the call: the permit is released and the cancel is confirmed",
+        "9a. lease expiry: a crashed, un-renewed permit blocks while live and stops blocking when it expires",
+        "once that permit is released the same cancellation is confirmed",
+        "the task-level probe (no run id) still reports every permit and queue entry carrying the task id, on every resource"
+      ],
+      "rejectedBecause": "It reports STOPPED while the target run's permit is held (cases 1, 5, 10, 14 and the http-boundary.test.ts:132 miniature), which is the false-STOPPED direction the operator forbids."
+    }
+  ],
+  "exclusions": [
+    "Real concurrent provider processes sharing a task id are not exercised (review G8).",
+    "The model double stands in for a provider process in cases 7 and 13; process-group safety is covered by the carried O-SM cases and the existing process.test.ts.",
+    "The control-center UI contract is not extended (M13 is out of scope); the revert is visible there as a task.audit event.",
+    "The pinned 'unforced' O-SM case is informational on the baseline: it asserts invariants that hold whichever interleaving the machine produces."
+  ]
+}
