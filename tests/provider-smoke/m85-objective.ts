@@ -168,6 +168,46 @@ export const PLAN_TASKS = (provider: string) =>
     },
   ] as never[];
 
+/** Everything that distinguishes one disposable objective from another; the runner below is generic over it. */
+export interface ObjectiveDefinition {
+  id: string;
+  /** Project name recorded on the batch. */
+  project: string;
+  description: string;
+  /** Task ids in dependency order (the report's `dag.order`). */
+  taskIds: string[];
+  stubs: Record<string, string>;
+  taskTests: Record<string, { path: string; content: string }>;
+  /** Oracle files by path relative to the oracle directory. */
+  oracleFiles: Record<string, string>;
+  oracleCommands: string[][];
+  criteria: string;
+  planTasks: (provider: string) => never[];
+  integrationCommands: string[][];
+  /** Absolute paths a worker (and worker-written code run by the verifier) must not read: files or directories that embed the oracle or the reference solution. */
+  secretPaths: string[];
+  /** Directory under `.workdir/` for isolated and for non-isolated runs. */
+  outDirNames: { isolated: string; plain: string };
+  gitIdentity: string;
+}
+
+export const WORDSTAT: ObjectiveDefinition = {
+  id: OBJECTIVE_ID,
+  project: 'wordstat',
+  description: 'M8.5 real objective',
+  taskIds: [TASK_A, TASK_B],
+  stubs: STUBS,
+  taskTests: TASK_TESTS,
+  oracleFiles: { [ORACLE_FILE]: ORACLE_SOURCE },
+  oracleCommands: [['go', 'vet', './...'], ['go', 'test', '-count=1', './...']],
+  criteria: ACCEPTANCE_CRITERIA,
+  planTasks: PLAN_TASKS,
+  integrationCommands: [['go', 'vet', './...']],
+  secretPaths: [fileURLToPath(import.meta.url)],
+  outDirNames: { isolated: 'm8.6-real', plain: 'm8.5-real' },
+  gitIdentity: 'm85',
+};
+
 // ---------------------------------------------------------------------------------------------------------------- the gate
 
 export type M85Authorization = { ok: true; allowProviders: string[] } | { ok: false; reason: string };
@@ -243,6 +283,8 @@ export interface M85Options {
   requireIsolationCanary?: boolean;
   /** Fault injection (tests only): crash the Mastra server with SIGKILL as soon as the first provider process exists; optionally restart it on the same port with the same storage and ledger. */
   chaos?: { crashServerAfterSpawn: { restartAfterMs?: number } };
+  /** The objective to run (default: the M8.5 wordstat objective). */
+  objective?: ObjectiveDefinition;
 }
 
 export interface M85Result {
@@ -252,46 +294,50 @@ export interface M85Result {
 }
 
 export async function runM85Objective(options: M85Options): Promise<M85Result> {
+  const obj = options.objective ?? WORDSTAT;
   const limits = { ...M85_LIMITS, ...options.limits };
   const log = options.log ?? ((l: string) => console.error(l));
   const projectRoot = findProjectRoot() ?? process.cwd();
   const isolated = options.isolation !== false;
-  const outDir = options.outDir ?? join(projectRoot, '.workdir', isolated ? 'm8.6-real' : 'm8.5-real', new Date().toISOString().replace(/[:.]/g, '-'));
+  const outDir = options.outDir ?? join(projectRoot, '.workdir', isolated ? obj.outDirNames.isolated : obj.outDirNames.plain, new Date().toISOString().replace(/[:.]/g, '-'));
   mkdirSync(outDir, { recursive: true });
   const realOut = sandboxPath(outDir);
   // The oracle lives beside the run directory (not in it) when isolated, so the worker's worktree area never contains or sits under it.
   const oracleDir = isolated ? `${realOut}.oracle` : join(outDir, 'oracle');
   const denyRead = isolated
-    ? [oracleDir, ...['scheduler.db', 'scheduler.db-wal', 'scheduler.db-shm'].map((f) => join(realOut, f)), sandboxPath(fileURLToPath(import.meta.url)), sandboxPath(join(projectRoot, '.git')), sandboxPath(join(projectRoot, '.workdir', 'm8.5-real')), ...(options.isolation ? (options.isolation.extraDenyRead ?? []) : []).map(sandboxPath)]
+    ? [oracleDir, ...['scheduler.db', 'scheduler.db-wal', 'scheduler.db-shm'].map((f) => join(realOut, f)), ...obj.secretPaths.map(sandboxPath), sandboxPath(join(projectRoot, '.git')), sandboxPath(join(projectRoot, '.workdir', 'm8.5-real')), ...(options.isolation ? (options.isolation.extraDenyRead ?? []) : []).map(sandboxPath)]
     : [];
   const capacityDb = options.capacityDb ?? join(outDir, 'capacity.db');
 
   // ---- the disposable repository (its own git repo inside outDir; the enclosing repository is never touched)
   const repo = join(outDir, 'repo');
-  for (const [path, content] of Object.entries(STUBS)) {
+  for (const [path, content] of Object.entries(obj.stubs)) {
     mkdirSync(dirname(join(repo, path)), { recursive: true });
     writeFileSync(join(repo, path), content);
   }
   sh(repo, 'init', '-q', '-b', 'main');
   sh(repo, 'add', '-A');
-  sh(repo, 'commit', '-q', '-m', 'fixture: wordstat stubs');
+  sh(repo, 'commit', '-q', '-m', `fixture: ${obj.project} stubs`);
   const refs = () => sh(repo, 'for-each-ref', '--format=%(refname) %(objectname)');
   const before = { head: sh(repo, 'rev-parse', 'HEAD'), refs: refs() };
 
   // ---- the pinned acceptance material, hashed BEFORE any worker claim (and recorded on disk before the backend starts)
   mkdirSync(oracleDir, { recursive: true });
-  writeFileSync(join(oracleDir, ORACLE_FILE), ORACLE_SOURCE);
+  for (const [file, source] of Object.entries(obj.oracleFiles)) {
+    mkdirSync(dirname(join(oracleDir, file)), { recursive: true });
+    writeFileSync(join(oracleDir, file), source);
+  }
   const pinnedDir = join(outDir, 'pinned');
   mkdirSync(pinnedDir, { recursive: true });
-  writeFileSync(join(pinnedDir, 'acceptance-criteria.txt'), `${ACCEPTANCE_CRITERIA}\n`);
+  writeFileSync(join(pinnedDir, 'acceptance-criteria.txt'), `${obj.criteria}\n`);
   const pinnedRecord = {
     pinnedAt: new Date().toISOString(),
-    objectiveId: OBJECTIVE_ID,
+    objectiveId: obj.id,
     baseCommit: before.head,
-    criteriaSha256: sha256(`${ACCEPTANCE_CRITERIA}\n`),
-    oracleFiles: { [ORACLE_FILE]: sha256(ORACLE_SOURCE) },
-    oracleCommands: [['go', 'vet', './...'], ['go', 'test', '-count=1', './...']],
-    taskTestSha256: Object.fromEntries(Object.entries(TASK_TESTS).map(([id, t]) => [id, sha256(t.content)])),
+    criteriaSha256: sha256(`${obj.criteria}\n`),
+    oracleFiles: Object.fromEntries(Object.entries(obj.oracleFiles).map(([f, src]) => [f, sha256(src)])),
+    oracleCommands: obj.oracleCommands,
+    taskTestSha256: Object.fromEntries(Object.entries(obj.taskTests).map(([id, t]) => [id, sha256(t.content)])),
     limits,
   };
   writeFileSync(join(pinnedDir, 'pinned-objective.json'), `${JSON.stringify(pinnedRecord, null, 2)}\n`);
@@ -344,12 +390,12 @@ export async function runM85Objective(options: M85Options): Promise<M85Result> {
   const store = new SchedulerStore(join(outDir, 'scheduler.db'));
   const worktrees = new WorktreeManager(join(outDir, 'worktrees'));
   const lifecycle = new LifecycleStore(store);
-  store.createBatch({ batchId: OBJECTIVE_ID, project: 'wordstat', repository: repo, description: 'M8.5 real objective', integrationCommands: [['go', 'vet', './...']], tasks: PLAN_TASKS(providerId) } as never);
+  store.createBatch({ batchId: obj.id, project: obj.project, repository: repo, description: obj.description, integrationCommands: obj.integrationCommands, tasks: obj.planTasks(providerId) } as never);
   store.promote();
   const artifactRoot = join(outDir, 'artifacts');
   const pinned = await pinOracle(
     { store, lifecycle, worktrees, forbiddenRoots: [artifactRoot] },
-    { objectiveId: OBJECTIVE_ID, batchId: OBJECTIVE_ID, spec: { dir: oracleDir, files: [ORACLE_FILE], commands: pinnedRecord.oracleCommands, negativeControl: { mode: 'required' } }, actor: 'operator' },
+    { objectiveId: obj.id, batchId: obj.id, spec: { dir: oracleDir, files: Object.keys(obj.oracleFiles), commands: pinnedRecord.oracleCommands, negativeControl: { mode: 'required' } }, actor: 'operator' },
   );
   log(`oracle ${pinned.oracle.specHash.slice(0, 12)} pinned before any claim; base ${pinned.baseCommit.slice(0, 10)}`);
 
@@ -366,7 +412,7 @@ export async function runM85Objective(options: M85Options): Promise<M85Result> {
     signals += 1;
     if (signals === 1) {
       log(`${name}: cancelling the objective (no new claim; the Codex run is cancelled and confirmed). Send ${name} again to exit immediately.`);
-      cancelled = cancelObjective({ store, lifecycle, scheduler, executor: backend.executor, capacity, log }, OBJECTIVE_ID, { actor: 'operator', reason: `${name} received` }).catch((e) => log(`cancel failed: ${e}`));
+      cancelled = cancelObjective({ store, lifecycle, scheduler, executor: backend.executor, capacity, log }, obj.id, { actor: 'operator', reason: `${name} received` }).catch((e) => log(`cancel failed: ${e}`));
       return;
     }
     const killed = backend.killOwned();
@@ -383,7 +429,7 @@ export async function runM85Objective(options: M85Options): Promise<M85Result> {
   try {
     outcome = await runObjectiveLifecycle(
       { store, worktrees, lifecycle, scheduler, executor: backend.executor, capacity, run: sandboxRunner(600_000, { denyRead: verifierDenyRead }), config, evidenceDir: join(outDir, 'objective'), maxRounds: limits.maxRounds, log: (l) => log(`  ${l}`) },
-      OBJECTIVE_ID,
+      obj.id,
       { actor: 'operator' },
     );
   } catch (err) {
@@ -417,11 +463,11 @@ export async function runM85Objective(options: M85Options): Promise<M85Result> {
   probeLease?.release();
 
   // ---- evidence
-  const lc = lifecycle.require(OBJECTIVE_ID);
-  const tasks = store.listTasks({ batchId: OBJECTIVE_ID });
-  const integrationRef = `lead-integration/${OBJECTIVE_ID}`;
+  const lc = lifecycle.require(obj.id);
+  const tasks = store.listTasks({ batchId: obj.id });
+  const integrationRef = `lead-integration/${obj.id}`;
   const tip = tryGit(repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${integrationRef}`);
-  const baseRef = tryGit(repo, 'rev-parse', '--verify', '--quiet', `refs/lead/base/${OBJECTIVE_ID}`);
+  const baseRef = tryGit(repo, 'rev-parse', '--verify', '--quiet', `refs/lead/base/${obj.id}`);
   const taskReports = tasks.map((t) => {
     const events = store.events(t.id);
     const at = (state: string) => events.find((e) => e.to === state)?.at ?? null;
@@ -500,14 +546,14 @@ export async function runM85Objective(options: M85Options): Promise<M85Result> {
   };
   const report = {
     at: new Date().toISOString(),
-    objective: OBJECTIVE_ID,
+    objective: obj.id,
     limits,
     elapsedMs,
     runError,
     lifecycle: { phase: lc.phase, result: lc.result, verdict: outcome?.verdict ?? null, reason: outcome?.reason ?? null, rounds: outcome?.rounds ?? null, stops: outcome?.stops ?? [], exitHint: outcome?.verdict ?? null },
     pinned: { ...pinnedRecord, specHash: pinned.oracle.specHash, pinnedAt: new Date(pinned.oracle.pinnedAt).toISOString() },
     tasks: taskReports,
-    dag: { order: [TASK_A, TASK_B], integrationBranch: integrationRef, integrationTip: tip, base: baseRef, firstParentLog: tip ? tryGit(repo, 'log', '--first-parent', '--format=%H %s', `${baseRef ?? before.head}..${tip}`) : null },
+    dag: { order: obj.taskIds, integrationBranch: integrationRef, integrationTip: tip, base: baseRef, firstParentLog: tip ? tryGit(repo, 'log', '--first-parent', '--format=%H %s', `${baseRef ?? before.head}..${tip}`) : null },
     acceptance,
     backend: { ...backend.describe(), shutdown: serverShutdown },
     ledger,
@@ -515,7 +561,7 @@ export async function runM85Objective(options: M85Options): Promise<M85Result> {
     telemetry: summarizeTelemetry(taskReports),
     isolation: { enabled: isolated, mode: isolated ? 'allowlist' : 'none', denyRead, readAllow: readAllow ?? [], verifierDenyRead },
     chaos: chaosLog ? { ...chaosLog, orphansKilled, restartedBackend: restarted ? restarted.describe() : null } : null,
-    audit: lifecycle.events(OBJECTIVE_ID),
+    audit: lifecycle.events(obj.id),
     paths: { outDir, repo, oracleDir, pinned: join(pinnedDir, 'pinned-objective.json') },
   };
   writeFileSync(join(outDir, 'report.json'), JSON.stringify(report, null, 2));

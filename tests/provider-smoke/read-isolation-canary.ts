@@ -5,6 +5,7 @@ import { dirname, join, relative } from 'node:path';
 import { buildCodexArgs } from '../../src/workers/providers/codex.ts';
 import { CODEX_AUDITED_TOOLS, credentialDenyPaths, discoverToolchainReadPaths } from '../../src/workers/providers/codex-isolation.ts';
 import { startStubModel } from './stub-model-server.ts';
+import { createOwnedDir, killGroup, removeOwnedSync, sweepCanaryLeftovers } from './canary-fs.ts';
 
 /**
  * Does the REAL codex CLI, launched with the arguments the adapter builds, keep a model-issued command away from host credentials?
@@ -136,14 +137,14 @@ const script = (p: { realHome: string; work: string; marks: Record<string, strin
 const parse = (output: string, prefix: string) => Object.fromEntries([...output.matchAll(new RegExp(`^${prefix}([^=\\n]+)=(.*)$`, 'gm'))].map((m) => [m[1], m[2].trim()]));
 
 export async function readIsolationCanary(options: { command?: string; mode: CanaryMode; timeoutMs?: number; readAllowPaths?: readonly string[]; /** Tests only: weakens the adapter's arguments to prove the canary notices. */ argsTransform?: (args: string[]) => string[] }): Promise<CanaryResult> {
+  sweepCanaryLeftovers();
   const realHome = realpathSync(homedir());
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'agentic-canary-')));
+  const base = createOwnedDir(tmpdir(), 'agentic-canary-');
   // The synthetic home must NOT be under a temp directory (the profile makes those writable and readable by design) and must sit where a
   // real credential would: inside the user's home.
-  const synthHome = join(realHome, `.agentic-canary-${Math.random().toString(36).slice(2, 10)}`);
+  const synthHome = createOwnedDir(realHome, '.agentic-canary-');
   const work = join(base, 'work');
   mkdirSync(work);
-  mkdirSync(synthHome);
   const marks: Record<string, string> = {};
   const paths: Record<string, string> = {};
   for (const [name, rel] of Object.entries(SYNTHETIC)) {
@@ -152,11 +153,10 @@ export async function readIsolationCanary(options: { command?: string; mode: Can
     mkdirSync(dirname(paths[name]), { recursive: true });
     writeFileSync(paths[name], `${marks[name]}\n`);
   }
-  const foreignDirs = [join(realpathSync(tmpdir()), `agentic-canary-foreign-${Math.random().toString(36).slice(2, 8)}`), join(realpathSync('/tmp'), `agentic-canary-foreign-${Math.random().toString(36).slice(2, 8)}`)];
+  const foreignDirs = [createOwnedDir(realpathSync(tmpdir()), 'agentic-canary-foreign-'), createOwnedDir(realpathSync('/tmp'), 'agentic-canary-foreign-')];
   FOREIGN_TMP.forEach((name, i) => {
     marks[name] = `M87SYNTH-${name.replace(/[^a-z]/g, '')}-${Math.random().toString(36).slice(2, 10)}`;
     paths[name] = join(foreignDirs[i], 'secret.txt');
-    mkdirSync(foreignDirs[i], { recursive: true });
     writeFileSync(paths[name], `${marks[name]}\n`);
   });
   const envMark = `M87SYNTH-ENV-${Math.random().toString(36).slice(2, 10)}`;
@@ -177,10 +177,11 @@ export async function readIsolationCanary(options: { command?: string; mode: Can
   writeFileSync(hostList, `${hostExisting.join('\n')}\n`);
 
   const stub = await startStubModel('/bin/sh ./probe.sh');
+  let launcherGroup: number | undefined;
+  const scratch = mkdtempSync(join(realpathSync(tmpdir()), 'agentic-codex-'));
   try {
     writeFileSync(join(work, 'kc.rb'), 'require "fiddle"\nh = Fiddle.dlopen("/System/Library/Frameworks/Security.framework/Security")\nf = Fiddle::Function.new(h["SecKeychainGetStatus"], [Fiddle::TYPE_VOIDP, Fiddle::TYPE_VOIDP], Fiddle::TYPE_INT)\nputs f.call(nil, Fiddle::Pointer.malloc(8))\n');
     writeFileSync(join(work, 'probe.sh'), script({ realHome, work, marks, paths, synthHome, envMark, port: stub.port, hostList, sshSock: process.env.SSH_AUTH_SOCK ?? '' }));
-    const scratch = mkdtempSync(join(realpathSync(tmpdir()), 'agentic-codex-'));
     // the launcher's env: the synthetic CODEX_HOME (its auth.json is denied to the commands, not to the launcher) and the synthetic secrets
     const launcherEnv: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: realHome, CODEX_HOME: join(synthHome, '.codex'), SSH_AUTH_SOCK: process.env.SSH_AUTH_SOCK };
     for (const n of ENV_SECRETS) if (n !== 'SSH_AUTH_SOCK') launcherEnv[n] = envMark;
@@ -197,8 +198,10 @@ export async function readIsolationCanary(options: { command?: string; mode: Can
     const dash = args.lastIndexOf('-');
     const full = [...args.slice(0, dash), ...stub.codexArgs, '-'];
     const exit = await new Promise<number | null>((resolve) => {
-      const child = spawn(options.command ?? 'codex', full, { cwd: work, env: launcherEnv, stdio: ['pipe', 'ignore', 'ignore'] });
-      const timer = setTimeout(() => child.kill('SIGKILL'), options.timeoutMs ?? 150_000);
+      // its own process group: the CLI starts background workers (plugin clones...) that outlive it and keep writing into CODEX_HOME
+      const child = spawn(options.command ?? 'codex', full, { cwd: work, env: launcherEnv, stdio: ['pipe', 'ignore', 'ignore'], detached: true });
+      launcherGroup = child.pid;
+      const timer = setTimeout(() => void killGroup(child.pid), options.timeoutMs ?? 150_000);
       child.on('exit', (code) => {
         clearTimeout(timer);
         resolve(code);
@@ -206,6 +209,7 @@ export async function readIsolationCanary(options: { command?: string; mode: Can
       child.on('error', () => resolve(null));
       child.stdin.end('run the probe\n');
     });
+    await killGroup(launcherGroup); // stragglers must be gone before anything is judged or removed
     rmSync(scratch, { recursive: true, force: true });
 
     const raw = stub.outputs().join('\n');
@@ -236,9 +240,9 @@ export async function readIsolationCanary(options: { command?: string; mode: Can
     return result;
   } finally {
     await stub.close();
-    rmSync(base, { recursive: true, force: true });
-    rmSync(synthHome, { recursive: true, force: true });
-    for (const d of foreignDirs) rmSync(d, { recursive: true, force: true });
+    await killGroup(launcherGroup);
+    rmSync(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    for (const d of [base, synthHome, ...foreignDirs]) removeOwnedSync(d);
   }
 }
 
@@ -276,23 +280,24 @@ export async function readIsolationProblems(options: { command?: string; readAll
  */
 export async function launcherAuthCheck(options: { command?: string; readAllowPaths?: readonly string[] } = {}): Promise<{ launcherAuthenticated: boolean; commandDenied: boolean; exitCode: number | null }> {
   const realHome = realpathSync(homedir());
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'agentic-auth-')));
+  const base = createOwnedDir(tmpdir(), 'agentic-auth-');
   const work = join(base, 'work');
   mkdirSync(work);
   execFileSync('git', ['init', '-q'], { cwd: work });
-  const codexHome = join(realHome, `.agentic-canary-auth-${Math.random().toString(36).slice(2, 8)}`);
-  mkdirSync(codexHome);
+  const codexHome = createOwnedDir(realHome, '.agentic-canary-auth-');
   const token = `sk-m87synthetic-${Math.random().toString(36).slice(2, 12)}`;
   writeFileSync(join(codexHome, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: token }));
   const stub = await startStubModel(`cat '${join(codexHome, 'auth.json')}' 2>&1 | grep -c ${token.slice(0, 18)}; echo done`, { requiresAuth: true });
   const scratch = mkdtempSync(join(realpathSync(tmpdir()), 'agentic-codex-'));
+  let authGroup: number | undefined;
   try {
     const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: realHome, CODEX_HOME: codexHome };
     const args = buildCodexArgs(work, { json: true, isolation: { readAllowPaths: options.readAllowPaths ?? discoverToolchainReadPaths(), denyReadPaths: [], scratchDir: scratch, env } });
     const full = [...args.slice(0, args.lastIndexOf('-')), ...stub.codexArgs, '-'];
     const exitCode = await new Promise<number | null>((resolve) => {
-      const child = spawn(options.command ?? 'codex', full, { cwd: work, env, stdio: ['pipe', 'ignore', 'ignore'] });
-      const timer = setTimeout(() => child.kill('SIGKILL'), 90_000);
+      const child = spawn(options.command ?? 'codex', full, { cwd: work, env, stdio: ['pipe', 'ignore', 'ignore'], detached: true });
+      authGroup = child.pid;
+      const timer = setTimeout(() => void killGroup(child.pid), 90_000);
       child.on('exit', (code) => {
         clearTimeout(timer);
         resolve(code);
@@ -303,9 +308,9 @@ export async function launcherAuthCheck(options: { command?: string; readAllowPa
     return { launcherAuthenticated: stub.authorizations().some((a) => a.includes(token)), commandDenied: !/^1$/m.test(stub.outputs().join('\n').split('Output:').pop() ?? ''), exitCode };
   } finally {
     await stub.close();
-    rmSync(base, { recursive: true, force: true });
-    rmSync(scratch, { recursive: true, force: true });
-    rmSync(codexHome, { recursive: true, force: true });
+    await killGroup(authGroup);
+    rmSync(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    for (const d of [base, codexHome]) removeOwnedSync(d);
   }
 }
 
@@ -320,8 +325,8 @@ export async function verifierSandboxProblems(): Promise<string[]> {
   const status = await sandboxStatus();
   if (!status.available) return [`the verifier sandbox is unavailable: ${status.reason ?? 'unknown'}`];
   const realHome = realpathSync(homedir());
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'agentic-vcanary-')));
-  const synth = join(realHome, `.agentic-vcanary-${Math.random().toString(36).slice(2, 8)}`);
+  const base = createOwnedDir(tmpdir(), 'agentic-vcanary-');
+  const synth = createOwnedDir(realHome, '.agentic-vcanary-');
   const marker = `M87BSYNTH-${Math.random().toString(36).slice(2, 12)}`;
   try {
     mkdirSync(join(synth, '.ssh'), { recursive: true });
@@ -365,8 +370,7 @@ func TestF(t *testing.T) {
     const fmt = await run('gofmt', ['-l', '.']);
     if (fmt.exitCode !== 0) problems.push(`verifier sandbox: gofmt fails (exit ${fmt.exitCode})`);
   } finally {
-    rmSync(base, { recursive: true, force: true });
-    rmSync(synth, { recursive: true, force: true });
+    for (const d of [base, synth]) removeOwnedSync(d);
   }
   return problems;
 }

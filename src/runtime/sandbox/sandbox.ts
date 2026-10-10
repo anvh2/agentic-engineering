@@ -29,6 +29,12 @@ import { SAFE_PATH, TOO_BROAD, canonicalPath, executableAccess, isInside } from 
  * Supported: macOS `sandbox-exec`. Anything else is reported unavailable.
  */
 
+
+/** Temp-dir cleanup must never change a command's result: a background writer (the Go toolchain's telemetry...) can make the first attempt fail with ENOTEMPTY, so retry, and give up quietly. */
+async function removeTemp(path: string): Promise<void> {
+  await rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => undefined);
+}
+
 export interface SandboxStatus {
   available: boolean;
   mechanism: 'sandbox-exec' | null;
@@ -206,7 +212,7 @@ async function probe(): Promise<SandboxStatus> {
   } catch (err) {
     return { available: false, mechanism: null, reason: `sandbox self-test failed: ${(err as Error).message}` };
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    await removeTemp(dir);
   }
 }
 
@@ -307,6 +313,6 @@ export async function runSandboxedCommand(
     const profile = buildProfile([...toolchain.read, ...extra.paths], deny.profile);
     return await runControlledCommand(sandboxExecutable(), [...defines(root, tmp), '-p', profile, executable, ...args], { cwd: options.cwd, timeoutMs: options.timeoutMs, env, signal: options.signal });
   } finally {
-    await rm(tmp, { recursive: true, force: true });
+    await removeTemp(tmp);
   }
 }
