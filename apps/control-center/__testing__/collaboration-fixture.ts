@@ -1,7 +1,7 @@
-import type { Collaboration } from '../src/collaboration-model.ts';
+import type { CollaborationInput } from '../src/collaboration-model.ts';
 
 /** Synthetic records for tests ONLY. Never imported by production entrypoints. */
-export const collaborationFixture: Collaboration = {
+export const collaborationFixture: CollaborationInput = {
   availability: 'AVAILABLE', source: 'test-fixture', reason: null,
   threads: [{ id: 'thread-test', title: 'Synthetic parser review', objectiveId: 'B1', taskId: 'task-a',
     participants: [{ id: 'lead', name: 'Claude', role: 'Engineering Lead' }, { id: 'worker', name: 'Codex', role: 'Worker' }],

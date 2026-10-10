@@ -2,8 +2,9 @@ import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
 import { createControlCenterApp } from './http-app.ts';
 import type { Reader } from './adapter.ts';
+import type { CollaborationReader } from './collaboration-adapter.ts';
 
-export function createGateway(options: { reader: Reader; assetsDir: string; pollMs?: number }) {
+export function createGateway(options: { reader: Reader; assetsDir: string; pollMs?: number; collaboration?: CollaborationReader }) {
   const app = createControlCenterApp(options);
   const server = createServer(async (req, res) => {
     const port = (server.address() as { port?: number } | null)?.port;

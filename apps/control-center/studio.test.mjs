@@ -39,11 +39,31 @@ test('actual Studio: Organization sidebar, refresh, same-origin Gateway/SSE and 
     await page.screenshot({ path: `${out}/studio-organization.png`, fullPage: true });
     await page.reload();
     await workspace.getByRole('heading', { name: 'Agent hierarchy', exact: false }).waitFor();
+    // The UI must show exactly what the Gateway reads from Core B's store: records when present, NOT AVAILABLE otherwise.
+    const collab = await (await fetch(`${origin}/control-center/v1/collaboration`)).json();
     await workspace.getByRole('button', { name: 'Discussions', exact: true }).click();
-    await workspace.getByText('NOT AVAILABLE', { exact: true }).waitFor();
-    await page.screenshot({ path: `${out}/studio-discussions-unavailable.png`, fullPage: true });
-    await workspace.getByRole('button', { name: 'Meetings', exact: true }).click();
-    await workspace.getByText('NOT AVAILABLE', { exact: true }).waitFor();
+    if (collab.availability === 'AVAILABLE' && collab.threads.length) {
+      const thread = collab.threads[0];
+      const transcript = workspace.getByRole('region', { name: 'Discussion transcript' });
+      await transcript.waitFor();
+      assert.equal(await transcript.locator('.message').count(), thread.messages.length);
+      for (const m of thread.messages) assert.ok((await transcript.innerText()).includes(`Event #${m.seq}`), `message ${m.id} shows its persisted seq`);
+      if (thread.synthetic) await workspace.getByText('DETERMINISTIC FAKE PARTICIPANTS', { exact: false }).waitFor();
+      await page.screenshot({ path: `${out}/studio-discussions.png`, fullPage: true });
+      await workspace.getByRole('button', { name: 'Meetings', exact: true }).click();
+      const inspector = workspace.getByRole('region', { name: 'Meeting inspector' });
+      await inspector.waitFor();
+      const text = await inspector.innerText();
+      const meeting = collab.meetings[0];
+      for (const d of meeting.decisions) assert.ok(text.includes(d.text), 'decision record shown verbatim');
+      for (const o of meeting.objections) assert.ok(text.includes(`${o.status} · ${o.text}`), 'objection shown with its recorded status');
+      if (meeting.provenance) assert.ok(text.includes(`Record covers events through #${meeting.provenance.throughSeq}`) && text.includes(meeting.provenance.recordHash.slice(0, 16)));
+      await page.screenshot({ path: `${out}/studio-meetings.png`, fullPage: true });
+    } else {
+      await workspace.getByText(collab.availability === 'CORRUPT' ? 'INTEGRITY FAILURE' : 'NOT AVAILABLE', { exact: true }).waitFor();
+      await page.screenshot({ path: `${out}/studio-discussions-unavailable.png`, fullPage: true });
+      await workspace.getByRole('button', { name: 'Meetings', exact: true }).click();
+    }
     await workspace.getByRole('button', { name: 'Usage', exact: true }).click();
     await workspace.getByRole('heading', { name: 'Objective usage', exact: true }).waitFor();
     for (const path of ['/agents', '/workflows', '/traces']) {
