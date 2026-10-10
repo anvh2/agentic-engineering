@@ -410,9 +410,13 @@ describe('Gemini HTTP smoke: cancellation and timeouts through HTTP (determinist
     // the provider permit is held, in the server's process, while inference is active, and the scheduler can see it
     const capacity = capacityFor(undefined, h.capacityDb);
     await waitFor(() => capacity.engagedBy(TASK_ID).length > 0, 'the server to hold the gemini permit');
+    const held = capacity.engagedBy(TASK_ID);
     assert.ok(alive(pid));
     h.emitter.emit('SIGINT');
     const { report } = await h.run;
+    // identity over the real HTTP hop: the permit the server's runner held names the run id the scheduler recorded for the task
+    assert.equal(held.length, 1);
+    assert.equal(held[0].run, report.runId, JSON.stringify(held));
     assert.equal(report.cancellation?.confirmed, true, JSON.stringify(report.cancellation));
     assert.equal(report.cancellation?.signal, 'SIGINT');
     assert.equal(alive(pid), false, 'the Gemini process is gone (it ignores SIGTERM, so it was SIGKILLed after the grace period)');

@@ -155,8 +155,15 @@
       "patch": "fails-open-unknown.patch",
       "appliesTo": "candidate",
       "intendedKill": "10. unknown or legacy",
-      "mustFail": [],
-      "mustPass": []
+      "mustFail": [
+        "10. unknown or legacy ownership fails closed for every run, for permits and for queue entries",
+        "10b. an unreadable ownership marker is unknown ownership, not \"some other run\" (pins the holder syntax, see the header)",
+        "14. scheduler -> executor -> workflow: the run id the scheduler stores is the one that owns the permit, so a foreign run of the same task never blocks the scheduler's own cancel and an unattributable permit still does",
+        "a permit nobody can attribute to a run, held on ANOTHER resource than the probe's, still blocks (http-boundary.test.ts:132 in miniature)",
+        "runs a scenario N times with bounded concurrency and writes one evidence record per run plus a summary"
+      ],
+      "mustPass": [],
+      "verifiedAgainst": "b298d411f84f2a64115c925904592485de51e7e1"
     },
     {
       "id": "substring-run-match",
@@ -164,8 +171,11 @@
       "patch": "substring-run-match.patch",
       "appliesTo": "candidate",
       "intendedKill": "12. overlapping",
-      "mustFail": [],
-      "mustPass": []
+      "mustFail": [
+        "12. overlapping run ids never match each other (whole-value comparison, not substring or prefix)"
+      ],
+      "mustPass": [],
+      "verifiedAgainst": "b298d411f84f2a64115c925904592485de51e7e1"
     },
     {
       "id": "waiters-matched-by-task",
@@ -173,8 +183,11 @@
       "patch": "waiters-matched-by-task.patch",
       "appliesTo": "candidate",
       "intendedKill": "3. same task id, same provider",
-      "mustFail": [],
-      "mustPass": []
+      "mustFail": [
+        "3. same task id, same provider: a sibling run's permit AND queue entry never block, a run's own always do"
+      ],
+      "mustPass": [],
+      "verifiedAgainst": "b298d411f84f2a64115c925904592485de51e7e1"
     },
     {
       "id": "workflow-drops-run-id",
@@ -182,8 +195,11 @@
       "patch": "workflow-drops-run-id.patch",
       "appliesTo": "candidate",
       "intendedKill": "11. the Mastra workflow",
-      "mustFail": [],
-      "mustPass": []
+      "mustFail": [
+        "11. the Mastra workflow carries its own run id into the permit it takes (scheduler -> workflow run -> capacity)"
+      ],
+      "mustPass": [],
+      "verifiedAgainst": "b298d411f84f2a64115c925904592485de51e7e1"
     },
     {
       "id": "ignores-lease-expiry",
@@ -191,8 +207,12 @@
       "patch": "ignores-lease-expiry.patch",
       "appliesTo": "candidate",
       "intendedKill": "9a.",
-      "mustFail": [],
-      "mustPass": []
+      "mustFail": [
+        "9a. lease expiry: a crashed, un-renewed permit blocks while live and stops blocking when it expires",
+        "9b. recovery: a re-run of the same task is not blocked by the previous run's stale permit, and the previous run still is"
+      ],
+      "mustPass": [],
+      "verifiedAgainst": "b298d411f84f2a64115c925904592485de51e7e1"
     },
     {
       "id": "cancel-ignores-run",
@@ -200,8 +220,22 @@
       "patch": "cancel-ignores-run.patch",
       "appliesTo": "candidate",
       "intendedKill": "1. same task id, different runs",
-      "mustFail": [],
-      "mustPass": []
+      "mustFail": [
+        "1. same task id, different runs: each run is confirmed against its own permit only",
+        "2. same task id, different providers: a codex run does not block a gemini cancel, and the reverse",
+        "3. same task id, same provider: a sibling run's permit AND queue entry never block, a run's own always do",
+        "4. missing or default provider: a task with no provider is confirmed on its own permit, not a foreign one",
+        "5. injected handle / resource mismatch can neither hide the target's permit nor adopt a foreign one",
+        "9b. recovery: a re-run of the same task is not blocked by the previous run's stale permit, and the previous run still is",
+        "10b. an unreadable ownership marker is unknown ownership, not \"some other run\" (pins the holder syntax, see the header)",
+        "11. the Mastra workflow carries its own run id into the permit it takes (scheduler -> workflow run -> capacity)",
+        "12. overlapping run ids never match each other (whole-value comparison, not substring or prefix)",
+        "13. the runner's own retry takes a second permit for the SAME run, and that permit carries the run id too",
+        "14. scheduler -> executor -> workflow: the run id the scheduler stores is the one that owns the permit, so a foreign run of the same task never blocks the scheduler's own cancel and an unattributable permit still does",
+        "runs a scenario N times with bounded concurrency and writes one evidence record per run plus a summary"
+      ],
+      "mustPass": [],
+      "verifiedAgainst": "b298d411f84f2a64115c925904592485de51e7e1"
     },
     {
       "id": "promote-forgets-dependents",
@@ -209,8 +243,11 @@
       "patch": "promote-forgets-dependents.patch",
       "appliesTo": "candidate",
       "intendedKill": "after the dependency is done, scoped promotion",
-      "mustFail": [],
-      "mustPass": []
+      "mustFail": [
+        "after the dependency is done, scoped promotion of its objective releases dependents in other objectives, transitively, and leaves strangers alone"
+      ],
+      "mustPass": [],
+      "verifiedAgainst": "b298d411f84f2a64115c925904592485de51e7e1"
     },
     {
       "id": "empty-batch-is-global",
@@ -218,8 +255,11 @@
       "patch": "empty-batch-is-global.patch",
       "appliesTo": "candidate",
       "intendedKill": "an empty or unknown objective id",
-      "mustFail": [],
-      "mustPass": []
+      "mustFail": [
+        "an empty or unknown objective id is an error, never \"global\""
+      ],
+      "mustPass": [],
+      "verifiedAgainst": "b298d411f84f2a64115c925904592485de51e7e1"
     },
     {
       "id": "accepted-ignores-revert",
@@ -227,8 +267,11 @@
       "patch": "accepted-ignores-revert.patch",
       "appliesTo": "candidate",
       "intendedKill": "a DONE task whose implementation was reverted",
-      "mustFail": [],
-      "mustPass": []
+      "mustFail": [
+        "a DONE task whose implementation was reverted keeps its history and is not currently accepted; reinstating it restores acceptance"
+      ],
+      "mustPass": [],
+      "verifiedAgainst": "b298d411f84f2a64115c925904592485de51e7e1"
     },
     {
       "id": "dependents-ignore-revert",
@@ -236,8 +279,11 @@
       "patch": "dependents-ignore-revert.patch",
       "appliesTo": "candidate",
       "intendedKill": "a reverted dependency does not satisfy",
-      "mustFail": [],
-      "mustPass": []
+      "mustFail": [
+        "a reverted dependency does not satisfy its dependents, nothing can claim them, and reinstating it releases them"
+      ],
+      "mustPass": [],
+      "verifiedAgainst": "b298d411f84f2a64115c925904592485de51e7e1"
     },
     {
       "id": "acceptance-ignores-revert",
@@ -245,8 +291,11 @@
       "patch": "acceptance-ignores-revert.patch",
       "appliesTo": "candidate",
       "intendedKill": "an objective recorded as ACCEPTED",
-      "mustFail": [],
-      "mustPass": []
+      "mustFail": [
+        "an objective recorded as ACCEPTED says a required task has since been reverted, keeps its history, and cannot be accepted again"
+      ],
+      "mustPass": [],
+      "verifiedAgainst": "b298d411f84f2a64115c925904592485de51e7e1"
     },
     {
       "id": "lead-plan-global-promote",
@@ -254,8 +303,11 @@
       "patch": "lead-plan-global-promote.patch",
       "appliesTo": "candidate",
       "intendedKill": "`lead plan` promotes",
-      "mustFail": [],
-      "mustPass": []
+      "mustFail": [
+        "`lead plan` promotes the plan it created and nothing else (the M10 side effect)"
+      ],
+      "mustPass": [],
+      "verifiedAgainst": "b298d411f84f2a64115c925904592485de51e7e1"
     }
   ],
   "exclusions": [
