@@ -50,11 +50,13 @@ export interface ControlledCommandResult {
   timedOut: boolean;
   /** True when the caller's AbortSignal terminated the command (the whole process group was killed). */
   aborted?: boolean;
+  /** Set when stdout or stderr exceeded the capture limit and was cut. Callers that decide on the output must fail closed. */
+  truncated?: true;
 }
 
-function truncate(text: string, maxBytes: number): { text: string; truncated: boolean } {
-  const buffer = Buffer.from(text, 'utf8');
-  if (buffer.byteLength <= maxBytes) return { text, truncated: false };
+function truncate(input: string | Buffer, maxBytes: number): { text: string; truncated: boolean } {
+  const buffer = typeof input === 'string' ? Buffer.from(input, 'utf8') : input;
+  if (buffer.byteLength <= maxBytes) return { text: buffer.toString('utf8'), truncated: false };
   return {
     text: `${buffer.subarray(0, maxBytes).toString('utf8')}\n\n[output truncated; additional output was produced]`,
     truncated: true,
@@ -72,9 +74,17 @@ function truncate(text: string, maxBytes: number): { text: string; truncated: bo
 export function runControlledCommand(
   command: string,
   args: string[],
-  options: { cwd: string; timeoutMs: number; env?: NodeJS.ProcessEnv; signal?: AbortSignal },
+  options: {
+    cwd: string;
+    timeoutMs: number;
+    env?: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
+    /** Capture limit per stream (default 4,000 bytes, sized for model-facing tool output). Exceeding it sets `truncated`. */
+    maxOutputBytes?: number;
+  },
 ): Promise<ControlledCommandResult> {
   const start = Date.now();
+  const maxOutputBytes = options.maxOutputBytes ?? MAX_OUTPUT_BYTES;
 
   return new Promise((resolve) => {
     if (options.signal?.aborted) {
@@ -132,13 +142,13 @@ export function runControlledCommand(
     options.signal?.addEventListener('abort', onAbort, { once: true });
 
     child.stdout?.on('data', (chunk: Buffer) => {
-      if (stdoutBytes < MAX_OUTPUT_BYTES * 2) {
+      if (stdoutBytes <= maxOutputBytes) {
         stdoutChunks.push(chunk);
         stdoutBytes += chunk.byteLength;
       }
     });
     child.stderr?.on('data', (chunk: Buffer) => {
-      if (stderrBytes < MAX_OUTPUT_BYTES * 2) {
+      if (stderrBytes <= maxOutputBytes) {
         stderrChunks.push(chunk);
         stderrBytes += chunk.byteLength;
       }
@@ -156,7 +166,7 @@ export function runControlledCommand(
       finish({
         success: false,
         exitCode: null,
-        stdout: truncate(Buffer.concat(stdoutChunks).toString('utf8'), MAX_OUTPUT_BYTES).text,
+        stdout: truncate(Buffer.concat(stdoutChunks).toString('utf8'), maxOutputBytes).text,
         stderr: `Failed to run "${command}": ${err.message}`,
         durationMs: Date.now() - start,
         timedOut: false,
@@ -164,8 +174,10 @@ export function runControlledCommand(
     });
 
     child.on('close', (code) => {
-      const { text: stdout } = truncate(Buffer.concat(stdoutChunks).toString('utf8'), MAX_OUTPUT_BYTES);
-      let { text: stderr } = truncate(Buffer.concat(stderrChunks).toString('utf8'), MAX_OUTPUT_BYTES);
+      const out = truncate(Buffer.concat(stdoutChunks), maxOutputBytes);
+      const err = truncate(Buffer.concat(stderrChunks), maxOutputBytes);
+      const stdout = out.text;
+      let stderr = err.text;
       if (timedOut) {
         stderr += `\n[Command timed out after ${options.timeoutMs}ms and was terminated.]`;
       }
@@ -178,6 +190,7 @@ export function runControlledCommand(
         durationMs: Date.now() - start,
         timedOut,
         ...(aborted ? { aborted: true } : {}),
+        ...(out.truncated || err.truncated ? { truncated: true as const } : {}),
       });
     });
   });

@@ -1,5 +1,6 @@
 import { basename } from 'node:path';
 import { batchPlanSchema, taskSpecSchema, type BatchPlan, type TaskSpecInput } from '../../runtime/scheduler/types.ts';
+import { describeCapacity, resolveCapacity } from '../../runtime/execution/delegation-capacity.ts';
 import type { PlanValidation } from './validate.ts';
 import type { EngineeringObjective, EngineeringPlan, PlannedTask } from './types.ts';
 
@@ -60,6 +61,7 @@ function specFor(objectiveId: string, task: PlannedTask): TaskSpecInput {
         },
         assessment: task.assessment,
       },
+      ...(task.capacity ? { capacity: task.capacity } : {}),
     };
   }
   // Lead-kept work carries no worker contract: its verification commands are not injected into the integrator's checks
@@ -101,6 +103,7 @@ export function renderPlan(objective: Pick<EngineeringObjective, 'id' | 'title'>
       const t = byId.get(id)!;
       out.push(`    ${t.id}  [${OWNER_LABEL[t.executionOwner]}]  ${t.title}${t.dependsOn.length ? `  <- ${t.dependsOn.join(', ')}` : ''}`);
       if (t.allowedFiles.length > 0) out.push(`        files: ${t.allowedFiles.join(', ')}`);
+      if (t.executionOwner === 'LOCAL_WORKER') out.push(`        capacity: ${describeCapacity(resolveCapacity(t.capacity))}`);
       if (t.executionOwner !== 'LOCAL_WORKER') out.push(`        why: ${t.assessment.rationale}`);
       if (t.decision) out.push(`        decide: ${t.decision.question}${t.decision.options.length ? ` (${t.decision.options.join(' | ')})` : ''}`);
     }

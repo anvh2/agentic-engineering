@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
-import { PlanNotExecutableError, toBatchPlan } from './export.ts';
+import { PlanNotExecutableError, renderPlan, toBatchPlan } from './export.ts';
 import { assessment, draftOf, lead, makeFixture, worker, type Fixture } from './__testing__/fixture.ts';
 import { validatePlan, type PlanValidation } from './validate.ts';
 import type { PlannedTask } from './types.ts';
@@ -222,5 +222,39 @@ describe('human decisions', () => {
   it('must state the decision', async () => {
     const { validation } = await check([{ ...decision, decision: undefined }]);
     assert.deepEqual(codes(validation), ['decision_missing']);
+  });
+});
+
+describe('M9.0 delegation capacity is explicit before anything is submitted or claimed', () => {
+  it('every LOCAL_WORKER task shows the policy it will be reviewed against; a missing one is the default, labelled as such', async () => {
+    const { plan, validation } = await check([worker('limiter', { capacity: { warnChangedLinesPerFile: 120, maxChangedLinesPerTask: 300 } }), worker('policy'), lead('wire', { dependsOn: ['limiter', 'policy'] })]);
+    assert.deepEqual(validation.errors, []);
+    assert.deepEqual(validation.capacity, [
+      { taskId: 'limiter', warnChangedLinesPerFile: 120, maxChangedLinesPerTask: 300, source: 'task' },
+      { taskId: 'policy', warnChangedLinesPerFile: 80, maxChangedLinesPerTask: 400, source: 'default' },
+    ]);
+    const view = renderPlan({ id: 'rate-limit', title: 'Add API rate limiting' }, plan!, validation);
+    assert.match(view, /capacity: warn above 120 changed lines per file \(repairable\), block above 300 per task \(escalates to a human\) \[task policy\]/);
+    assert.match(view, /capacity: warn above 80 .*\[default policy\]/);
+
+    // the policy travels into the scheduler's task spec unchanged; no policy stays absent (resolved at review, and recorded)
+    const byId = Object.fromEntries(toBatchPlan({ id: 'rate-limit', title: 't' }, plan!, validation).tasks.map((t) => [t.id, t]));
+    assert.deepEqual(byId['rate-limit.limiter'].capacity, { warnChangedLinesPerFile: 120, maxChangedLinesPerTask: 300 });
+    assert.equal(byId['rate-limit.policy'].capacity, undefined);
+  });
+
+  it('an incoherent or over-ceiling policy makes the plan invalid', async () => {
+    for (const capacity of [{ warnChangedLinesPerFile: 500, maxChangedLinesPerTask: 100 }, { warnChangedLinesPerFile: 10, maxChangedLinesPerTask: 999_999 }, { warnChangedLinesPerFile: 10 }]) {
+      const { validation } = await check([worker('limiter', { capacity } as Partial<PlannedTask>)]);
+      assert.equal(validation.ok, false, JSON.stringify(capacity));
+      assert.deepEqual(codes(validation), ['schema']);
+    }
+  });
+
+  it('a policy on a task no worker runs is reported as ignored, not silently kept', async () => {
+    const { validation } = await check([worker('limiter'), lead('wire', { dependsOn: ['limiter'], capacity: { warnChangedLinesPerFile: 10, maxChangedLinesPerTask: 20 } })]);
+    assert.equal(validation.ok, true);
+    assert.deepEqual(validation.warnings.filter((w) => w.code === 'capacity_ignored').map((w) => w.taskId), ['wire']);
+    assert.deepEqual(validation.capacity.map((c) => c.taskId), ['limiter']);
   });
 });

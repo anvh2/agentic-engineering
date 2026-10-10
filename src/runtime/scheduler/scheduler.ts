@@ -419,7 +419,7 @@ export class Scheduler {
             reason: `post-run change review blocked: ${blocking.map((f) => f.code).join(', ')}`,
             expectFrom: 'VERIFYING',
             fence,
-            patch: { failureCategory: 'review_gate_blocked' satisfies FailureCategory, verifyMs: store.now() - verifyStart, result: { findings: inspection.findings, reasons: outcome.reasons } },
+            patch: { failureCategory: 'review_gate_blocked' satisfies FailureCategory, verifyMs: store.now() - verifyStart, result: { findings: inspection.findings, reasons: outcome.reasons, capacity: inspection.capacity, changedLines: inspection.changedLines } },
           });
           return;
         }
@@ -434,7 +434,7 @@ export class Scheduler {
         reason: 'verified; awaiting Engineering Lead review',
         expectFrom: 'VERIFYING',
         fence,
-        patch: { headCommit: head, verifyMs: store.now() - verifyStart, result: { findings: inspection.findings, verifier: outcome.verifier ?? null, diffBytes: inspection.diff.length } },
+        patch: { headCommit: head, verifyMs: store.now() - verifyStart, result: { findings: inspection.findings, verifier: outcome.verifier ?? null, diffBytes: inspection.diff.length, capacity: inspection.capacity, changedLines: inspection.changedLines } },
         review: {
           taskId,
           title: task.title,
@@ -447,6 +447,8 @@ export class Scheduler {
           headCommit: head,
           diff: inspection.diff,
           findings: inspection.findings,
+          capacity: inspection.capacity,
+          changedLines: inspection.changedLines,
           verifier: outcome.verifier ?? null,
           runId: outcome.runId ?? task.runId,
           codingAttempts: outcome.codingAttempts,

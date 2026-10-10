@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { redact } from '../runtime/execution/coding-task-trace.ts';
+import { describeCapacity, type ResolvedCapacity } from '../runtime/execution/delegation-capacity.ts';
 import type { ReviewRow, SchedulerStore, TaskRow } from '../runtime/scheduler/store.ts';
 import { taskSpecSchema, type SchedulerConfig, type TaskSpec } from '../runtime/scheduler/types.ts';
 
@@ -38,6 +39,7 @@ export function renderReviewPack(store: SchedulerStore, taskIds?: string[]): str
     out.push(`- worker: ${task.assignedWorker}, coding attempts: ${r.codingAttempts}, mastra run: ${r.runId ?? 'n/a'}`);
     out.push(`- branch: ${r.branch} @ ${String(r.headCommit).slice(0, 10)} (base ${String(r.baseCommit).slice(0, 10)})`);
     out.push(`- verifier: ${r.verifier ? `${(r.verifier.command as string[]).join(' ')} -> exit ${r.verifier.exitCode}` : 'n/a'}`);
+    if (r.capacity) out.push(`- delegation capacity: ${describeCapacity(r.capacity as ResolvedCapacity)}; changed lines: ${Object.entries((r.changedLines ?? {}) as Record<string, number>).map(([f, n]) => `${f} ${n}`).join(', ') || 'none'}`);
     if (r.feedbackAddressed) out.push(`- addresses earlier feedback: ${r.feedbackAddressed}`);
     out.push('', `**Objective:** ${r.objective}`, '', '**Acceptance criteria:**', ...(r.acceptanceCriteria as string[]).map((c) => `- ${c}`), '');
     const findings = r.findings as { code: string; severity: string; detail: string }[];

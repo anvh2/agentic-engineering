@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { DEFAULT_MODEL_WAIT_BUDGET_MS, modelWaitBudgetMs } from '../capacity/model-capacity.ts';
 import { delegationRequestSchema, languageOf, type Language } from '../execution/delegation.ts';
+import { delegationCapacitySchema } from '../execution/delegation-capacity.ts';
 import { DEFAULT_PROVIDER_ID } from '../execution/worker-provider.ts';
 
 /**
@@ -75,6 +76,11 @@ export const taskSpecSchema = z.object({
   ownedFiles: z.array(z.string()).default([]),
   /** Total times the task may be claimed (initial run + lease-expiry / runtime requeues). */
   maxClaims: z.number().int().min(1).max(10).default(3),
+  /**
+   * How much change the delegated work may produce (delegation-capacity.ts). Optional for compatibility with stored specs:
+   * a task without one is judged by DEFAULT_DELEGATION_CAPACITY and the review evidence records that it was the default.
+   */
+  capacity: delegationCapacitySchema.optional(),
 });
 export type TaskSpec = z.output<typeof taskSpecSchema>;
 export type TaskSpecInput = z.input<typeof taskSpecSchema>;

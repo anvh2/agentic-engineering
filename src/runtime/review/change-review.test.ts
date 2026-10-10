@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
+import { resolveCapacity } from '../execution/delegation-capacity.ts';
 import { inspectChange } from './change-review.ts';
 import { classifyWhitespaceChanges } from './whitespace-changes.ts';
 
@@ -24,7 +25,7 @@ async function review(before: string, after: string, file = FILE) {
   git('add', '-A');
   git('commit', '-qm', 'init');
   writeFileSync(join(repo, file), after);
-  const inspection = await inspectChange({ repoRoot: repo, allowedFiles: [file], statusBefore: [] });
+  const inspection = await inspectChange({ repoRoot: repo, allowedFiles: [file], statusBefore: [], capacity: resolveCapacity(undefined) });
   return { findings: inspection.findings, codes: inspection.findings.map((f) => `${f.severity}:${f.code}`) };
 }
 const blocks = (codes: string[]) => codes.filter((c) => c.startsWith('block:'));
@@ -133,7 +134,7 @@ describe('the other gates are unchanged', () => {
     git('commit', '-qm', 'init');
     writeFileSync(join(repo, FILE), STUB.replace('""', '"x"'));
     writeFileSync(join(repo, 'pkg/other.go'), 'package slug\n// edited\n');
-    const inspection = await inspectChange({ repoRoot: repo, allowedFiles: [FILE], statusBefore: [] });
+    const inspection = await inspectChange({ repoRoot: repo, allowedFiles: [FILE], statusBefore: [], capacity: resolveCapacity(undefined) });
     assert.ok(inspection.findings.some((f) => f.code === 'out_of_scope_file' && f.severity === 'block'));
   });
 

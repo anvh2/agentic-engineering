@@ -193,6 +193,22 @@ describe('M5.3 integration', () => {
     void repo;
   });
 
+  it('M9.0: a reviewed commit that renames an out-of-scope file onto an allowed one is caught (the scope check sees both paths)', async () => {
+    const { repo, store, worktrees, scheduler } = setup([workerTask('a')], { repoFiles: { 'src/secret.js': 'module.exports = "keep me";\n' } });
+    await scheduler.run();
+    approve(store, 'a');
+    const t = store.requireTask('a');
+    // A commit whose rename record would name only src/a.js: the deletion of src/secret.js must not be hidden from the check.
+    git(t.worktreePath!, 'reset', '-q', '--hard', t.baseCommit!);
+    git(t.worktreePath!, 'mv', 'src/secret.js', 'src/a.js');
+    git(t.worktreePath!, '-c', 'user.name=x', '-c', 'user.email=x@x', 'commit', '-q', '-m', 'rename');
+    store.db.prepare('UPDATE tasks SET head_commit = ? WHERE id = ?').run(git(t.worktreePath!, 'rev-parse', 'HEAD'), 'a');
+    const { reports } = await integrateBatch(store, worktrees, { batchId: 'B1', run: passRunner });
+    assert.equal(reports[0].category, 'diverged_after_review');
+    assert.match(reports[0].detail ?? '', /src\/secret\.js/);
+    assert.equal(git(repo, 'show', 'lead-integration/B1:src/secret.js'), 'module.exports = "keep me";', 'nothing was merged');
+  });
+
   it('serializes integration per repository: a live lock makes a second integrator back off', async () => {
     const { store, worktrees, scheduler, repo } = setup([workerTask('a')]);
     await scheduler.run();

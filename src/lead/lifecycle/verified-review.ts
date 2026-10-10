@@ -4,6 +4,8 @@ import { dirname, join } from 'node:path';
 import { redact } from '../../runtime/execution/coding-task-trace.ts';
 import { scrubForWorker } from '../../runtime/execution/worker-feedback.ts';
 import type { CommandRunner } from '../../runtime/integration/integrate.ts';
+import { capacityFindings, resolveCapacity, type ResolvedCapacity } from '../../runtime/execution/delegation-capacity.ts';
+import { EvidenceError, addedLineSecurityFindings, parseNumstatZ, readGitEvidence } from '../../runtime/review/change-review.ts';
 import type { SchedulerStore } from '../../runtime/scheduler/store.ts';
 import { ownedFilesOf } from '../../runtime/scheduler/types.ts';
 import type { WorktreeManager } from '../../runtime/worktree/worktree.ts';
@@ -50,6 +52,12 @@ export interface ReviewEvidence {
   artifactHashes: Record<string, string>;
   changedFiles: string[];
   diffSha256: string | null;
+  /** Size of the complete base..head diff the hash and the checks below were computed from (never a truncated copy). */
+  diffBytes: number | null;
+  /** Added + deleted lines per changed file in the reviewed commit. */
+  changedLines: Record<string, number>;
+  /** The delegation capacity policy the commit was judged by, and whether it was the task's own or the default. */
+  capacity: ResolvedCapacity;
   /** What the worker's run reported about its own verifier. Recorded, never relied on. */
   workerSelfReport: { command: string[]; exitCode: number | null } | null;
   /** The runtime's own re-run of the task verifier on the exported reviewed commit. */
@@ -116,6 +124,9 @@ export async function verifyReview(deps: VerifiedReviewDeps, taskId: string): Pr
     artifactHashes: {},
     changedFiles: [],
     diffSha256: null,
+    diffBytes: null,
+    changedLines: {},
+    capacity: resolveCapacity(task.spec.capacity),
     workerSelfReport: req.verifier ? { command: req.verifier.command, exitCode: req.verifier.exitCode } : null,
     independentVerification: null,
   };
@@ -177,13 +188,34 @@ export async function verifyReview(deps: VerifiedReviewDeps, taskId: string): Pr
   const base = task.baseCommit ?? '';
   const head = task.headCommit ?? '';
   let changed: string[] = [];
+  let evidenceComplete = false;
   if (base && head) {
     const lineage = (await git(['merge-base', '--is-ancestor', base, head])).success && head !== base;
     add('commit_lineage', lineage, 'evidence', lineage ? 'the reviewed commit descends from the task base' : `${head.slice(0, 10)} does not descend from the task base ${base.slice(0, 10)}`);
-    changed = (await git(['diff', '--name-only', base, head])).stdout.split('\n').filter(Boolean);
-    evidence.changedFiles = changed;
-    const diff = await git(['diff', base, head]);
-    evidence.diffSha256 = sha256(diff.stdout);
+    // The complete change set and diff, or no verdict on them: readGitEvidence refuses truncated, failed or timed-out output.
+    // --no-renames: a rename record names only the destination, which would hide a deleted source path from the scope check.
+    try {
+      const repo = batch.repository;
+      changed = (await readGitEvidence(repo, ['diff', '--no-renames', '--name-only', '-z', base, head])).stdout.split('\0').filter(Boolean);
+      const diff = (await readGitEvidence(repo, ['diff', '--no-renames', base, head])).stdout;
+      const lines = parseNumstatZ((await readGitEvidence(repo, ['diff', '--no-renames', '--numstat', '-z', base, head])).stdout);
+      evidence.changedFiles = changed;
+      evidence.diffSha256 = sha256(diff);
+      evidence.diffBytes = Buffer.byteLength(diff);
+      evidence.changedLines = Object.fromEntries(lines);
+      evidenceComplete = true;
+      add('complete_evidence', true, 'evidence', `complete diff of ${changed.length} file(s), ${evidence.diffBytes} bytes, read without truncation`);
+
+      // Re-derived from the complete committed diff, independently of the findings recorded at PASS time.
+      const security = addedLineSecurityFindings('reviewed commit', diff).filter((f) => f.severity === 'block');
+      add('committed_diff_security', security.length === 0, 'evidence', security.length === 0 ? 'no blocked pattern on any added line of the complete diff' : security.map((f) => f.detail).join(' | ').slice(0, 1200));
+      const hard = capacityFindings(lines, evidence.capacity).filter((f) => f.severity === 'block');
+      add('delegation_capacity', hard.length === 0, 'evidence', hard.length === 0 ? `${[...lines.values()].reduce((a, b) => a + b, 0)} changed line(s) within maxChangedLinesPerTask ${evidence.capacity.maxChangedLinesPerTask} (${evidence.capacity.source} policy)` : hard.map((f) => f.detail).join(' | '));
+    } catch (err) {
+      if (!(err instanceof EvidenceError)) throw err;
+      changed = [];
+      add('complete_evidence', false, 'evidence', `the reviewed commit's change set could not be read completely: ${err.message}`);
+    }
   } else {
     add('commit_lineage', false, 'evidence', 'the task has no recorded base or head commit');
   }
@@ -191,7 +223,7 @@ export async function verifyReview(deps: VerifiedReviewDeps, taskId: string): Pr
   // ---- allowed-file compliance, recomputed from the commit (not from the worker's report) ------------------------------
   const owned = ownedFilesOf(task.spec);
   const outside = changed.filter((f) => !owned.includes(f));
-  add('allowed_files', changed.length > 0 && outside.length === 0, 'evidence', outside.length > 0 ? `the reviewed commit changes files outside the task's allowed files: ${outside.join(', ')}` : changed.length === 0 ? 'the reviewed commit changes nothing' : `only allowed files changed: ${changed.join(', ')}`);
+  add('allowed_files', evidenceComplete && changed.length > 0 && outside.length === 0, 'evidence', !evidenceComplete ? 'not judged: the change set is incomplete' : outside.length > 0 ? `the reviewed commit changes files outside the task's allowed files: ${outside.join(', ')}` : changed.length === 0 ? 'the reviewed commit changes nothing' : `only allowed files changed: ${changed.join(', ')}`);
 
   // ---- deterministic findings recorded at PASS time -----------------------------------------------------------------
   const findings = (Array.isArray(req.findings) ? req.findings : []) as { code: string; severity: string; detail: string }[];

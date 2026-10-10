@@ -6,6 +6,7 @@ import { runSandboxedCommand } from '../sandbox/sandbox.ts';
 import { redact } from '../execution/coding-task-trace.ts';
 import type { BatchRow, SchedulerStore, TaskRow } from '../scheduler/store.ts';
 import { StoreError } from '../scheduler/store.ts';
+import { EvidenceError, readGitEvidence } from '../review/change-review.ts';
 import { ownedFilesOf, type FailureCategory } from '../scheduler/types.ts';
 import { taskBranch, type WorktreeManager } from '../worktree/worktree.ts';
 
@@ -224,9 +225,17 @@ async function integrateOne(ctx: Ctx, task: TaskRow): Promise<IntegrationReport>
   const tip = (await ctx.worktrees.git(ctx.batch.repository, ['rev-parse', '--verify', `refs/heads/${branch}`])).stdout.trim();
   if (!task.headCommit || tip !== task.headCommit) return escalate('diverged_after_review', `task branch ${branch} is at ${tip || 'missing'}, but ${task.headCommit} was the reviewed commit`);
 
-  // 2. the reviewed change must touch only the task's files
-  const base = (await gitIn(ctx, ['merge-base', 'HEAD', task.headCommit])).stdout.trim();
-  const changed = (await gitIn(ctx, ['diff', '--name-only', base, task.headCommit])).stdout.split('\n').filter(Boolean);
+  // 2. the reviewed change must touch only the task's files, judged on the complete change set (--no-renames: a rename
+  // record would hide its source path). Unreadable evidence escalates; it never reads as "no files changed".
+  let base: string;
+  let changed: string[];
+  try {
+    base = (await readGitEvidence(ctx.iw.path, ['merge-base', 'HEAD', task.headCommit])).stdout.trim();
+    changed = (await readGitEvidence(ctx.iw.path, ['diff', '--no-renames', '--name-only', '-z', base, task.headCommit])).stdout.split('\0').filter(Boolean);
+  } catch (err) {
+    if (!(err instanceof EvidenceError)) throw err;
+    return escalate('diverged_after_review', `the reviewed commit's change set could not be read completely: ${err.message}`);
+  }
   const owned = ownedFilesOf(task.spec);
   const extra = changed.filter((f) => !owned.includes(f));
   if (extra.length > 0) return escalate('diverged_after_review', `reviewed commit changes files outside the task scope: ${extra.join(', ')}`);

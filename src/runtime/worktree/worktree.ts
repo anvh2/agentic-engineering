@@ -4,7 +4,8 @@ import { lstat, mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { runControlledCommand } from '../../workers/tools/execution-tools.ts';
-import { gitStatusEntries, inspectChange, type ChangeInspection } from '../review/change-review.ts';
+import { EvidenceError, gitStatusEntries, incompleteInspection, inspectChange, type ChangeInspection } from '../review/change-review.ts';
+import { resolveCapacity } from '../execution/delegation-capacity.ts';
 import { ownedFilesOf } from '../scheduler/types.ts';
 import type { BatchRow, TaskRow } from '../scheduler/store.ts';
 
@@ -241,7 +242,16 @@ export class WorktreeManager implements Workspace {
 
   async inspect(task: TaskRow): Promise<ChangeInspection> {
     const path = this.requirePath(task);
-    return inspectChange({ repoRoot: path, allowedFiles: ownedFilesOf(task.spec), statusBefore: await this.baselineStatus(task) });
+    const capacity = resolveCapacity(task.spec.capacity);
+    let statusBefore: string[];
+    try {
+      statusBefore = await this.baselineStatus(task);
+    } catch (err) {
+      // Unreadable evidence is a blocking finding (ESCALATED for a human), not a runtime failure that could be requeued.
+      if (err instanceof EvidenceError) return incompleteInspection(`baseline status: ${err.message}`, capacity);
+      throw err;
+    }
+    return inspectChange({ repoRoot: path, allowedFiles: ownedFilesOf(task.spec), statusBefore, capacity });
   }
 
   /** Entries present before the worker ran: link symlinks only (the worktree starts clean otherwise). */

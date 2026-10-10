@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { codingTaskSchema } from '../../runtime/execution/coding-task-runner.ts';
 import { leadAssessmentSchema } from '../../runtime/execution/delegation.ts';
+import { delegationCapacitySchema } from '../../runtime/execution/delegation-capacity.ts';
 import type { PlanIssue } from './validate.ts';
 
 /**
@@ -92,6 +93,8 @@ export const plannedTaskSchema = z.object({
   /** Required for HUMAN_DECISION tasks: what must be decided. */
   decision: z.object({ question: z.string().min(1), options: z.array(z.string().min(1)).default([]) }).optional(),
   priority: z.number().int().min(0).max(100).optional(),
+  /** LOCAL_WORKER only: the delegation capacity the change is reviewed against. Omitted: the default, shown at validation. */
+  capacity: delegationCapacitySchema.optional(),
 });
 export type PlannedTask = z.output<typeof plannedTaskSchema>;
 

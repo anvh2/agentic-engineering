@@ -1,3 +1,4 @@
+import { resolveCapacity, type ResolvedCapacity } from '../../runtime/execution/delegation-capacity.ts';
 import { DEFAULT_CONFIG } from '../../runtime/scheduler/types.ts';
 import { integrationCommandReasons, unsafeCommandReasons, workerIneligibility } from './ownership.ts';
 import { engineeringPlanSchema, type EngineeringPlan, type PlannedTask, type ResearchContext } from './types.ts';
@@ -28,6 +29,8 @@ export interface PlanValidation {
   order: string[];
   /** Tasks grouped by DAG depth: everything in one group can run in parallel. */
   levels: string[][];
+  /** The delegation capacity every LOCAL_WORKER task will be reviewed against, shown before anything is submitted or claimed. */
+  capacity: ({ taskId: string } & ResolvedCapacity)[];
 }
 
 export interface ValidateContext {
@@ -88,7 +91,7 @@ function levelsOf(tasks: PlannedTask[]): string[][] {
   return levels.map((l) => l.sort());
 }
 
-const EMPTY: Omit<PlanValidation, 'errors' | 'warnings' | 'ok' | 'executable' | 'readiness'> = { pendingDecisions: [], roots: [], order: [], levels: [] };
+const EMPTY: Omit<PlanValidation, 'errors' | 'warnings' | 'ok' | 'executable' | 'readiness'> = { pendingDecisions: [], roots: [], order: [], levels: [], capacity: [] };
 
 export async function validatePlan(input: unknown, ctx: ValidateContext): Promise<{ plan?: EngineeringPlan; validation: PlanValidation }> {
   const parsed = engineeringPlanSchema.safeParse(input);
@@ -142,6 +145,7 @@ export async function validatePlan(input: unknown, ctx: ValidateContext): Promis
         error(r.kind === 'verification' ? 'unsafe_verification' : r.kind === 'scope' ? 'worker_scope_unbounded' : 'worker_not_eligible', `task "${t.id}" cannot be LOCAL_WORKER: ${r.message}`, t.id);
       }
     }
+    if (t.capacity && t.executionOwner !== 'LOCAL_WORKER') warn('capacity_ignored', `task "${t.id}" is ${t.executionOwner}: a delegation capacity applies only to LOCAL_WORKER tasks and is ignored`, t.id);
     const dirty = new Set(ctx.research?.dirtyFiles ?? []);
     const touched = t.allowedFiles.filter((f) => dirty.has(f));
     if (touched.length > 0 && t.executionOwner !== 'HUMAN_DECISION') {
@@ -194,5 +198,6 @@ export async function validatePlan(input: unknown, ctx: ValidateContext): Promis
     levels = levelsOf(plan.tasks);
     order = levels.flat();
   }
-  return { plan, validation: { ok, executable, readiness: !ok ? 'invalid' : hasHuman ? 'needs_human_decision' : 'executable', errors, warnings, pendingDecisions, roots, order, levels } };
+  const capacity = plan.tasks.filter((t) => t.executionOwner === 'LOCAL_WORKER').map((t) => ({ taskId: t.id, ...resolveCapacity(t.capacity) }));
+  return { plan, validation: { ok, executable, readiness: !ok ? 'invalid' : hasHuman ? 'needs_human_decision' : 'executable', errors, warnings, pendingDecisions, roots, order, levels, capacity } };
 }
