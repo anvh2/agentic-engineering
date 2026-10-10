@@ -37,6 +37,12 @@ export interface SmokeServerConfig {
   ledgerPath: string;
   /** No more provider invocations than this are allowed through, whatever the runner would like to retry. */
   maxInvocations: number;
+  /**
+   * Optional, stricter budget shared by EVERY provider instance in this server process (the default cap above is per instance): at most
+   * `total` invocations for the whole server and at most `perWorkdir` per task worktree. Counted before a CLI starts, outside the runner's
+   * retry logic, so a second coding attempt of the same task is refused as surely as a third task.
+   */
+  invocationBudget?: { total: number; perWorkdir: number };
   modelTimeoutMs: number;
   runtimeRetryDelayMs?: number;
 }
@@ -57,12 +63,51 @@ export function limitInvocations(provider: WorkerProvider, max: number, note: (e
   } as WorkerProvider;
 }
 
+/** Server-wide state for `invocationBudget`: one instance per server process, shared by every provider the registry creates. */
+export class SharedInvocationBudget {
+  private total = 0;
+  private readonly byWorkdir = new Map<string, number>();
+  private readonly budget: { total: number; perWorkdir: number };
+  private readonly note: (event: Record<string, unknown>) => void;
+  constructor(budget: { total: number; perWorkdir: number }, note: (event: Record<string, unknown>) => void) {
+    this.budget = budget;
+    this.note = note;
+  }
+
+  /** Takes one invocation slot for `workdir`, or refuses (and records the refusal). Refused calls consume nothing. */
+  take(workdir: string): boolean {
+    const used = this.byWorkdir.get(workdir) ?? 0;
+    const allowed = this.total < this.budget.total && used < this.budget.perWorkdir;
+    if (allowed) {
+      this.total += 1;
+      this.byWorkdir.set(workdir, used + 1);
+    }
+    this.note({ event: 'invocation', n: this.total, max: this.budget.total, perWorkdirMax: this.budget.perWorkdir, workdir, workdirCalls: used + (allowed ? 1 : 0), allowed });
+    return allowed;
+  }
+
+  wrap(provider: WorkerProvider): WorkerProvider {
+    return {
+      get provider() {
+        return provider.provider;
+      },
+      probe: () => provider.probe(),
+      generate: (async (...args: Parameters<WorkerProvider['generate']>) => {
+        const workdir = String((args[1] as { providerRequest?: { workdir?: string } } | undefined)?.providerRequest?.workdir ?? 'unknown');
+        if (!this.take(workdir)) throw new Error(`invocation budget reached: refusing provider call for ${workdir} (total ${this.budget.total}, per task ${this.budget.perWorkdir})`);
+        return provider.generate(...args);
+      }) as WorkerProvider['generate'],
+    } as WorkerProvider;
+  }
+}
+
 export async function buildSmokeMastra(config: SmokeServerConfig): Promise<Mastra> {
   mkdirSync(dirname(config.ledgerPath), { recursive: true });
   const note = (event: Record<string, unknown>) => appendFileSync(config.ledgerPath, `${JSON.stringify({ ...event, at: new Date().toISOString(), serverPid: process.pid })}\n`);
   const onProcess = ({ pid }: { pid: number }) => note({ event: 'spawn', pid });
   const base = config.provider === 'gemini' ? geminiEntry({ ...config.gemini, onProcess }) : codexEntry({ ...config.codex, onProcess });
-  const providers = new ProviderRegistry().register({ ...base, create: (ctx) => limitInvocations(base.create(ctx) as WorkerProvider, config.maxInvocations, note) });
+  const shared = config.invocationBudget ? new SharedInvocationBudget(config.invocationBudget, note) : undefined;
+  const providers = new ProviderRegistry().register({ ...base, create: (ctx) => (shared ? shared.wrap(base.create(ctx) as WorkerProvider) : limitInvocations(base.create(ctx) as WorkerProvider, config.maxInvocations, note)) });
   const workflow = createCodingTaskWorkflow({
     providers,
     // allowProviders is deliberately left unset: the workflow reads AGENTIC_ALLOW_PROVIDERS from THIS process's environment.

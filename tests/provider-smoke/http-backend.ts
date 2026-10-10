@@ -88,6 +88,8 @@ export interface HttpBackendOptions {
   /** AGENTIC_ALLOW_PROVIDERS of the Mastra server process (the scheduler's own allow-list is separate). */
   serverAllowProviders: readonly string[];
   maxInvocations: number;
+  /** Stricter server-wide budget (total and per task worktree); see SmokeServerConfig.invocationBudget. */
+  invocationBudget?: { total: number; perWorkdir: number };
   modelTimeoutMs: number;
   capacityDb?: string;
   /** Use an already-running server (a stub, or an address nothing listens on) instead of starting one. */
@@ -119,6 +121,7 @@ export async function createHttpBackend(options: HttpBackendOptions): Promise<Sm
       storageUrl: `file:${join(serverDir, 'mastra.db')}`,
       ledgerPath,
       maxInvocations: options.maxInvocations,
+      ...(options.invocationBudget ? { invocationBudget: options.invocationBudget } : {}),
       modelTimeoutMs: options.modelTimeoutMs,
     };
     writeFileSync(configPath, JSON.stringify(config, null, 2));
@@ -208,6 +211,7 @@ export async function createHttpBackend(options: HttpBackendOptions): Promise<Sm
         serverLog: child ? logPath : null,
         serverAllowProviders: [...options.serverAllowProviders],
         maxInvocations: options.maxInvocations,
+        invocationBudget: options.invocationBudget ?? null,
         providerInvocations: events.filter((e) => e.event === 'invocation' && e.allowed).length,
         providerInvocationsRefused: events.filter((e) => e.event === 'invocation' && !e.allowed).length,
         providerProcessesSpawned: events.filter((e) => e.event === 'spawn').length,
