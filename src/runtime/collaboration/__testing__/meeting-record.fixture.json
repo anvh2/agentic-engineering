@@ -1,0 +1,298 @@
+{
+  "schema": "agentic.meeting-record/1",
+  "sessionId": "s-design",
+  "threadId": "t-design",
+  "title": "Persist delegation capacity per task",
+  "refs": {},
+  "agenda": [
+    "Where does the per-task delegation limit live?",
+    "What happens above the hard limit?"
+  ],
+  "chair": "claude-engineering-lead",
+  "participants": [
+    {
+      "id": "claude-engineering-lead",
+      "role": "engineering_lead",
+      "kind": "lead",
+      "provider": "fake",
+      "model": "scripted-lead"
+    },
+    {
+      "id": "architect",
+      "role": "architect",
+      "kind": "worker",
+      "provider": "fake",
+      "model": "scripted-architect"
+    },
+    {
+      "id": "worker-codex",
+      "role": "implementer",
+      "kind": "worker",
+      "provider": "fake",
+      "model": "scripted-codex"
+    },
+    {
+      "id": "reviewer",
+      "role": "reviewer",
+      "kind": "reviewer",
+      "provider": "fake",
+      "model": "scripted-reviewer"
+    }
+  ],
+  "limits": {
+    "maxRounds": 3,
+    "maxInvocations": 20
+  },
+  "usage": {
+    "roundsStarted": 3,
+    "invocations": 9,
+    "tokens": 2695
+  },
+  "outcome": "decided",
+  "reason": "decision m9 by claude-engineering-lead: accept m2",
+  "alternatives": [
+    {
+      "id": "m2",
+      "author": "architect",
+      "body": "Declare delegationCapacity in the task spec; default 80 lines per file, 400 per task; hard ceiling 2000 in code.",
+      "status": "accepted",
+      "supporters": [
+        "reviewer"
+      ],
+      "outstandingObjections": [
+        "m3"
+      ],
+      "correctedBy": [
+        "m6"
+      ],
+      "source": {
+        "seq": 7,
+        "messageId": "m2"
+      }
+    }
+  ],
+  "objections": [
+    {
+      "id": "m3",
+      "author": "worker-codex",
+      "target": "m2",
+      "body": "Re-planning a larger task on a paid provider needs operator approval; the proposal does not say so.",
+      "status": "outstanding",
+      "source": {
+        "seq": 9,
+        "messageId": "m3"
+      }
+    }
+  ],
+  "questions": [
+    {
+      "id": "m4",
+      "author": "reviewer",
+      "body": "Is the limit checked before the worker runs, or only at review?",
+      "status": "answered",
+      "answers": [
+        "m5"
+      ],
+      "source": {
+        "seq": 11,
+        "messageId": "m4"
+      }
+    }
+  ],
+  "agreements": [
+    {
+      "proposalId": "m2",
+      "supporters": [
+        "reviewer"
+      ],
+      "unanimous": false,
+      "sources": [
+        {
+          "seq": 19,
+          "messageId": "m8"
+        }
+      ]
+    }
+  ],
+  "decisions": [
+    {
+      "id": "m9",
+      "decider": "claude-engineering-lead",
+      "outcome": "accept",
+      "proposalIds": [
+        "m2"
+      ],
+      "rationale": "Makes the limit explicit and reviewable; the hard ceiling stays a code review.",
+      "contested": true,
+      "overruledObjections": [
+        "m3"
+      ],
+      "authority": "none",
+      "source": {
+        "seq": 21,
+        "messageId": "m9"
+      }
+    }
+  ],
+  "actionItems": [
+    {
+      "decisionId": "m9",
+      "owner": "worker-codex",
+      "description": "Add capacity to the task spec schema with a strict parser.",
+      "source": {
+        "seq": 21,
+        "messageId": "m9"
+      }
+    },
+    {
+      "decisionId": "m9",
+      "owner": "reviewer",
+      "description": "Write the over-limit escalation test.",
+      "source": {
+        "seq": 21,
+        "messageId": "m9"
+      }
+    }
+  ],
+  "unresolved": [
+    {
+      "kind": "objection",
+      "id": "m3",
+      "detail": "worker-codex objects to m2",
+      "source": {
+        "seq": 9,
+        "messageId": "m3"
+      }
+    }
+  ],
+  "corrections": [
+    {
+      "id": "m6",
+      "author": "architect",
+      "target": "m2",
+      "body": "Correction: the per-file number is a repairable warning, not a block.",
+      "source": {
+        "seq": 15,
+        "messageId": "m6"
+      }
+    }
+  ],
+  "turns": [
+    {
+      "round": 1,
+      "turn": 0,
+      "participant": "claude-engineering-lead",
+      "attempt": 1,
+      "outcome": "message",
+      "seq": 5,
+      "messageId": "m1",
+      "kind": "comment",
+      "reason": null
+    },
+    {
+      "round": 1,
+      "turn": 1,
+      "participant": "architect",
+      "attempt": 1,
+      "outcome": "message",
+      "seq": 7,
+      "messageId": "m2",
+      "kind": "proposal",
+      "reason": null
+    },
+    {
+      "round": 1,
+      "turn": 2,
+      "participant": "worker-codex",
+      "attempt": 1,
+      "outcome": "message",
+      "seq": 9,
+      "messageId": "m3",
+      "kind": "objection",
+      "reason": null
+    },
+    {
+      "round": 1,
+      "turn": 3,
+      "participant": "reviewer",
+      "attempt": 1,
+      "outcome": "message",
+      "seq": 11,
+      "messageId": "m4",
+      "kind": "question",
+      "reason": null
+    },
+    {
+      "round": 2,
+      "turn": 0,
+      "participant": "claude-engineering-lead",
+      "attempt": 1,
+      "outcome": "message",
+      "seq": 13,
+      "messageId": "m5",
+      "kind": "answer",
+      "reason": null
+    },
+    {
+      "round": 2,
+      "turn": 1,
+      "participant": "architect",
+      "attempt": 1,
+      "outcome": "message",
+      "seq": 15,
+      "messageId": "m6",
+      "kind": "correction",
+      "reason": null
+    },
+    {
+      "round": 2,
+      "turn": 2,
+      "participant": "worker-codex",
+      "attempt": 1,
+      "outcome": "message",
+      "seq": 17,
+      "messageId": "m7",
+      "kind": "pass",
+      "reason": null
+    },
+    {
+      "round": 2,
+      "turn": 3,
+      "participant": "reviewer",
+      "attempt": 1,
+      "outcome": "message",
+      "seq": 19,
+      "messageId": "m8",
+      "kind": "support",
+      "reason": null
+    },
+    {
+      "round": 3,
+      "turn": 0,
+      "participant": "claude-engineering-lead",
+      "attempt": 1,
+      "outcome": "message",
+      "seq": 21,
+      "messageId": "m9",
+      "kind": "decision",
+      "reason": null
+    }
+  ],
+  "pendingAtEnd": null,
+  "provenance": {
+    "throughSeq": 21,
+    "throughHash": "87ecab6f6e9e3b218985944ebe9ce74cca8a6aab05a7780ad5a750def92570b8",
+    "messageSeqs": [
+      5,
+      7,
+      9,
+      11,
+      13,
+      15,
+      17,
+      19,
+      21
+    ]
+  },
+  "recordHash": "cee0632c4229b897ce670fe4e17cc88f602ee99c1f0e6e272d8722af84fadd83"
+}
