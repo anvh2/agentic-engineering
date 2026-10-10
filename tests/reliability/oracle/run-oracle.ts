@@ -29,6 +29,7 @@ interface OracleSpec {
   baselineRef: string;
   baselineMustFail: string[];
   baselineMustPass: string[];
+  protectedFiles: Record<string, string>;
   mutants: { id: string; description: string; patch: string; appliesTo: 'baseline' | 'candidate'; mustFail: string[]; mustPass: string[] }[];
 }
 
@@ -91,13 +92,18 @@ try {
     }
     results.push({ name: m[2].trim(), ok: m[1] === 'ok', error });
   }
+  // the pre-existing safety contracts must be byte-identical to what the oracle pinned: an implementation cannot pass by editing them
+  const protectedChanged = Object.entries(spec.protectedFiles).filter(([path, hash]) => {
+    const file = join(wt, path);
+    return !existsSync(file) || createHash('sha256').update(readFileSync(file)).digest('hex') !== hash;
+  }).map(([path]) => path);
   const failed = results.filter((t) => !t.ok).map((t) => t.name);
   const passedNames = results.filter((t) => t.ok).map((t) => t.name);
   const mustFail = expect === 'baseline' ? spec.baselineMustFail : mutant?.mustFail ?? [];
   const mustPass = expect === 'baseline' ? spec.baselineMustPass : mutant?.mustPass ?? [];
   const missingFailures = mustFail.filter((n) => !results.some((t) => t.name === n && !t.ok));
   const missingPasses = mustPass.filter((n) => !results.some((t) => t.name === n && t.ok));
-  const holds = expect === 'candidate' ? results.length > 0 && failed.length === 0 && r.status === 0 : results.length > 0 && missingFailures.length === 0 && missingPasses.length === 0;
+  const holds = protectedChanged.length === 0 && (expect === 'candidate' ? results.length > 0 && failed.length === 0 && r.status === 0 : results.length > 0 && missingFailures.length === 0 && missingPasses.length === 0);
   const verdict = {
     schema: 'agentic.m10_1-oracle-verdict/1',
     expect,
@@ -111,11 +117,12 @@ try {
     tests: results,
     passed: passedNames.length,
     failed: failed.length,
+    protectedFilesChanged: protectedChanged,
     ...(expect === 'candidate' ? {} : { mustFail, mustPass, missingFailures, missingPasses }),
     holds,
   };
   writeFileSync(join(out, `oracle-${label}-${commit.slice(0, 10)}.json`), JSON.stringify(verdict, null, 2) + '\n');
-  console.log(JSON.stringify({ expect, ...(mutantId ? { mutant: mutantId } : {}), commit, passed: verdict.passed, failed: verdict.failed, ...(expect === 'candidate' ? {} : { missingFailures, missingPasses }), holds }, null, 2));
+  console.log(JSON.stringify({ expect, ...(mutantId ? { mutant: mutantId } : {}), commit, passed: verdict.passed, failed: verdict.failed, protectedFilesChanged: protectedChanged, ...(expect === 'candidate' ? {} : { missingFailures, missingPasses }), holds }, null, 2));
   process.exitCode = holds ? 0 : 1;
 } finally {
   execFileSync('git', ['worktree', 'remove', '--force', wt], { cwd: REPO });
