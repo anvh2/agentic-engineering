@@ -8,6 +8,7 @@ import {
   Observability,
   SensitiveDataFilter,
 } from '@mastra/observability';
+import { createControlCenterRoutes } from '../control-center/mastra-routes.ts';
 import { createMetricsRoute } from './metrics-route';
 import { codingWorkerGo, codingWorkerJs } from '../../workers/coding-worker';
 import { codingTaskWorkflow } from './workflows/coding-task-workflow';
@@ -16,7 +17,7 @@ export const mastra = new Mastra({
   bundler: {
     externals: ['@duckdb/node-bindings'],
   },
-  server: { apiRoutes: [createMetricsRoute()] },
+  server: { apiRoutes: [createMetricsRoute(), ...createControlCenterRoutes()] },
   agents: { codingWorkerGo, codingWorkerJs },
   workflows: { codingTaskWorkflow },
   storage: new MastraCompositeStore({

@@ -1,0 +1,11 @@
+--- a/packages/playground-ui/src/domains/memory/components/flame-graph.tsx
++++ b/packages/playground-ui/src/domains/memory/components/flame-graph.tsx
+@@ -268,7 +268,7 @@
+               data={data}
+               fill={color}
+               isAnimationActive={false}
+-              shape={(props: Record<string, unknown>) => {
++              shape={(props: { cx?: unknown }) => {
+                 const cx = props.cx as number;
+                 return (
+                   <g>

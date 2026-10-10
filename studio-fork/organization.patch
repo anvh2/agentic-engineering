@@ -1,0 +1,57 @@
+--- a/packages/playground/src/lib/nav/nav-items.tsx
++++ b/packages/playground/src/lib/nav/nav-items.tsx
+@@ -63,6 +63,7 @@
+     key: 'primitives',
+     title: 'Primitives',
+     items: [
++      { name: 'Organization', url: '/organization', Icon: LayoutGrid, isOnMastraPlatform: false },
+       {
+         name: 'Agents',
+         url: '/agents',
+--- a/packages/playground/src/App.tsx
++++ b/packages/playground/src/App.tsx
+@@ -1,3 +1,4 @@
++import OrganizationPage from './pages/organization';
+ import { v4 as uuid } from '@lukeed/uuid';
+ import { coreFeatures } from '@mastra/core/features';
+ import { MastraReactProvider } from '@mastra/react';
+@@ -349,6 +350,7 @@
+   {
+     element: <RootLayout />,
+     children: [
++      { path: '/organization/*', element: <OrganizationPage />, handle: navHandle('/organization') },
+       // Conditional routes (non-platform only)
+       ...(isMastraPlatform
+         ? []
+--- a/packages/playground/src/domains/auth/route-permissions.ts
++++ b/packages/playground/src/domains/auth/route-permissions.ts
+@@ -45,6 +45,7 @@
+  * - 'stored-prompt-blocks' for prompts (uses /stored/prompt-blocks routes)
+  */
+ export const ROUTE_PERMISSIONS: RoutePermission[] = [
++  { route: '/organization', permission: 'observability:read', name: 'Organization' },
+   // Primary routes (highest priority for redirects)
+   { route: '/agents', permission: 'agents:read', name: 'Agents' },
+   { route: '/workflows', permission: 'workflows:read', name: 'Workflows' },
+--- /dev/null
++++ b/packages/playground/src/pages/organization.tsx
+@@ -0,0 +1,19 @@
++import { useEffect, useRef, useState } from 'react';
++
++/** Same-origin read-only Gateway UI; Studio retains navigation, auth and traces. */
++export default function OrganizationPage() {
++  const frame = useRef<HTMLIFrameElement>(null);
++  const [state, setState] = useState<'loading' | 'ready' | 'unavailable'>('loading');
++  useEffect(() => {
++    const receive = (event: MessageEvent) => {
++      if (event.origin === window.location.origin && event.source === frame.current?.contentWindow && event.data?.type === 'organization-ready') setState('ready');
++    };
++    window.addEventListener('message', receive);
++    const timer = window.setTimeout(() => setState(value => value === 'ready' ? value : 'unavailable'), 10000);
++    return () => { window.removeEventListener('message', receive); window.clearTimeout(timer); };
++  }, []);
++  return <section aria-label="Organization Control Center" className="flex min-h-0 flex-1 flex-col h-full">
++    {state !== 'ready' && <p role="status" className="p-4 text-sm text-neutral-400">{state === 'loading' ? 'Loading Organization…' : 'Organization is unavailable. Enable the read-only Gateway and build its UI.'}</p>}
++    <iframe ref={frame} title="Organization workspace" src="/organization-app/" className="w-full flex-1 border-0 min-h-[600px]" />
++  </section>;
++}

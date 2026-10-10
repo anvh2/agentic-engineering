@@ -1,0 +1,353 @@
+{
+  "_notice": "SYNTHETIC TEST FIXTURE — not live runtime data. The snapshot field follows agentic.control-center/1.",
+  "snapshot": {
+    "version": "agentic.control-center/1",
+    "observedAt": 1700000000000,
+    "source": "connected",
+    "databaseId": "00000000000000000000",
+    "cursor": "00000000000000000000:8",
+    "objectiveId": "B1",
+    "objectives": [
+      {
+        "id": "B1",
+        "label": "proj",
+        "createdAt": 1700000000000,
+        "kind": "scheduler-batch"
+      },
+      {
+        "id": "historical-smoke",
+        "label": "proj",
+        "createdAt": 1700000000000,
+        "kind": "scheduler-batch"
+      }
+    ],
+    "tasks": [
+      {
+        "id": "task-a",
+        "objectiveId": "B1",
+        "title": "Implement scoped parser",
+        "provider": "ollama",
+        "workerId": "worker-1",
+        "state": "CODING",
+        "activity": "UNKNOWN",
+        "stage": "CODING",
+        "dependsOn": [],
+        "runId": "synthetic-run-a",
+        "runIds": [
+          "synthetic-run-a"
+        ],
+        "traceUrl": "http://localhost:4111/workflows/coding-task-workflow/graph/synthetic-run-a",
+        "claimedAt": 1700000000000,
+        "leaseExpiresAt": 1700000001000,
+        "updatedAt": 1700000000000,
+        "lastEventAt": 1700000000000,
+        "activeSince": 1700000000000,
+        "elapsedMs": 0,
+        "stale": false,
+        "queuePosition": null,
+        "usage": {
+          "inputTokens": null,
+          "outputTokens": null,
+          "cachedInputTokens": null,
+          "reasoningTokens": null,
+          "latencyMs": null,
+          "estimatedCost": null,
+          "actualCostUsd": null,
+          "source": "unavailable",
+          "completeness": "unavailable"
+        }
+      },
+      {
+        "id": "task-b",
+        "objectiveId": "B1",
+        "title": "Verify parser behavior",
+        "provider": "ollama",
+        "workerId": null,
+        "state": "BACKLOG",
+        "activity": "UNKNOWN",
+        "stage": "BACKLOG",
+        "dependsOn": [
+          "task-a"
+        ],
+        "runId": null,
+        "runIds": [],
+        "traceUrl": null,
+        "claimedAt": null,
+        "leaseExpiresAt": null,
+        "updatedAt": 1700000000000,
+        "lastEventAt": 1700000000000,
+        "activeSince": null,
+        "elapsedMs": null,
+        "stale": false,
+        "queuePosition": null,
+        "usage": {
+          "inputTokens": null,
+          "outputTokens": null,
+          "cachedInputTokens": null,
+          "reasoningTokens": null,
+          "latencyMs": null,
+          "estimatedCost": null,
+          "actualCostUsd": null,
+          "source": "unavailable",
+          "completeness": "unavailable"
+        }
+      }
+    ],
+    "agents": [
+      {
+        "id": "claude",
+        "name": "Claude Engineering Lead",
+        "role": "lead",
+        "parentId": null,
+        "provider": "claude",
+        "modelId": null,
+        "activity": "UNKNOWN",
+        "configured": null,
+        "availability": "UNKNOWN",
+        "historicallyVerified": false,
+        "assignmentIds": [],
+        "lastOutcome": null,
+        "lastEventAt": null,
+        "usage": {
+          "inputTokens": null,
+          "outputTokens": null,
+          "cachedInputTokens": null,
+          "reasoningTokens": null,
+          "latencyMs": null,
+          "estimatedCost": null,
+          "actualCostUsd": null,
+          "source": "unavailable",
+          "completeness": "unavailable"
+        }
+      },
+      {
+        "id": "ollama",
+        "name": "Qwen",
+        "role": "worker",
+        "parentId": "claude",
+        "provider": "ollama",
+        "modelId": null,
+        "activity": "UNKNOWN",
+        "configured": null,
+        "availability": "UNKNOWN",
+        "historicallyVerified": false,
+        "assignmentIds": [
+          "task-a"
+        ],
+        "lastOutcome": null,
+        "lastEventAt": 1700000000000,
+        "usage": {
+          "inputTokens": null,
+          "outputTokens": null,
+          "cachedInputTokens": null,
+          "reasoningTokens": null,
+          "latencyMs": null,
+          "estimatedCost": null,
+          "actualCostUsd": null,
+          "source": "unavailable",
+          "completeness": "unavailable"
+        }
+      },
+      {
+        "id": "codex",
+        "name": "Codex",
+        "role": "worker",
+        "parentId": "claude",
+        "provider": "codex",
+        "modelId": null,
+        "activity": "UNKNOWN",
+        "configured": null,
+        "availability": "UNKNOWN",
+        "historicallyVerified": false,
+        "assignmentIds": [],
+        "lastOutcome": null,
+        "lastEventAt": null,
+        "usage": {
+          "inputTokens": null,
+          "outputTokens": null,
+          "cachedInputTokens": null,
+          "reasoningTokens": null,
+          "latencyMs": null,
+          "estimatedCost": null,
+          "actualCostUsd": null,
+          "source": "unavailable",
+          "completeness": "unavailable"
+        }
+      },
+      {
+        "id": "gemini",
+        "name": "Gemini",
+        "role": "worker",
+        "parentId": "claude",
+        "provider": "gemini",
+        "modelId": null,
+        "activity": "UNKNOWN",
+        "configured": null,
+        "availability": "UNKNOWN",
+        "historicallyVerified": false,
+        "assignmentIds": [],
+        "lastOutcome": null,
+        "lastEventAt": null,
+        "usage": {
+          "inputTokens": null,
+          "outputTokens": null,
+          "cachedInputTokens": null,
+          "reasoningTokens": null,
+          "latencyMs": null,
+          "estimatedCost": null,
+          "actualCostUsd": null,
+          "source": "unavailable",
+          "completeness": "unavailable"
+        }
+      }
+    ],
+    "events": [
+      {
+        "id": "00000000000000000000:1",
+        "sequence": 1,
+        "at": 1700000000000,
+        "taskId": "task-a",
+        "type": "task.transition",
+        "from": null,
+        "to": "BACKLOG",
+        "source": "scheduler.events"
+      },
+      {
+        "id": "00000000000000000000:2",
+        "sequence": 2,
+        "at": 1700000000000,
+        "taskId": "task-b",
+        "type": "task.transition",
+        "from": null,
+        "to": "BACKLOG",
+        "source": "scheduler.events"
+      },
+      {
+        "id": "00000000000000000000:5",
+        "sequence": 5,
+        "at": 1700000000000,
+        "taskId": "task-a",
+        "type": "task.queued",
+        "from": "BACKLOG",
+        "to": "READY",
+        "source": "scheduler.events"
+      },
+      {
+        "id": "00000000000000000000:6",
+        "sequence": 6,
+        "at": 1700000000000,
+        "taskId": "task-a",
+        "type": "task.claimed",
+        "from": "READY",
+        "to": "CLAIMED",
+        "source": "scheduler.events"
+      },
+      {
+        "id": "00000000000000000000:7",
+        "sequence": 7,
+        "at": 1700000000000,
+        "taskId": "task-a",
+        "type": "task.audit",
+        "from": "CLAIMED",
+        "to": "CLAIMED",
+        "source": "scheduler.events"
+      },
+      {
+        "id": "00000000000000000000:8",
+        "sequence": 8,
+        "at": 1700000000000,
+        "taskId": "task-a",
+        "type": "task.transition",
+        "from": "CLAIMED",
+        "to": "CODING",
+        "source": "scheduler.events"
+      }
+    ],
+    "reviews": [],
+    "calls": [],
+    "usage": {
+      "inputTokens": null,
+      "outputTokens": null,
+      "cachedInputTokens": null,
+      "reasoningTokens": null,
+      "latencyMs": null,
+      "estimatedCost": null,
+      "actualCostUsd": null,
+      "source": "unavailable",
+      "completeness": "unavailable"
+    },
+    "providers": [
+      {
+        "id": "ollama",
+        "usage": {
+          "inputTokens": null,
+          "outputTokens": null,
+          "cachedInputTokens": null,
+          "reasoningTokens": null,
+          "latencyMs": null,
+          "estimatedCost": null,
+          "actualCostUsd": null,
+          "source": "unavailable",
+          "completeness": "unavailable"
+        },
+        "quota": null,
+        "permits": null,
+        "permitsInUse": null
+      },
+      {
+        "id": "codex",
+        "usage": {
+          "inputTokens": null,
+          "outputTokens": null,
+          "cachedInputTokens": null,
+          "reasoningTokens": null,
+          "latencyMs": null,
+          "estimatedCost": null,
+          "actualCostUsd": null,
+          "source": "unavailable",
+          "completeness": "unavailable"
+        },
+        "quota": null,
+        "permits": null,
+        "permitsInUse": null
+      },
+      {
+        "id": "gemini",
+        "usage": {
+          "inputTokens": null,
+          "outputTokens": null,
+          "cachedInputTokens": null,
+          "reasoningTokens": null,
+          "latencyMs": null,
+          "estimatedCost": null,
+          "actualCostUsd": null,
+          "source": "unavailable",
+          "completeness": "unavailable"
+        },
+        "quota": null,
+        "permits": null,
+        "permitsInUse": null
+      }
+    ],
+    "eventSupport": {
+      "task.claimed": true,
+      "task.queued": true,
+      "provider.started": false,
+      "provider.completed": false,
+      "verification.started": true,
+      "verification.completed": false,
+      "task.review_pending": true,
+      "task.failed": true,
+      "task.cancelled": true,
+      "task.transition": true,
+      "task.audit": true
+    },
+    "limitations": [
+      "Activity is evidence-based. CODING and historical success do not prove active inference or online presence.",
+      "Provider probes, live model spans, per-call usage, retry usage, quota and task-linked permits are not exposed by Core. These fields are UNKNOWN.",
+      "Objectives are scheduler batches, not a separate objective lifecycle. Select one batch to scope all task and usage views.",
+      "Capacity counts are machine-wide and sampled separately; they cannot identify an active task or worker.",
+      "Timeline contains the latest 200 persisted scheduler events. Provider and inner verification events require a Core read model."
+    ]
+  }
+}

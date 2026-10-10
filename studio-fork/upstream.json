@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/mastra-ai/mastra",
+  "tag": "mastra@1.25.0",
+  "commit": "c5702d34a575742e7b7e922d370a67b39e418d4f",
+  "archiveSha256": "f8d4d03c762f3a403cc62ad3bb7e14c29623a68a84fec478371f9f315ec92b6a",
+  "pnpm": "11.21.0",
+  "license": "Apache-2.0 except ee/ and third-party components; see upstream LICENSE.md"
+}

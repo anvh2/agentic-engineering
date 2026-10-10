@@ -1,0 +1,76 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { chromium } from 'playwright-core';
+
+const origin = process.env.STUDIO_TEST_ORIGIN ?? 'http://127.0.0.1:4111';
+const parsed = new URL(origin);
+if (!['localhost', '127.0.0.1'].includes(parsed.hostname)) throw new Error('Local Studio required');
+
+test('actual Studio: Organization sidebar, refresh, same-origin Gateway/SSE and existing navigation',
+  { skip: !process.env.CHROME_EXECUTABLE && 'Set CHROME_EXECUTABLE', timeout: 90000 }, async t => {
+    const browser = await chromium.launch({ executablePath: process.env.CHROME_EXECUTABLE, headless: true });
+    t.after(() => browser.close());
+    const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    page.setDefaultTimeout(15000);
+    const errors = [];
+    const requests = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('request', req => requests.push({ method: req.method(), url: req.url() }));
+    // Verification never authorizes model execution, including from upstream UI.
+    await page.route('**/*', route => {
+      const req = route.request();
+      const url = new URL(req.url());
+      if (url.origin !== origin || !['GET', 'HEAD', 'OPTIONS'].includes(req.method())) return route.abort();
+      return route.continue();
+    });
+    const out = fileURLToPath(new URL('../../.workdir/control-center/studio-screenshots/', import.meta.url));
+    mkdirSync(out, { recursive: true });
+    await page.goto(origin);
+    await page.getByRole('link', { name: 'Organization', exact: true }).first().click();
+    await page.waitForURL('**/organization');
+    const workspace = page.frameLocator('iframe[title="Organization workspace"]');
+    await workspace.getByRole('heading', { name: 'Agent hierarchy', exact: false }).waitFor();
+    // The card's accessible name also carries the provider/model line, e.g. 'Claude Engineering Leadclaude · model UNKNOWN'.
+    await workspace.getByRole('button', { name: /^Claude Engineering Lead/ }).waitFor();
+    await workspace.getByLabel('Verifier role').waitFor();
+    assert.ok((await workspace.locator('main').innerText()).includes('UNKNOWN'));
+    await page.screenshot({ path: `${out}/studio-organization.png`, fullPage: true });
+    await page.reload();
+    await workspace.getByRole('heading', { name: 'Agent hierarchy', exact: false }).waitFor();
+    await workspace.getByRole('button', { name: 'Discussions', exact: true }).click();
+    await workspace.getByText('NOT AVAILABLE', { exact: true }).waitFor();
+    await page.screenshot({ path: `${out}/studio-discussions-unavailable.png`, fullPage: true });
+    await workspace.getByRole('button', { name: 'Meetings', exact: true }).click();
+    await workspace.getByText('NOT AVAILABLE', { exact: true }).waitFor();
+    await workspace.getByRole('button', { name: 'Usage', exact: true }).click();
+    await workspace.getByRole('heading', { name: 'Objective usage', exact: true }).waitFor();
+    for (const path of ['/agents', '/workflows', '/traces']) {
+      await page.goto(`${origin}${path}`);
+      await page.getByRole('link', { name: 'Organization', exact: true }).first().waitFor();
+      await page.waitForTimeout(500);
+      assert.equal(await page.getByText('Failed to load studio', { exact: true }).count(), 0);
+      assert.equal(await page.getByText('Unexpected Application Error!', { exact: false }).count(), 0);
+      await page.screenshot({ path: `${out}/studio-${path.slice(1)}.png`, fullPage: true });
+    }
+    const response = await fetch(`${origin}/control-center/v1/snapshot`);
+    assert.equal(response.status, 200);
+    const snapshot = await response.json();
+    assert.equal(snapshot.contractVersion ?? snapshot.version, 'agentic.control-center/1');
+    assert.equal((await fetch(`${origin}/control-center/v1/collaboration`)).status, 200);
+    const abort = new AbortController();
+    const stream = await fetch(`${origin}/control-center/v1/events`, { signal: abort.signal });
+    assert.match(stream.headers.get('content-type'), /text\/event-stream/);
+    const reader = stream.body.getReader();
+    let wire = '';
+    while (!wire.includes('event: snapshot') && !wire.includes('event: connection')) {
+      const chunk = await reader.read(); if (chunk.done) break;
+      wire += new TextDecoder().decode(chunk.value);
+    }
+    abort.abort();
+    assert.match(wire, /event: (snapshot|connection)/);
+    assert.equal(requests.some(r => new URL(r.url).port === '4310'), false);
+    assert.deepEqual(errors, []);
+    writeFileSync(`${out}/verification.json`, JSON.stringify({ origin, verifiedAt: new Date().toISOString(), source: snapshot.source, errors, requests: requests.filter(r => new URL(r.url).origin === origin), requiredPortVerified: parsed.port === '4111' }, null, 2));
+  });
