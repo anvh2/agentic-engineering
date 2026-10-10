@@ -83,7 +83,7 @@ export interface SchedulerDeps {
    * becomes an ACTIVE-execution budget that pauses while the task is queued for a permit, and the queueing itself is
    * bounded by `maxCapacityWaitMs`. Without it the legacy single wall-clock deadline applies.
    */
-  capacity?: { isWaiting(tag: string): boolean; engagedBy?(tag: string): { kind: 'lease' | 'waiter'; holder: string; pid: number }[] };
+  capacity?: { isWaiting(tag: string): boolean; engagedBy?(tag: string, scope?: { runId?: string }): { kind: 'lease' | 'waiter'; holder: string; pid: number; run?: string }[] };
   /** How long a cancelled run gets to release the model before it is reported as still active (default 15 s). */
   cancelGraceMs?: number;
   /** The operator's allow-list for non-default worker providers (`codex` or `codex:<taskId>`). Empty: only the local model runs. */

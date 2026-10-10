@@ -273,7 +273,7 @@ export interface DelegateOptions {
   artifactDir?: string;
   trace?: TraceSink;
   modelLabel?: string;
-  runOptions?: Pick<RunCodingTaskOptions, 'modelTimeoutMs' | 'runtimeRetryDelayMs' | 'signal'>;
+  runOptions?: Pick<RunCodingTaskOptions, 'modelTimeoutMs' | 'runtimeRetryDelayMs' | 'signal' | 'runId'>;
 }
 
 /**

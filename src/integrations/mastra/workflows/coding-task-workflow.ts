@@ -268,7 +268,7 @@ export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
         artifactDir,
         trace,
         modelLabel: providerWorker ? undefined : (process.env.OLLAMA_MODEL ?? 'qwen3:8b'), // a provider labels itself (provider:model)
-        runOptions: { modelTimeoutMs: 900_000, ...deps.runOptions, signal: abortSignal },
+        runOptions: { modelTimeoutMs: 900_000, ...deps.runOptions, signal: abortSignal, runId }, // the run's own id owns its model permits
       });
       await chain;
       return { ...summarize(result), provider: requestedProvider };
