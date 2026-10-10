@@ -1,0 +1,13 @@
+diff --git a/scripts/lead.ts b/scripts/lead.ts
+index 9c8b860..c3f0d44 100644
+--- a/scripts/lead.ts
++++ b/scripts/lead.ts
+@@ -114,7 +114,7 @@ async function main(): Promise<void> {
+     }
+     case 'plan': {
+       const plan = store.createBatch(JSON.parse(await readFile(resolve(positional[0]), 'utf8')));
+-      const p = store.promote('plan', { batchId: plan.batchId }); // only the plan just created: never another objective's tasks
++      const p = store.promote('plan'); // only the plan just created: never another objective's tasks
+       console.log(`batch ${plan.batchId}: ${plan.tasks.length} task(s); READY: ${p.ready.join(', ') || '-'}; BLOCKED: ${p.blocked.join(', ') || '-'}`);
+       table(plan.batchId);
+       break;

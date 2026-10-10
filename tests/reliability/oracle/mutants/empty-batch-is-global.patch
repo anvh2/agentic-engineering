@@ -1,0 +1,13 @@
+diff --git a/src/runtime/scheduler/store.ts b/src/runtime/scheduler/store.ts
+index 0929dc4..3c3a589 100644
+--- a/src/runtime/scheduler/store.ts
++++ b/src/runtime/scheduler/store.ts
+@@ -640,7 +640,7 @@ export class SchedulerStore {
+    */
+   promote(actor = 'scheduler', scope: { batchId?: string } = {}): { ready: string[]; blocked: string[]; unblocked: string[] } {
+     const out = { ready: [] as string[], blocked: [] as string[], unblocked: [] as string[] };
+-    const inScope = scope.batchId === undefined ? undefined : this.promotionScope(scope.batchId);
++    const inScope = scope.batchId === undefined || scope.batchId === '' ? undefined : this.promotionScope(scope.batchId);
+     for (const task of this.listTasks({ states: ['BACKLOG', 'BLOCKED'] })) {
+       if (inScope && !inScope.has(task.id)) continue;
+       if (task.state === 'BLOCKED' && task.failureCategory !== 'dependency_failed') continue;

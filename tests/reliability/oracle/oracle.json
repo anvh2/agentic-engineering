@@ -148,6 +148,114 @@
         "the task-level probe (no run id) still reports every permit and queue entry carrying the task id, on every resource"
       ],
       "rejectedBecause": "It reports STOPPED while the target run's permit is held (cases 1, 5, 10, 14 and the http-boundary.test.ts:132 miniature), which is the false-STOPPED direction the operator forbids."
+    },
+    {
+      "id": "fails-open-unknown",
+      "description": "A run-scoped fix that treats entries of unknown ownership as foreign (fails open): a legacy or malformed permit stops blocking.",
+      "patch": "fails-open-unknown.patch",
+      "appliesTo": "candidate",
+      "intendedKill": "10. unknown or legacy",
+      "mustFail": [],
+      "mustPass": []
+    },
+    {
+      "id": "substring-run-match",
+      "description": "Run ids compared as substrings of the holder instead of whole values: run-1 collides with run-10.",
+      "patch": "substring-run-match.patch",
+      "appliesTo": "candidate",
+      "intendedKill": "12. overlapping",
+      "mustFail": [],
+      "mustPass": []
+    },
+    {
+      "id": "waiters-matched-by-task",
+      "description": "Leases are run-scoped but queue entries are still matched by task id: a sibling's queue entry blocks.",
+      "patch": "waiters-matched-by-task.patch",
+      "appliesTo": "candidate",
+      "intendedKill": "3. same task id, same provider",
+      "mustFail": [],
+      "mustPass": []
+    },
+    {
+      "id": "workflow-drops-run-id",
+      "description": "The Mastra workflow does not pass its run id to the runner: permits carry no owner.",
+      "patch": "workflow-drops-run-id.patch",
+      "appliesTo": "candidate",
+      "intendedKill": "11. the Mastra workflow",
+      "mustFail": [],
+      "mustPass": []
+    },
+    {
+      "id": "ignores-lease-expiry",
+      "description": "The probe does not honour lease expiry: a crashed holder blocks forever.",
+      "patch": "ignores-lease-expiry.patch",
+      "appliesTo": "candidate",
+      "intendedKill": "9a.",
+      "mustFail": [],
+      "mustPass": []
+    },
+    {
+      "id": "cancel-ignores-run",
+      "description": "cancelTaskRun asks the task-level question (no run id): the original F2.",
+      "patch": "cancel-ignores-run.patch",
+      "appliesTo": "candidate",
+      "intendedKill": "1. same task id, different runs",
+      "mustFail": [],
+      "mustPass": []
+    },
+    {
+      "id": "promote-forgets-dependents",
+      "description": "Scoped promotion evaluates only the batch, not the tasks that depend on it.",
+      "patch": "promote-forgets-dependents.patch",
+      "appliesTo": "candidate",
+      "intendedKill": "after the dependency is done, scoped promotion",
+      "mustFail": [],
+      "mustPass": []
+    },
+    {
+      "id": "empty-batch-is-global",
+      "description": "An empty batch id is treated as 'no scope', i.e. global.",
+      "patch": "empty-batch-is-global.patch",
+      "appliesTo": "candidate",
+      "intendedKill": "an empty or unknown objective id",
+      "mustFail": [],
+      "mustPass": []
+    },
+    {
+      "id": "accepted-ignores-revert",
+      "description": "projection().accepted is true for any DONE task, reverted or not.",
+      "patch": "accepted-ignores-revert.patch",
+      "appliesTo": "candidate",
+      "intendedKill": "a DONE task whose implementation was reverted",
+      "mustFail": [],
+      "mustPass": []
+    },
+    {
+      "id": "dependents-ignore-revert",
+      "description": "A reverted dependency still satisfies its dependents.",
+      "patch": "dependents-ignore-revert.patch",
+      "appliesTo": "candidate",
+      "intendedKill": "a reverted dependency does not satisfy",
+      "mustFail": [],
+      "mustPass": []
+    },
+    {
+      "id": "acceptance-ignores-revert",
+      "description": "Acceptance can run while a required task is reverted.",
+      "patch": "acceptance-ignores-revert.patch",
+      "appliesTo": "candidate",
+      "intendedKill": "an objective recorded as ACCEPTED",
+      "mustFail": [],
+      "mustPass": []
+    },
+    {
+      "id": "lead-plan-global-promote",
+      "description": "`lead plan` goes back to the global promote (the M10 side effect).",
+      "patch": "lead-plan-global-promote.patch",
+      "appliesTo": "candidate",
+      "intendedKill": "`lead plan` promotes",
+      "mustFail": [],
+      "mustPass": []
     }
   ],
   "exclusions": [

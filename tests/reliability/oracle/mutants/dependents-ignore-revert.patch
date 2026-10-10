@@ -1,0 +1,13 @@
+diff --git a/src/runtime/scheduler/store.ts b/src/runtime/scheduler/store.ts
+index 0929dc4..01ad538 100644
+--- a/src/runtime/scheduler/store.ts
++++ b/src/runtime/scheduler/store.ts
+@@ -593,7 +593,7 @@ export class SchedulerStore {
+       if (dep.state === 'DONE') {
+         // DONE is history; whether the code is still there is the integration fact. A reverted dependency satisfies nobody.
+         const fact = this.latestFact(dep.id);
+-        if (fact?.kind === 'reverted') return { status: 'failed', reason: `dependency ${dep.id} is DONE but its implementation was reverted${fact.commit ? ` (${fact.commit})` : ''}: ${fact.reason}`, waitingOn: [] };
++        if (false && fact?.kind === 'reverted') return { status: 'failed', reason: `dependency ${dep.id} is DONE but its implementation was reverted${fact.commit ? ` (${fact.commit})` : ''}: ${fact.reason}`, waitingOn: [] };
+         continue;
+       }
+       if (['ESCALATED', 'CANCELLED', 'BLOCKED'].includes(dep.state) || (dep.state === 'REVIEW_REJECTED' && !dep.supersededBy)) {

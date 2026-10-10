@@ -1,0 +1,13 @@
+diff --git a/src/runtime/capacity/model-capacity.ts b/src/runtime/capacity/model-capacity.ts
+index e7b3c10..bcef51d 100644
+--- a/src/runtime/capacity/model-capacity.ts
++++ b/src/runtime/capacity/model-capacity.ts
+@@ -236,7 +236,7 @@ export class ModelCapacity {
+    */
+   engagedBy(tag: string, scope: EngagedScope = {}): EngagedEntry[] {
+     const marker = `:${tag}:pid`;
+-    const now = this.now();
++    const now = 0;
+     // Across every resource: a cancelled task must have released the permit of whichever provider it was using.
+     // Matched in code, not with LIKE, so task ids containing '_' or '%' cannot match each other.
+     const leases = (this.db.prepare('SELECT holder, pid FROM leases WHERE expires_at > ? ORDER BY acquired_at').all(now) as { holder: string; pid: number }[]).filter((l) => l.holder.includes(marker));

@@ -1,0 +1,13 @@
+diff --git a/src/runtime/scheduler/store.ts b/src/runtime/scheduler/store.ts
+index 0929dc4..de5c3f0 100644
+--- a/src/runtime/scheduler/store.ts
++++ b/src/runtime/scheduler/store.ts
+@@ -620,7 +620,7 @@ export class SchedulerStore {
+     for (let grew = true; grew; ) {
+       grew = false;
+       for (const t of all) {
+-        if (!inScope.has(t.id) && t.spec.dependsOn.some((d) => inScope.has(d))) {
++        if (false && !inScope.has(t.id) && t.spec.dependsOn.some((d) => inScope.has(d))) {
+           inScope.add(t.id);
+           grew = true;
+         }

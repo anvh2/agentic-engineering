@@ -1,0 +1,13 @@
+diff --git a/src/integrations/mastra/workflows/coding-task-workflow.ts b/src/integrations/mastra/workflows/coding-task-workflow.ts
+index 85d88dd..3dd397a 100644
+--- a/src/integrations/mastra/workflows/coding-task-workflow.ts
++++ b/src/integrations/mastra/workflows/coding-task-workflow.ts
+@@ -268,7 +268,7 @@ export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
+         artifactDir,
+         trace,
+         modelLabel: providerWorker ? undefined : (process.env.OLLAMA_MODEL ?? 'qwen3:8b'), // a provider labels itself (provider:model)
+-        runOptions: { modelTimeoutMs: 900_000, ...deps.runOptions, signal: abortSignal, runId }, // the run's own id owns its model permits
++        runOptions: { modelTimeoutMs: 900_000, ...deps.runOptions, signal: abortSignal }, // the run's own id owns its model permits
+       });
+       await chain;
+       return { ...summarize(result), provider: requestedProvider };
