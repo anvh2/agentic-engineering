@@ -59,6 +59,14 @@ test('actual Studio: Organization sidebar, refresh, same-origin Gateway/SSE and 
       for (const o of meeting.objections) assert.ok(text.includes(`${o.status} · ${o.text}`), 'objection shown with its recorded status');
       if (meeting.provenance) assert.ok(text.includes(`Record covers events through #${meeting.provenance.throughSeq}`) && text.includes(meeting.provenance.recordHash.slice(0, 16)));
       await page.screenshot({ path: `${out}/studio-meetings.png`, fullPage: true });
+    } else if (collab.availability === 'AVAILABLE') {
+      // An authoritative store with no persisted discussions: say so, never fill it.
+      await workspace.getByText('No reported threads.', { exact: true }).waitFor();
+      if (collab.reason) await workspace.getByText(collab.reason, { exact: true }).waitFor();
+      assert.equal(await workspace.locator('.message').count(), 0);
+      await page.screenshot({ path: `${out}/studio-discussions-empty.png`, fullPage: true });
+      await workspace.getByRole('button', { name: 'Meetings', exact: true }).click();
+      await workspace.getByText('No reported meetings.', { exact: true }).waitFor();
     } else {
       await workspace.getByText(collab.availability === 'CORRUPT' ? 'INTEGRITY FAILURE' : 'NOT AVAILABLE', { exact: true }).waitFor();
       await page.screenshot({ path: `${out}/studio-discussions-unavailable.png`, fullPage: true });
