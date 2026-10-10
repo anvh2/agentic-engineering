@@ -1,0 +1,32 @@
+{
+  "schema": "agentic.reliability-evidence/1",
+  "scenario": "timeout-spawned-not-ready",
+  "run": 1,
+  "kind": "smoke",
+  "covers": "timeout after the CLI process exists but before it reports in (the historical flaky interleaving, forced)",
+  "startedAt": "2026-10-10T19:50:44.227Z",
+  "durationMs": 16478,
+  "loadavg1": 13.64892578125,
+  "ok": true,
+  "runtime": {
+    "taskState": "RUNTIME_FAILURE",
+    "failureCategory": "task_timeout",
+    "cancelOutcome": "stopped",
+    "processes": [
+      {
+        "pid": 38290,
+        "groupGone": true
+      }
+    ],
+    "engaged": [],
+    "taskResource": "gemini",
+    "claims": 1,
+    "requeued": [],
+    "faultsFired": [],
+    "prompts": 1
+  },
+  "classification": {
+    "category": "pass",
+    "reasons": []
+  }
+}

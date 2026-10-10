@@ -1,0 +1,51 @@
+{
+  "schema": "agentic.reliability-summary/1",
+  "scenarios": [
+    "timeout-before-spawn",
+    "timeout-spawned-not-ready",
+    "timeout-after-ready",
+    "cancel-after-permit",
+    "lease-isolation",
+    "stale-lease",
+    "interrupted-run"
+  ],
+  "repeat": 2,
+  "concurrency": 2,
+  "runs": 14,
+  "peakConcurrency": 2,
+  "byCategory": {
+    "pass": 14
+  },
+  "byScenario": {
+    "timeout-before-spawn": {
+      "pass": 2
+    },
+    "timeout-spawned-not-ready": {
+      "pass": 2
+    },
+    "timeout-after-ready": {
+      "pass": 2
+    },
+    "cancel-after-permit": {
+      "pass": 2
+    },
+    "lease-isolation": {
+      "pass": 2
+    },
+    "stale-lease": {
+      "pass": 2
+    },
+    "interrupted-run": {
+      "pass": 2
+    }
+  },
+  "failures": [],
+  "startedAt": "2026-10-10T19:50:40.534Z",
+  "durationMs": 32979,
+  "environment": {
+    "node": "v22.23.2",
+    "platform": "darwin",
+    "cpus": 8,
+    "loadavg1AtStart": 18.1982421875
+  }
+}

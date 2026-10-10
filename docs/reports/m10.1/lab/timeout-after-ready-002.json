@@ -1,0 +1,35 @@
+{
+  "schema": "agentic.reliability-evidence/1",
+  "scenario": "timeout-after-ready",
+  "run": 2,
+  "kind": "smoke",
+  "covers": "the original scenario and budget, unforced: whichever interleaving occurs, the stop is clean",
+  "startedAt": "2026-10-10T19:51:00.947Z",
+  "durationMs": 3972,
+  "loadavg1": 12.6357421875,
+  "ok": true,
+  "runtime": {
+    "taskState": "RUNTIME_FAILURE",
+    "failureCategory": "task_timeout",
+    "cancelOutcome": "stopped",
+    "processes": [
+      {
+        "pid": 39513,
+        "groupGone": true
+      }
+    ],
+    "engaged": [],
+    "taskResource": "gemini",
+    "claims": 1,
+    "requeued": [],
+    "faultsFired": [],
+    "prompts": 1
+  },
+  "detail": {
+    "ready": true
+  },
+  "classification": {
+    "category": "pass",
+    "reasons": []
+  }
+}

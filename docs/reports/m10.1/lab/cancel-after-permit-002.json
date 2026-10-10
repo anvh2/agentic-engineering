@@ -1,0 +1,29 @@
+{
+  "schema": "agentic.reliability-evidence/1",
+  "scenario": "cancel-after-permit",
+  "run": 2,
+  "kind": "smoke",
+  "covers": "operator SIGINT while the run holds the model permit but has not called the model: permit released, nothing spawned",
+  "startedAt": "2026-10-10T19:51:04.919Z",
+  "durationMs": 1511,
+  "loadavg1": 12.6357421875,
+  "ok": true,
+  "runtime": {
+    "taskState": "RUNTIME_FAILURE",
+    "failureCategory": "executor_error",
+    "cancelOutcome": "stopped",
+    "processes": [],
+    "engaged": [],
+    "taskResource": "gemini",
+    "claims": 1,
+    "requeued": [],
+    "faultsFired": [
+      "runner.after-permit"
+    ],
+    "prompts": 0
+  },
+  "classification": {
+    "category": "pass",
+    "reasons": []
+  }
+}

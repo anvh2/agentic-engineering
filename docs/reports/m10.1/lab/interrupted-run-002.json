@@ -1,0 +1,22 @@
+{
+  "schema": "agentic.reliability-evidence/1",
+  "scenario": "interrupted-run",
+  "run": 2,
+  "kind": "node-test",
+  "covers": "a run orphaned by a server restart does not trap the task and is not executed twice",
+  "startedAt": "2026-10-10T19:51:10.740Z",
+  "durationMs": 2324,
+  "loadavg1": 11.080078125,
+  "ok": true,
+  "detail": {
+    "file": "src/runtime/scheduler/failure-injection.test.ts",
+    "pattern": "a run orphaned by a Mastra restart",
+    "exitCode": 0,
+    "pass": 1,
+    "fail": 0
+  },
+  "classification": {
+    "category": "pass",
+    "reasons": []
+  }
+}
