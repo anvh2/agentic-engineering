@@ -15,6 +15,7 @@ import { runSandboxedCommand } from '../../src/runtime/sandbox/sandbox.ts';
 import { WorktreeManager } from '../../src/runtime/worktree/worktree.ts';
 import type { CodexConfig } from '../../src/workers/providers/codex.ts';
 import { createHttpBackend, groupAlive, type SmokeBackend } from './http-backend.ts';
+import { credentialDenyPaths, discoverToolchainReadPaths } from '../../src/workers/providers/codex-isolation.ts';
 import { readIsolationProblems } from './read-isolation-canary.ts';
 
 /**
@@ -231,11 +232,15 @@ export interface M85Options {
   log?: (line: string) => void;
   pollMs?: number;
   /**
-   * Read isolation (default ON): the oracle, runtime state holding hidden tests, this harness's source (which embeds the fixture oracle),
+   * Read isolation (default ON, allow-list mode: the model's commands can read only the system minimum, the Go toolchain and the worktree;
+   * credentials, the whole home directory and everything else are unreadable; tool surface and environment are pinned, see
+   * codex-isolation.ts) and in addition the oracle, runtime state holding hidden tests, this harness's source (which embeds the fixture oracle),
    * the enclosing checkout's `.git` and the legacy M8.5 evidence are unreadable to the Codex worker AND to worker-written code run by
    * the verifier. `false` reproduces the M8.5 behavior (oracle in `<outDir>/oracle`, nothing denied); only tests use it.
    */
-  isolation?: false | { extraDenyRead?: string[] };
+  isolation?: false | { extraDenyRead?: string[]; extraReadAllow?: string[] };
+  /** Make the Mastra server validate Codex read isolation against the real binary before it accepts work, and refuse to start otherwise. Real runs set it. */
+  requireIsolationCanary?: boolean;
   /** Fault injection (tests only): crash the Mastra server with SIGKILL as soon as the first provider process exists; optionally restart it on the same port with the same storage and ledger. */
   chaos?: { crashServerAfterSpawn: { restartAfterMs?: number } };
 }
@@ -293,7 +298,12 @@ export async function runM85Objective(options: M85Options): Promise<M85Result> {
 
   // ---- the dedicated Mastra server (own port, storage, env; started and stopped here) with the server-wide invocation budget
   const providerId = 'codex';
-  const codexConfig = { ...options.codex, ...(isolated ? { denyReadPaths: denyRead } : {}) };
+  // Worker-written code also runs in the verifier / review / integration / acceptance sandbox. That sandbox is a deny-list (it reads everything
+  // but credentials), so it gets the same credential list as the Codex profile on top of the oracle and runtime state. Anything nobody listed
+  // under the home directory stays readable to that code: see docs/reports/m8.7a-credential-isolation.md.
+  const verifierDenyRead = isolated ? [...new Set([...denyRead, ...credentialDenyPaths(process.env)])].sort() : [];
+  const readAllow = isolated ? [...new Set([...discoverToolchainReadPaths(), ...(options.isolation ? (options.isolation.extraReadAllow ?? []) : [])])].sort() : undefined;
+  const codexConfig = { ...options.codex, ...(isolated ? { denyReadPaths: denyRead, readAllowPaths: readAllow } : {}) };
   const backendOptions = {
     outDir,
     provider: providerId,
@@ -303,7 +313,8 @@ export async function runM85Objective(options: M85Options): Promise<M85Result> {
     invocationBudget: { total: limits.maxInvocationsTotal, perWorkdir: limits.maxInvocationsPerTask },
     modelTimeoutMs: limits.perInvocationTimeoutMs,
     capacityDb,
-    sandboxDenyRead: denyRead,
+    sandboxDenyRead: verifierDenyRead,
+    ...(options.requireIsolationCanary ? { requireIsolationCanary: true } : {}),
     executor: { pollMs: options.pollMs, taskTimeoutMs: limits.taskActiveTimeoutMs + 60_000 },
     log,
   } as const;
@@ -371,7 +382,7 @@ export async function runM85Objective(options: M85Options): Promise<M85Result> {
   let runError: string | null = null;
   try {
     outcome = await runObjectiveLifecycle(
-      { store, worktrees, lifecycle, scheduler, executor: backend.executor, capacity, run: sandboxRunner(600_000, { denyRead }), config, evidenceDir: join(outDir, 'objective'), maxRounds: limits.maxRounds, log: (l) => log(`  ${l}`) },
+      { store, worktrees, lifecycle, scheduler, executor: backend.executor, capacity, run: sandboxRunner(600_000, { denyRead: verifierDenyRead }), config, evidenceDir: join(outDir, 'objective'), maxRounds: limits.maxRounds, log: (l) => log(`  ${l}`) },
       OBJECTIVE_ID,
       { actor: 'operator' },
     );
@@ -502,7 +513,7 @@ export async function runM85Objective(options: M85Options): Promise<M85Result> {
     ledger,
     checks: { ...checks, ...(crashed ? { orphanProviderGroupsKilled: orphansKilled, crashedServerGone } : {}) },
     telemetry: summarizeTelemetry(taskReports),
-    isolation: { enabled: isolated, denyRead },
+    isolation: { enabled: isolated, mode: isolated ? 'allowlist' : 'none', denyRead, readAllow: readAllow ?? [], verifierDenyRead },
     chaos: chaosLog ? { ...chaosLog, orphansKilled, restartedBackend: restarted ? restarted.describe() : null } : null,
     audit: lifecycle.events(OBJECTIVE_ID),
     paths: { outDir, repo, oracleDir, pinned: join(pinnedDir, 'pinned-objective.json') },

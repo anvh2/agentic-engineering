@@ -1,10 +1,12 @@
-import { realpathSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { runControlledCommand } from '../tools/execution-tools.ts';
 import { redact } from '../../runtime/execution/coding-task-trace.ts';
 import type { WorkerLike } from '../../runtime/execution/coding-task-runner.ts';
 import type { ProviderAvailability, ProviderDescriptor, ProviderRequest, RawUsage } from '../../runtime/execution/worker-provider.ts';
 import { probeCli, type CliProbeResult } from './cli-probe.ts';
+import { canonicalPath, effectiveDenyPaths, isInside, isolationArgs, isolationRequested, type CodexIsolationOptions } from './codex-isolation.ts';
 import { runProviderProcess, type ProviderProcessResult } from './process.ts';
 import type { WorkerProvider } from './provider.ts';
 import type { ProviderEntry } from './registry.ts';
@@ -52,38 +54,32 @@ export interface CodexConfig {
   /** Receives the pid/process group of every CLI process this provider starts (for owner-side accounting and cleanup). */
   onProcess?: (info: { pid: number; exited: Promise<void> }) => void;
   /**
-   * Absolute paths the model's commands must not be able to READ (an objective oracle, runtime state holding hidden tests). The
-   * CLI's `workspace-write` sandbox restricts writes only; every file the user can read, the model can read. With this set, the run
-   * uses a filesystem permission profile instead of the `--sandbox` flag (the CLI ignores a profile when `--sandbox` is given):
-   * read everywhere except these paths, write only the worktree and the temp dirs, `.git` and `.codex` read-only: the same writes as
-   * `workspace-write`, plus the denied reads. Paths are resolved through symlinks before they are handed to the sandbox.
+   * Absolute paths the model's commands must not be able to READ (an objective oracle, runtime state holding hidden tests). Credential
+   * locations (SSH, cloud, Codex login, shell history...) are always added. The CLI's `workspace-write` sandbox restricts writes only;
+   * with any isolation option set the run uses a filesystem permission profile instead of the `--sandbox` flag (the CLI ignores a
+   * profile when `--sandbox` is given), a three-tool surface and a controlled shell environment. See codex-isolation.ts.
    */
   denyReadPaths?: readonly string[];
+  /**
+   * Allow-list mode (preferred): when set, even empty, the model's commands can read ONLY the system minimum, these toolchain
+   * directories (see `discoverToolchainReadPaths`) and the worktree; nothing else on the host, the home directory included.
+   */
+  readAllowPaths?: readonly string[];
 }
 
-/** Name of the permission profile built for `denyReadPaths`. */
-export const CODEX_ISOLATION_PROFILE = 'agentic-isolated';
-const DENY_PATH = /^\/[^\0-\x1f"'\\=]+$/;
-
-/** Throws unless every path is an absolute, normalized path the profile can express without quoting tricks. Fails closed. */
-export function checkDenyReadPaths(paths: readonly string[]): string[] {
-  for (const p of paths) {
-    if (!DENY_PATH.test(p) || p === '/' || p.endsWith('/') || p.split('/').some((seg) => seg === '..' || seg === '.')) throw new Error(`codex denyReadPaths: "${p}" is not an absolute, normalized path without quotes, backslashes or control characters`);
-  }
-  return [...paths];
-}
+export { CODEX_ISOLATION_PROFILE } from './codex-isolation.ts';
 
 /**
  * The exact argv for a run; the prompt is NOT in it (it goes on stdin via the trailing `-`, so it neither appears in the
  * process list nor hits argv limits). Throws if anything in it would weaken containment. No `-c` overrides are accepted at
  * all: every setting that matters is a dedicated flag verified against the installed help.
  */
-export function buildCodexArgs(workdir: string, options: { model?: string; json: boolean; ephemeral?: boolean; colorNever?: boolean; denyReadPaths?: readonly string[] }): string[] {
-  const deny = options.denyReadPaths?.length ? checkDenyReadPaths(options.denyReadPaths) : undefined;
+export function buildCodexArgs(workdir: string, options: { model?: string; json: boolean; ephemeral?: boolean; colorNever?: boolean; isolation?: CodexIsolationOptions }): string[] {
+  const isolated = options.isolation !== undefined && isolationRequested(options.isolation);
   const args = [
     'exec',
     // With a profile the flag must be absent: the CLI silently ignores the profile when `--sandbox` is present (observed on 0.161.0).
-    ...(deny ? [] : ['--sandbox', 'workspace-write']),
+    ...(isolated ? [] : ['--sandbox', 'workspace-write']),
     '--cd', workdir,
     '--ignore-user-config',
     ...(options.ephemeral ? ['--ephemeral'] : []),
@@ -93,17 +89,9 @@ export function buildCodexArgs(workdir: string, options: { model?: string; json:
   ];
   const bad = args.find((a) => FORBIDDEN_ARG.test(a));
   if (bad) throw new Error(`refusing to build a Codex command containing "${bad}": it would weaken the sandbox`);
-  if (!deny) return [...args, '-'];
-  // The only `-c` overrides this adapter ever emits: a profile that is the writes of `workspace-write` plus denied reads. Built from
-  // validated paths only; nothing a caller supplies reaches the CLI as a free-form setting.
-  const entries = [
-    '":root"="read"',
-    '":project_roots"={"."="write", ".git"="read", ".codex"="read"}',
-    '":tmpdir"="write"',
-    '":slash_tmp"="write"',
-    ...deny.map((p) => `"${p}"="none"`),
-  ];
-  return [...args, '-c', `default_permissions="${CODEX_ISOLATION_PROFILE}"`, '-c', `permissions.${CODEX_ISOLATION_PROFILE}.filesystem={${entries.join(', ')}}`, '-'];
+  // The only overrides this adapter ever emits, all fixed text or validated paths (codex-isolation.ts); nothing a caller supplies reaches
+  // the CLI as a free-form setting.
+  return isolated ? [...args, ...isolationArgs(options.isolation!), '-'] : [...args, '-'];
 }
 
 const PREAMBLE = (r: ProviderRequest) =>
@@ -156,16 +144,6 @@ const groupAlive = (pid: number) => {
   }
 };
 
-/** The path the sandbox will see: symlinks resolved when it exists (macOS /var -> /private/var), the path itself otherwise. */
-function canonicalPath(p: string): string {
-  try {
-    return realpathSync(p);
-  } catch {
-    return resolve(p);
-  }
-}
-const isInside = (child: string, parent: string) => child === parent || child.startsWith(`${parent}/`);
-
 async function headOf(workdir: string): Promise<string> {
   const r = await runControlledCommand('git', ['rev-parse', 'HEAD'], { cwd: workdir, timeoutMs: 10_000 });
   return r.success ? r.stdout.trim() : `unreadable:${r.exitCode}`;
@@ -215,33 +193,46 @@ export function createCodexProvider(config: CodexConfig = {}): WorkerProvider {
       const a = await probe(request.workdir);
       if (a.state !== 'available') throw new Error(`codex provider unavailable (${a.state}): ${a.detail}`);
     }
-    const denyReadPaths = (config.denyReadPaths ?? []).map(canonicalPath);
-    if (denyReadPaths.length > 0) {
-      if (!probed!.advertises('--config')) throw new Error('codex provider: denyReadPaths needs `--config` in `codex exec --help`; this CLI cannot enforce read isolation, so nothing runs');
-      const inside = denyReadPaths.find((d) => isInside(canonicalPath(request.workdir), d) || isInside(d, canonicalPath(request.workdir)));
-      if (inside) throw new Error(`codex provider: the worktree ${request.workdir} overlaps the read-denied path ${inside}`);
+    const isolated = isolationRequested(config);
+    let scratch: string | undefined;
+    let isolation: CodexIsolationOptions | undefined;
+    if (isolated) {
+      for (const flag of ['--config', '--disable', '--strict-config']) {
+        if (!probed!.advertises(flag)) throw new Error(`codex provider: read isolation needs \`${flag}\` in \`codex exec --help\`; this CLI cannot enforce it, so nothing runs`);
+      }
+      const env = config.parentEnv ?? process.env;
+      const deny = (config.denyReadPaths ?? []).map(canonicalPath);
+      const workdir = canonicalPath(request.workdir);
+      const overlapping = effectiveDenyPaths({ denyReadPaths: deny, env }).find((d) => isInside(workdir, d) || isInside(d, workdir));
+      if (overlapping) throw new Error(`codex provider: the worktree ${request.workdir} overlaps the read-denied path ${overlapping}`);
+      scratch = mkdtempSync(join(canonicalPath(tmpdir()), 'agentic-codex-'));
+      isolation = { denyReadPaths: deny, ...(config.readAllowPaths ? { readAllowPaths: config.readAllowPaths.map(canonicalPath) } : {}), scratchDir: scratch, env };
     }
-    const args = buildCodexArgs(request.workdir, { model: config.model, json: probed!.advertises('--json'), ephemeral: probed!.advertises('--ephemeral'), colorNever: probed!.advertises('--color'), denyReadPaths });
+    try {
+      const args = buildCodexArgs(request.workdir, { model: config.model, json: probed!.advertises('--json'), ephemeral: probed!.advertises('--ephemeral'), colorNever: probed!.advertises('--color'), isolation });
 
-    const headBefore = await headOf(request.workdir);
-    const r: ProviderProcessResult = await runProviderProcess({ command, args, stdin: `${PREAMBLE(request)}\n\n${prompt}`, cwd: request.workdir, timeoutMs: request.timeoutMs, signal, passEnv: config.passEnv, env: config.env, parentEnv: config.parentEnv, termGraceMs: config.termGraceMs, onProcess: config.onProcess });
+      const headBefore = await headOf(request.workdir);
+      const r: ProviderProcessResult = await runProviderProcess({ command, args, stdin: `${PREAMBLE(request)}\n\n${prompt}`, cwd: request.workdir, timeoutMs: request.timeoutMs, signal, passEnv: config.passEnv, env: config.env, parentEnv: config.parentEnv, termGraceMs: config.termGraceMs, onProcess: config.onProcess });
 
-    if (r.stillRunning && r.pid) {
-      // The CLI could not be confirmed dead. Do not report the call as over: stay pending until the group is gone, so the
-      // runner (which bounds how long it waits for an aborted call) keeps this provider's capacity permit held meanwhile.
-      while (groupAlive(r.pid)) await new Promise((res) => setTimeout(res, 500));
+      if (r.stillRunning && r.pid) {
+        // The CLI could not be confirmed dead. Do not report the call as over: stay pending until the group is gone, so the
+        // runner (which bounds how long it waits for an aborted call) keeps this provider's capacity permit held meanwhile.
+        while (groupAlive(r.pid)) await new Promise((res) => setTimeout(res, 500));
+      }
+      if (r.spawnError) throw new Error(`codex could not be started: ${r.spawnError}`);
+      // The call's signal carries the per-call deadline too: tell a deadline from a cancel, they are different events.
+      const deadline = r.timedOut || (r.aborted && (signal?.reason as { name?: string } | undefined)?.name === 'TimeoutError');
+      if (r.aborted && !deadline) throw new Error(`codex run cancelled (${r.terminatedBy === 'exit' ? 'exited' : `terminated with ${r.terminatedBy}`})`);
+      if (deadline) throw new Error(`codex run exceeded ${request.timeoutMs}ms and was terminated with ${r.terminatedBy}`);
+      const headAfter = await headOf(request.workdir);
+      if (headAfter !== headBefore) throw new Error(`codex changed git history inside the worktree (${headBefore.slice(0, 10)} -> ${headAfter.slice(0, 10)}); the run is rejected`);
+      if (r.exitCode !== 0) throw new Error(`codex exited with ${r.exitCode ?? r.signal}: ${redact(r.stderr.trim().split('\n').slice(-5).join(' | ')).slice(0, 400)}`);
+
+      const parsed = parseCodexEvents(r.stdout);
+      return { text: parsed.text.slice(0, 2_000), finishReason: 'stop', steps: [{ content: parsed.tools.map((t) => ({ type: 'tool-call', toolName: t.name })) }], usage: parsed.usage };
+    } finally {
+      if (scratch) rmSync(scratch, { recursive: true, force: true });
     }
-    if (r.spawnError) throw new Error(`codex could not be started: ${r.spawnError}`);
-    // The call's signal carries the per-call deadline too: tell a deadline from a cancel, they are different events.
-    const deadline = r.timedOut || (r.aborted && (signal?.reason as { name?: string } | undefined)?.name === 'TimeoutError');
-    if (r.aborted && !deadline) throw new Error(`codex run cancelled (${r.terminatedBy === 'exit' ? 'exited' : `terminated with ${r.terminatedBy}`})`);
-    if (deadline) throw new Error(`codex run exceeded ${request.timeoutMs}ms and was terminated with ${r.terminatedBy}`);
-    const headAfter = await headOf(request.workdir);
-    if (headAfter !== headBefore) throw new Error(`codex changed git history inside the worktree (${headBefore.slice(0, 10)} -> ${headAfter.slice(0, 10)}); the run is rejected`);
-    if (r.exitCode !== 0) throw new Error(`codex exited with ${r.exitCode ?? r.signal}: ${redact(r.stderr.trim().split('\n').slice(-5).join(' | ')).slice(0, 400)}`);
-
-    const parsed = parseCodexEvents(r.stdout);
-    return { text: parsed.text.slice(0, 2_000), finishReason: 'stop', steps: [{ content: parsed.tools.map((t) => ({ type: 'tool-call', toolName: t.name })) }], usage: parsed.usage };
   };
 
   return {

@@ -85,7 +85,7 @@ const freePort = () =>
 export interface HttpBackendOptions {
   outDir: string;
   provider?: 'codex' | 'gemini';
-  codex?: Pick<CodexConfig, 'command' | 'model' | 'passEnv' | 'env' | 'termGraceMs' | 'denyReadPaths'>;
+  codex?: Pick<CodexConfig, 'command' | 'model' | 'passEnv' | 'env' | 'termGraceMs' | 'denyReadPaths' | 'readAllowPaths'>;
   gemini?: Pick<GeminiConfig, 'command' | 'model' | 'passEnv' | 'env' | 'termGraceMs' | 'maxTurns' | 'maxOutputTokens' | 'apiBaseUrl'>;
   /** AGENTIC_ALLOW_PROVIDERS of the Mastra server process (the scheduler's own allow-list is separate). */
   serverAllowProviders: readonly string[];
@@ -98,6 +98,8 @@ export interface HttpBackendOptions {
   existingServer?: string;
   executor: { pollMs?: number; taskTimeoutMs: number; cancelGraceMs?: number };
   startTimeoutMs?: number;
+  /** Make the server validate Codex read isolation against the real binary before it accepts work (smoke-server.ts). */
+  requireIsolationCanary?: boolean;
   /** Paths the server's verifier sandbox must not let worker-written code read (AGENTIC_SANDBOX_DENY_READ). */
   sandboxDenyRead?: readonly string[];
   /** Restart of a server that crashed or was stopped: keep its ledger instead of starting a new one. */
@@ -131,6 +133,7 @@ export async function createHttpBackend(options: HttpBackendOptions): Promise<Sm
       maxInvocations: options.maxInvocations,
       ...(options.invocationBudget ? { invocationBudget: options.invocationBudget } : {}),
       modelTimeoutMs: options.modelTimeoutMs,
+      ...(options.requireIsolationCanary ? { requireIsolationCanary: true } : {}),
     };
     writeFileSync(configPath, JSON.stringify(config, null, 2));
     const port = options.port ?? (await freePort());
@@ -145,7 +148,7 @@ export async function createHttpBackend(options: HttpBackendOptions): Promise<Sm
     child.once('exit', (code, signal) => (exitInfo = { code, signal }));
     url = `http://127.0.0.1:${port}`;
     options.log(`smoke Mastra server pid ${child.pid} on ${url} (log: ${logPath}); allow-list in its environment: ${options.serverAllowProviders.join(',') || '(empty)'}`);
-    const deadline = Date.now() + (options.startTimeoutMs ?? 90_000);
+    const deadline = Date.now() + (options.startTimeoutMs ?? (options.requireIsolationCanary ? 240_000 : 90_000));
     for (;;) {
       if (exitInfo) throw new Error(`the smoke Mastra server exited during startup (code ${exitInfo.code}, signal ${exitInfo.signal}); see ${logPath}`);
       try {

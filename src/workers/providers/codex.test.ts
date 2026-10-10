@@ -9,6 +9,7 @@ import { ModelCapacity } from '../../runtime/capacity/model-capacity.ts';
 import { runCodingTask } from '../../runtime/execution/coding-task-runner.ts';
 import { UNKNOWN } from '../../runtime/execution/worker-provider.ts';
 import { makeRepo, tempDir } from '../../runtime/scheduler/test-helpers.ts';
+import { CODEX_AUDITED_TOOLS } from './codex-isolation.ts';
 import { buildCodexArgs, createCodexProvider, parseCodexEvents, probeCodex, type CodexConfig } from './codex.ts';
 import { defaultProviderRegistry } from './default.ts';
 
@@ -80,32 +81,86 @@ describe('availability probe (no model call)', () => {
   });
 });
 
-describe('read isolation (denyReadPaths)', () => {
-  it('replaces --sandbox with a profile that keeps the workspace-write writes and denies the listed reads', () => {
-    const args = buildCodexArgs('/w/tree', { json: true, denyReadPaths: ['/o/oracle', '/o/state.db'] });
+describe('read isolation', () => {
+  const env = { HOME: '/h', CODEX_HOME: '/h/codex-login' };
+  const configs = (args: string[]) => args.flatMap((a, i) => (args[i - 1] === '-c' ? [a] : []));
+  const table = (args: string[]) => configs(args).find((c) => c.startsWith('permissions.agentic-isolated.filesystem='))!;
+
+  it('deny-list mode: no --sandbox, a profile with the writes of workspace-write, credentials and listed paths denied', () => {
+    const args = buildCodexArgs('/w/tree', { json: true, isolation: { denyReadPaths: ['/o/oracle'], scratchDir: '/s', env } });
     assert.ok(!args.includes('--sandbox'), 'the CLI ignores the profile when --sandbox is present');
     assert.deepEqual(args.slice(0, 4), ['exec', '--cd', '/w/tree', '--ignore-user-config']);
-    const configs = args.flatMap((a, i) => (args[i - 1] === '-c' ? [a] : []));
-    assert.equal(configs.length, 2, 'exactly the two generated overrides');
-    assert.equal(configs[0], 'default_permissions="agentic-isolated"');
-    assert.match(configs[1], /^permissions\.agentic-isolated\.filesystem=\{":root"="read", ":project_roots"=\{"\."="write", "\.git"="read", "\.codex"="read"\}, ":tmpdir"="write", ":slash_tmp"="write", "\/o\/oracle"="none", "\/o\/state\.db"="none"\}$/);
+    const t = table(args);
+    for (const entry of ['":root"="read"', '":project_roots"={"."="write", ".git"="read", ".codex"="read"}', '":tmpdir"="write"', '":slash_tmp"="write"', '"/s"="write"', '"/o/oracle"="none"', '"/h/.ssh"="none"', '"/h/.aws"="none"', '"/h/codex-login"="none"', '"/h/.codex"="none"']) assert.ok(t.includes(entry), `${entry} in ${t}`);
+    assert.ok(!t.includes(':minimal'));
     assert.equal(args.at(-1), '-');
-    assert.ok(!args.some((a) => /dangerously|bypass|danger-full-access/.test(a)));
   });
-  it('without denyReadPaths the command is exactly what it was (no -c anywhere)', () => {
-    for (const none of [undefined, []]) assert.ok(!buildCodexArgs('/w', { json: false, denyReadPaths: none }).includes('-c'));
+
+  it('allow-list mode: only the system minimum, the toolchain and the worktree are readable', () => {
+    const args = buildCodexArgs('/w/tree', { json: true, isolation: { readAllowPaths: ['/opt/homebrew/Cellar/go@1.25/1.25.10'], scratchDir: '/s', env } });
+    const t = table(args);
+    assert.ok(t.includes('":minimal"="read"'));
+    assert.ok(!t.includes('":root"'), 'nothing grants the whole filesystem');
+    assert.ok(t.includes('"/opt/homebrew/Cellar/go@1.25/1.25.10"="read"'));
+    assert.ok(t.includes('"/h/.ssh"="none"'), 'credentials are denied on top, as a second layer');
+    assert.ok(!args.includes('--sandbox'));
   });
-  it('refuses a denied path that is relative, not normalized, or could break out of the quoting', () => {
-    for (const bad of ['rel/path', '/', '/a/../b', '/a/./b', '/a/b/', '/a"b', '/a\\b', "/a'b", '/a=b', '/a\nb', '']) {
-      assert.throws(() => buildCodexArgs('/w', { json: false, denyReadPaths: [bad] }), /denyReadPaths/, JSON.stringify(bad));
+
+  it('pins the tool surface, refuses unknown settings, and controls the shell environment', () => {
+    const args = buildCodexArgs('/w/tree', { json: true, isolation: { readAllowPaths: [], scratchDir: '/s', env } });
+    assert.ok(args.includes('--strict-config'));
+    for (const f of ['apps', 'multi_agent', 'goals', 'plugins', 'remote_plugin', 'browser_use', 'computer_use', 'image_generation']) assert.ok(args.some((a, i) => a === f && args[i - 1] === '--disable'), `--disable ${f}`);
+    const c = configs(args);
+    assert.ok(c.includes('web_search="disabled"'));
+    assert.ok(c.includes('features.view_image=false'));
+    assert.ok(c.includes('shell_environment_policy.inherit="core"'), 'secrets in the launcher environment are not handed to the model');
+    const set = c.find((x) => x.startsWith('shell_environment_policy.set='))!;
+    for (const kv of ['HOME="/s"', 'GOCACHE="/s/go-build"', 'GIT_CONFIG_GLOBAL="/dev/null"', 'GOPROXY="off"', 'GOTOOLCHAIN="local"', 'GIT_TERMINAL_PROMPT="0"']) assert.ok(set.includes(kv), kv);
+    assert.deepEqual(CODEX_AUDITED_TOOLS, ['exec_command', 'write_stdin', 'request_user_input']);
+  });
+
+  it('without isolation the command is exactly what it was (no -c, no --disable)', () => {
+    for (const none of [undefined, {}, { denyReadPaths: [] }]) {
+      const args = buildCodexArgs('/w', { json: false, isolation: none });
+      assert.deepEqual(args, ['exec', '--sandbox', 'workspace-write', '--cd', '/w', '--ignore-user-config', '-']);
     }
   });
-  it('fails closed when the CLI cannot take a profile, or the worktree overlaps a denied path', async () => {
-    const noConfig = createCodexProvider({ command: FAKE, env: { FAKE_HELP_OMIT: '--config' }, denyReadPaths: ['/nonexistent/oracle'] });
-    await assert.rejects(() => noConfig.generate('p', { providerRequest: { workdir: tempDir('iso-'), allowedFiles: ['a'], contextFiles: [], taskType: 'go', timeoutMs: 5_000 } } as never), /cannot enforce read isolation/);
+
+  it('refuses paths that are relative, not normalized or could break out of the quoting', () => {
+    for (const bad of ['rel/path', '/', '/a/../b', '/a/./b', '/a/b/', '/a"b', '/a\\b', "/a'b", '/a=b', '/a\nb', '']) {
+      assert.throws(() => buildCodexArgs('/w', { json: false, isolation: { denyReadPaths: [bad], scratchDir: '/s', env } }), /denyReadPaths/, JSON.stringify(bad));
+      assert.throws(() => buildCodexArgs('/w', { json: false, isolation: { readAllowPaths: [bad], scratchDir: '/s', env } }), /readAllowPaths/, JSON.stringify(bad));
+    }
+    assert.throws(() => buildCodexArgs('/w', { json: false, isolation: { readAllowPaths: [], scratchDir: '/s"x', env } }), /scratchDir/);
+  });
+
+  it('refuses an allow-list that is too broad or would contain a protected path', () => {
+    for (const broad of ['/usr', '/opt/homebrew', '/Users', '/private', '/h']) assert.throws(() => buildCodexArgs('/w', { json: false, isolation: { readAllowPaths: [broad], scratchDir: '/s', env } }), /too broad|would contain the protected path/, broad);
+    assert.throws(() => buildCodexArgs('/w', { json: false, isolation: { readAllowPaths: ['/h/work'], denyReadPaths: ['/h/work/secret'], scratchDir: '/s', env } }), /would contain the protected path \/h\/work\/secret/);
+  });
+
+  it('fails closed when the CLI cannot enforce it, or the worktree overlaps a denied path', async () => {
     const wd = tempDir('iso-');
+    const req = { providerRequest: { workdir: wd, allowedFiles: ['a'], contextFiles: [], taskType: 'go', timeoutMs: 5_000 } } as never;
+    for (const missing of ['--config', '--disable', '--strict-config']) {
+      const p = createCodexProvider({ command: FAKE, env: { FAKE_HELP_OMIT: missing }, denyReadPaths: ['/nonexistent/oracle'] });
+      await assert.rejects(() => p.generate('p', req), /cannot enforce it, so nothing runs/, missing);
+    }
     const overlap = createCodexProvider({ command: FAKE, denyReadPaths: [dirname(wd)] });
-    await assert.rejects(() => overlap.generate('p', { providerRequest: { workdir: wd, allowedFiles: ['a'], contextFiles: [], taskType: 'go', timeoutMs: 5_000 } } as never), /overlaps the read-denied path/);
+    await assert.rejects(() => overlap.generate('p', req), /overlaps the read-denied path/);
+    const unsafe = createCodexProvider({ command: FAKE, readAllowPaths: ['/usr'] });
+    await assert.rejects(() => unsafe.generate('p', req), /too broad/);
+  });
+
+  it('gives each call its own scratch directory and removes it afterwards', async () => {
+    const log = join(tempDir('iso-log-'), 'fake.log');
+    const wd = tempDir('iso-');
+    const p = createCodexProvider({ command: FAKE, env: { FAKE_LOG: log }, readAllowPaths: [], denyReadPaths: ['/nonexistent/oracle'] });
+    await p.generate('p', { providerRequest: { workdir: wd, allowedFiles: ['a'], contextFiles: [], taskType: 'go', timeoutMs: 20_000 } } as never).catch(() => undefined);
+    const exec = readFileSync(log, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as { args?: string[] }).find((e) => e.args?.[0] === 'exec' && !e.args.includes('--help'));
+    const home = /HOME="(\/[^"]+)"/.exec(exec?.args?.join(' ') ?? '')?.[1];
+    assert.ok(home?.includes('agentic-codex-'), `scratch dir in the arguments: ${home}`);
+    assert.equal(existsSync(home!), false, 'removed after the call');
   });
 });
 

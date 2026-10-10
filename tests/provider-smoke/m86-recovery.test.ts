@@ -287,17 +287,16 @@ describe('M8.6 oracle read isolation', () => {
     }
   })();
 
-  it('the REAL codex CLI (against a local stub model) reads the path without isolation and is denied with it, while the worktree stays writable', { skip: !codexInstalled && 'codex is not installed', timeout: 240_000 }, async () => {
-    const control = await readIsolationCanary({ deny: false });
-    assert.equal(control.readable, true, `control: ${control.output}`);
-    const isolated = await readIsolationCanary({ deny: true });
-    assert.equal(isolated.detail, '');
-    assert.equal(isolated.readable, false, `isolated: ${isolated.output}`);
-    assert.equal(isolated.worktreeWritable, true);
-    assert.equal(isolated.outsideWriteBlocked, true);
-    assert.equal(control.gitWriteBlocked, true, 'control: workspace-write protects .git');
-    assert.equal(isolated.gitWriteBlocked, true, 'the isolation profile preserves that protection');
-    assert.match(isolated.output, /Operation not permitted/);
+  it('the REAL codex CLI (against a local stub model) reads a protected path without isolation and is denied with it, while the worktree stays writable', { skip: !codexInstalled && 'codex is not installed', timeout: 400_000 }, async () => {
+    const control = await readIsolationCanary({ mode: 'control' });
+    assert.equal(control.credentials['ssh-private-key'], 'LEAK', `control: ${control.output}`);
+    const isolated = await readIsolationCanary({ mode: 'deny' });
+    assert.equal(isolated.launcherHealthy, true);
+    assert.equal(isolated.credentials['ssh-private-key'], 'blocked');
+    assert.equal(isolated.compat['worktree-write'], true);
+    assert.equal(isolated.compat['outside-write-blocked'], true);
+    assert.equal(control.compat['git-dir-write-blocked'], true, 'control: workspace-write protects .git');
+    assert.equal(isolated.compat['git-dir-write-blocked'], true, 'the isolation profile preserves that protection');
   });
 
   it('the harness denies the oracle, the runtime state and its own source to the worker and to the verifier sandbox', { timeout: 300_000 }, async () => {

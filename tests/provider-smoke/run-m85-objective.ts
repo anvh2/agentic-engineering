@@ -37,7 +37,7 @@ console.log(
 
 let exitCode = 1;
 try {
-  const { report, outDir } = await runM85Objective({ codex, allowProviders });
+  const { report, outDir } = await runM85Objective({ codex, allowProviders, requireIsolationCanary: true });
   const verdict = judge(report);
   console.log(JSON.stringify({ outDir, lifecycle: report.lifecycle.phase, reason: report.lifecycle.reason, elapsedMs: report.elapsedMs, checks: report.checks, verdict }, null, 2));
   console.log(`RESULT: ${verdict.verdict}\n  ${verdict.why.join('\n  ')}\nreport: ${outDir}/report.json`);
