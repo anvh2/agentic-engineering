@@ -22,9 +22,9 @@ export function canonicalJson(value: unknown): string {
 }
 
 /** Production runner: every command that executes worker-written code runs under the OS sandbox (fails closed: exitCode null). */
-export function sandboxRunner(timeoutMs = 300_000): CommandRunner {
+export function sandboxRunner(timeoutMs = 300_000, options: { denyRead?: readonly string[] } = {}): CommandRunner {
   return async (command, cwd) => {
-    const r = await runSandboxedCommand(command[0], command.slice(1), { cwd, root: cwd, timeoutMs });
+    const r = await runSandboxedCommand(command[0], command.slice(1), { cwd, root: cwd, timeoutMs, denyRead: options.denyRead });
     return { exitCode: r.exitCode, output: `${r.stdout}${r.stderr}`, timedOut: r.timedOut };
   };
 }

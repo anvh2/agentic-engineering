@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
@@ -76,6 +77,35 @@ describe('availability probe (no model call)', () => {
     assert.equal(r.get('codex').describe().identity.kind, 'cloud');
     assert.equal(r.get().id, 'ollama', 'the default stays the local model');
     assert.deepEqual(r.get('codex').describe().limits, { maxRuntimeRetries: 0, maxCodingAttempts: 2 });
+  });
+});
+
+describe('read isolation (denyReadPaths)', () => {
+  it('replaces --sandbox with a profile that keeps the workspace-write writes and denies the listed reads', () => {
+    const args = buildCodexArgs('/w/tree', { json: true, denyReadPaths: ['/o/oracle', '/o/state.db'] });
+    assert.ok(!args.includes('--sandbox'), 'the CLI ignores the profile when --sandbox is present');
+    assert.deepEqual(args.slice(0, 4), ['exec', '--cd', '/w/tree', '--ignore-user-config']);
+    const configs = args.flatMap((a, i) => (args[i - 1] === '-c' ? [a] : []));
+    assert.equal(configs.length, 2, 'exactly the two generated overrides');
+    assert.equal(configs[0], 'default_permissions="agentic-isolated"');
+    assert.match(configs[1], /^permissions\.agentic-isolated\.filesystem=\{":root"="read", ":project_roots"=\{"\."="write", "\.git"="read", "\.codex"="read"\}, ":tmpdir"="write", ":slash_tmp"="write", "\/o\/oracle"="none", "\/o\/state\.db"="none"\}$/);
+    assert.equal(args.at(-1), '-');
+    assert.ok(!args.some((a) => /dangerously|bypass|danger-full-access/.test(a)));
+  });
+  it('without denyReadPaths the command is exactly what it was (no -c anywhere)', () => {
+    for (const none of [undefined, []]) assert.ok(!buildCodexArgs('/w', { json: false, denyReadPaths: none }).includes('-c'));
+  });
+  it('refuses a denied path that is relative, not normalized, or could break out of the quoting', () => {
+    for (const bad of ['rel/path', '/', '/a/../b', '/a/./b', '/a/b/', '/a"b', '/a\\b', "/a'b", '/a=b', '/a\nb', '']) {
+      assert.throws(() => buildCodexArgs('/w', { json: false, denyReadPaths: [bad] }), /denyReadPaths/, JSON.stringify(bad));
+    }
+  });
+  it('fails closed when the CLI cannot take a profile, or the worktree overlaps a denied path', async () => {
+    const noConfig = createCodexProvider({ command: FAKE, env: { FAKE_HELP_OMIT: '--config' }, denyReadPaths: ['/nonexistent/oracle'] });
+    await assert.rejects(() => noConfig.generate('p', { providerRequest: { workdir: tempDir('iso-'), allowedFiles: ['a'], contextFiles: [], taskType: 'go', timeoutMs: 5_000 } } as never), /cannot enforce read isolation/);
+    const wd = tempDir('iso-');
+    const overlap = createCodexProvider({ command: FAKE, denyReadPaths: [dirname(wd)] });
+    await assert.rejects(() => overlap.generate('p', { providerRequest: { workdir: wd, allowedFiles: ['a'], contextFiles: [], taskType: 'go', timeoutMs: 5_000 } } as never), /overlaps the read-denied path/);
   });
 });
 

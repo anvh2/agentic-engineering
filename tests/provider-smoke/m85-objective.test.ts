@@ -31,7 +31,7 @@ describe('M8.5 objective: gates (pure)', () => {
   });
   it('the server-wide budget refuses a 2nd call for a task and a 3rd call overall, consuming nothing when refused', () => {
     const events: Record<string, unknown>[] = [];
-    const b = new SharedInvocationBudget({ total: 2, perWorkdir: 1 }, (e) => events.push(e));
+    const b = new SharedInvocationBudget({ total: 2, perWorkdir: 1 }, (e) => events.push(e), tempDir('budget-'));
     assert.equal(b.take('/wt/a'), true);
     assert.equal(b.take('/wt/a'), false, 'same task again');
     assert.equal(b.take('/wt/b'), true);

@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createMastraExecutor } from '../../src/integrations/mastra/executor.ts';
 import type { Executor } from '../../src/runtime/scheduler/scheduler.ts';
@@ -53,7 +53,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** Environment variable names forwarded to the server: enough for `go test` and a signed-in Codex CLI, and no Mastra platform token or other secret. */
 const FORWARDED_ENV = [...BASE_ENV_ALLOWLIST, 'GOPATH', 'GOCACHE', 'GOMODCACHE', 'GOROOT', 'GOFLAGS', 'GOPROXY', 'CODEX_HOME'];
 
-export function serverEnvironment(options: { port: number; configPath: string; allowProviders: readonly string[]; capacityDb?: string; passEnv?: readonly string[]; parentEnv?: NodeJS.ProcessEnv }): NodeJS.ProcessEnv {
+export function serverEnvironment(options: { port: number; configPath: string; allowProviders: readonly string[]; capacityDb?: string; passEnv?: readonly string[]; parentEnv?: NodeJS.ProcessEnv; sandboxDenyRead?: readonly string[] }): NodeJS.ProcessEnv {
   const parent = options.parentEnv ?? process.env;
   const env: NodeJS.ProcessEnv = {};
   // The adapter builds the CLI's environment from ITS process's: everything it would forward (its base list and the configured passEnv) must reach the server.
@@ -66,6 +66,8 @@ export function serverEnvironment(options: { port: number; configPath: string; a
     // The operator's allow-list, as THIS process (the one that would spawn the CLI) must see it. Empty string: nothing allowed.
     AGENTIC_ALLOW_PROVIDERS: options.allowProviders.join(','),
     ...(options.capacityDb ? { AGENTIC_MODEL_LOCK_DB: options.capacityDb } : {}),
+    // Paths the verifier sandbox (which runs worker-written code inside this server) must not read; see runtime/sandbox.
+    ...(options.sandboxDenyRead?.length ? { AGENTIC_SANDBOX_DENY_READ: options.sandboxDenyRead.join(delimiter) } : {}),
   });
   return env;
 }
@@ -83,7 +85,7 @@ const freePort = () =>
 export interface HttpBackendOptions {
   outDir: string;
   provider?: 'codex' | 'gemini';
-  codex?: Pick<CodexConfig, 'command' | 'model' | 'passEnv' | 'env' | 'termGraceMs'>;
+  codex?: Pick<CodexConfig, 'command' | 'model' | 'passEnv' | 'env' | 'termGraceMs' | 'denyReadPaths'>;
   gemini?: Pick<GeminiConfig, 'command' | 'model' | 'passEnv' | 'env' | 'termGraceMs' | 'maxTurns' | 'maxOutputTokens' | 'apiBaseUrl'>;
   /** AGENTIC_ALLOW_PROVIDERS of the Mastra server process (the scheduler's own allow-list is separate). */
   serverAllowProviders: readonly string[];
@@ -96,6 +98,12 @@ export interface HttpBackendOptions {
   existingServer?: string;
   executor: { pollMs?: number; taskTimeoutMs: number; cancelGraceMs?: number };
   startTimeoutMs?: number;
+  /** Paths the server's verifier sandbox must not let worker-written code read (AGENTIC_SANDBOX_DENY_READ). */
+  sandboxDenyRead?: readonly string[];
+  /** Restart of a server that crashed or was stopped: keep its ledger instead of starting a new one. */
+  resume?: boolean;
+  /** Listen on this port instead of a free one (a restart on the address the scheduler is already polling). */
+  port?: number;
   log: (line: string) => void;
 }
 
@@ -105,7 +113,7 @@ export async function createHttpBackend(options: HttpBackendOptions): Promise<Sm
   const ledgerPath = join(serverDir, 'provider-ledger.jsonl');
   const logPath = join(serverDir, 'server.log');
   const configPath = join(serverDir, 'server-config.json');
-  writeFileSync(ledgerPath, '');
+  if (!options.resume) writeFileSync(ledgerPath, ''); // a restarted server keeps the ledger (and the durable invocation budget beside it)
 
   let child: ChildProcess | undefined;
   let url = options.existingServer?.replace(/\/$/, '');
@@ -125,11 +133,11 @@ export async function createHttpBackend(options: HttpBackendOptions): Promise<Sm
       modelTimeoutMs: options.modelTimeoutMs,
     };
     writeFileSync(configPath, JSON.stringify(config, null, 2));
-    const port = await freePort();
+    const port = options.port ?? (await freePort());
     const out = openSync(logPath, 'a');
     child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', SERVER_ENTRY], {
       cwd: serverDir,
-      env: serverEnvironment({ port, configPath, allowProviders: options.serverAllowProviders, capacityDb: options.capacityDb, passEnv: (options.provider === 'gemini' ? options.gemini : options.codex)?.passEnv }),
+      env: serverEnvironment({ port, configPath, allowProviders: options.serverAllowProviders, capacityDb: options.capacityDb, passEnv: (options.provider === 'gemini' ? options.gemini : options.codex)?.passEnv, sandboxDenyRead: options.sandboxDenyRead }),
       detached: true, // own process group: a terminal Ctrl-C reaches the harness only, which stops things in a controlled order
       stdio: ['ignore', out, out],
     });

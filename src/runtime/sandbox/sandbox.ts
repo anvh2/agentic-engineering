@@ -65,6 +65,25 @@ const PROFILE = `(version 1)
 (allow process-info* (target same-sandbox))
 `;
 
+/**
+ * Extra paths the sandboxed code must not read (an objective oracle, hidden tests): `options.denyRead`, plus `AGENTIC_SANDBOX_DENY_READ`
+ * (absolute paths separated by the OS path delimiter) for processes that cannot pass options, such as the Mastra server that runs the
+ * verifier. Resolved through symlinks, validated, and refused (the command does not run) if one contains the command's root or is not
+ * expressible, so a mistake can only stop work, never silently widen what is readable.
+ */
+const DENY_PATH = /^\/[^\0-\x1f"\\]+$/;
+async function denyReadProfile(explicit: readonly string[] | undefined, root: string, tmp: string): Promise<{ profile: string } | { problem: string }> {
+  const env = (process.env.AGENTIC_SANDBOX_DENY_READ ?? '').split(delimiter).filter(Boolean);
+  let rules = '';
+  for (const raw of [...(explicit ?? []), ...env]) {
+    if (!DENY_PATH.test(raw) || raw === '/') return { problem: `deny-read path "${raw}" must be absolute, without quotes, backslashes or control characters` };
+    const real = await realpath(raw).catch(() => raw);
+    if (root === real || root.startsWith(`${real}/`) || tmp === real || tmp.startsWith(`${real}/`)) return { problem: `deny-read path ${real} contains the command's own root or temp dir` };
+    rules += `(deny file-read* (subpath "${real}"))\n`;
+  }
+  return { profile: rules };
+}
+
 /** Environment passed through to sandboxed commands; everything else (tokens, API keys, NODE_OPTIONS...) is dropped. */
 const PASS_THROUGH_ENV = ['PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'GOPATH', 'GOROOT', 'GOMODCACHE'];
 
@@ -158,7 +177,7 @@ function refused(command: string, reason: string, start: number): SandboxedComma
 export async function runSandboxedCommand(
   command: string,
   args: string[],
-  options: { cwd: string; root: string; timeoutMs: number; signal?: AbortSignal },
+  options: { cwd: string; root: string; timeoutMs: number; signal?: AbortSignal; denyRead?: readonly string[] },
 ): Promise<SandboxedCommandResult> {
   const start = Date.now();
   const status = await sandboxStatus();
@@ -172,6 +191,8 @@ export async function runSandboxedCommand(
   const root = await realpath(options.root);
   const tmp = await realpath(await mkdtemp(join(tmpdir(), 'agentic-sbx-')));
   try {
+    const deny = await denyReadProfile(options.denyRead, root, tmp);
+    if ('problem' in deny) return refused(command, deny.problem, start);
     await writeFile(join(tmp, 'npmrc'), '');
     const env: NodeJS.ProcessEnv = {};
     for (const key of PASS_THROUGH_ENV) if (process.env[key] !== undefined) env[key] = process.env[key];
@@ -189,7 +210,7 @@ export async function runSandboxedCommand(
       npm_config_audit: 'false',
       CI: '1',
     });
-    return await runControlledCommand(sandboxExecutable(), [...defines(root, tmp), '-p', PROFILE, executable, ...args], { cwd: options.cwd, timeoutMs: options.timeoutMs, env, signal: options.signal });
+    return await runControlledCommand(sandboxExecutable(), [...defines(root, tmp), '-p', PROFILE + deny.profile, executable, ...args], { cwd: options.cwd, timeoutMs: options.timeoutMs, env, signal: options.signal });
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }

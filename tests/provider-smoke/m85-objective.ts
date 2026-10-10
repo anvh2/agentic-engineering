@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { dirname, join, basename } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { findProjectRoot } from '../../src/core/paths.ts';
 import { runObjectiveLifecycle, cancelObjective, type LifecycleOutcome } from '../../src/lead/lifecycle/driver.ts';
 import { sandboxRunner, sha256 } from '../../src/lead/lifecycle/exec.ts';
@@ -13,7 +14,8 @@ import { SchedulerStore } from '../../src/runtime/scheduler/store.ts';
 import { runSandboxedCommand } from '../../src/runtime/sandbox/sandbox.ts';
 import { WorktreeManager } from '../../src/runtime/worktree/worktree.ts';
 import type { CodexConfig } from '../../src/workers/providers/codex.ts';
-import { createHttpBackend, groupAlive } from './http-backend.ts';
+import { createHttpBackend, groupAlive, type SmokeBackend } from './http-backend.ts';
+import { readIsolationProblems } from './read-isolation-canary.ts';
 
 /**
  * M8.5, the first REAL autonomous objective: one deterministic Go objective with two dependent coding tasks, run through
@@ -182,6 +184,14 @@ export function checkM85Authorization(env: NodeJS.ProcessEnv, argv: readonly str
 // ---------------------------------------------------------------------------------------------------------------- the run
 
 const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_AUTHOR_NAME: 'm85', GIT_AUTHOR_EMAIL: 'm85@example.invalid', GIT_COMMITTER_NAME: 'm85', GIT_COMMITTER_EMAIL: 'm85@example.invalid' };
+const pidAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
 const sh = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', env: gitEnv }).trim();
 const tryGit = (cwd: string, ...args: string[]) => {
   try {
@@ -190,6 +200,22 @@ const tryGit = (cwd: string, ...args: string[]) => {
     return null;
   }
 };
+
+/** A path as the sandbox will see it: symlinks resolved through the deepest existing ancestor (the file itself may not exist yet). */
+export function sandboxPath(p: string): string {
+  const tail: string[] = [];
+  let cur = p;
+  for (;;) {
+    try {
+      return [realpathSync(cur), ...tail.reverse()].join('/').replace(/\/+/g, '/');
+    } catch {
+      tail.push(basename(cur));
+      const parent = dirname(cur);
+      if (parent === cur) return p;
+      cur = parent;
+    }
+  }
+}
 
 export class M85Cancelled extends Error {}
 
@@ -204,6 +230,14 @@ export interface M85Options {
   exit?: (code: number) => void;
   log?: (line: string) => void;
   pollMs?: number;
+  /**
+   * Read isolation (default ON): the oracle, runtime state holding hidden tests, this harness's source (which embeds the fixture oracle),
+   * the enclosing checkout's `.git` and the legacy M8.5 evidence are unreadable to the Codex worker AND to worker-written code run by
+   * the verifier. `false` reproduces the M8.5 behavior (oracle in `<outDir>/oracle`, nothing denied); only tests use it.
+   */
+  isolation?: false | { extraDenyRead?: string[] };
+  /** Fault injection (tests only): crash the Mastra server with SIGKILL as soon as the first provider process exists; optionally restart it on the same port with the same storage and ledger. */
+  chaos?: { crashServerAfterSpawn: { restartAfterMs?: number } };
 }
 
 export interface M85Result {
@@ -215,8 +249,16 @@ export interface M85Result {
 export async function runM85Objective(options: M85Options): Promise<M85Result> {
   const limits = { ...M85_LIMITS, ...options.limits };
   const log = options.log ?? ((l: string) => console.error(l));
-  const outDir = options.outDir ?? join(findProjectRoot() ?? process.cwd(), '.workdir', 'm8.5-real', new Date().toISOString().replace(/[:.]/g, '-'));
+  const projectRoot = findProjectRoot() ?? process.cwd();
+  const isolated = options.isolation !== false;
+  const outDir = options.outDir ?? join(projectRoot, '.workdir', isolated ? 'm8.6-real' : 'm8.5-real', new Date().toISOString().replace(/[:.]/g, '-'));
   mkdirSync(outDir, { recursive: true });
+  const realOut = sandboxPath(outDir);
+  // The oracle lives beside the run directory (not in it) when isolated, so the worker's worktree area never contains or sits under it.
+  const oracleDir = isolated ? `${realOut}.oracle` : join(outDir, 'oracle');
+  const denyRead = isolated
+    ? [oracleDir, ...['scheduler.db', 'scheduler.db-wal', 'scheduler.db-shm'].map((f) => join(realOut, f)), sandboxPath(fileURLToPath(import.meta.url)), sandboxPath(join(projectRoot, '.git')), sandboxPath(join(projectRoot, '.workdir', 'm8.5-real')), ...(options.isolation ? (options.isolation.extraDenyRead ?? []) : []).map(sandboxPath)]
+    : [];
   const capacityDb = options.capacityDb ?? join(outDir, 'capacity.db');
 
   // ---- the disposable repository (its own git repo inside outDir; the enclosing repository is never touched)
@@ -232,7 +274,6 @@ export async function runM85Objective(options: M85Options): Promise<M85Result> {
   const before = { head: sh(repo, 'rev-parse', 'HEAD'), refs: refs() };
 
   // ---- the pinned acceptance material, hashed BEFORE any worker claim (and recorded on disk before the backend starts)
-  const oracleDir = join(outDir, 'oracle');
   mkdirSync(oracleDir, { recursive: true });
   writeFileSync(join(oracleDir, ORACLE_FILE), ORACLE_SOURCE);
   const pinnedDir = join(outDir, 'pinned');
@@ -252,18 +293,42 @@ export async function runM85Objective(options: M85Options): Promise<M85Result> {
 
   // ---- the dedicated Mastra server (own port, storage, env; started and stopped here) with the server-wide invocation budget
   const providerId = 'codex';
-  const backend = await createHttpBackend({
+  const codexConfig = { ...options.codex, ...(isolated ? { denyReadPaths: denyRead } : {}) };
+  const backendOptions = {
     outDir,
     provider: providerId,
-    codex: options.codex,
+    codex: codexConfig,
     serverAllowProviders: options.allowProviders,
     maxInvocations: limits.maxInvocationsTotal,
     invocationBudget: { total: limits.maxInvocationsTotal, perWorkdir: limits.maxInvocationsPerTask },
     modelTimeoutMs: limits.perInvocationTimeoutMs,
     capacityDb,
+    sandboxDenyRead: denyRead,
     executor: { pollMs: options.pollMs, taskTimeoutMs: limits.taskActiveTimeoutMs + 60_000 },
     log,
-  });
+  } as const;
+  const backend = await createHttpBackend(backendOptions);
+  let restarted: SmokeBackend | undefined;
+  let chaosLog: Record<string, unknown> | undefined;
+  const chaosTimer = options.chaos
+    ? setInterval(() => {
+        if (chaosLog || backend.ownedPids().length === 0) return;
+        const serverPid = backend.describe().serverPid as number;
+        chaosLog = { crashedServerPid: serverPid, at: new Date().toISOString(), providerGroupsAtCrash: backend.ownedPids() };
+        process.kill(serverPid, 'SIGKILL');
+        log(`chaos: SIGKILL sent to the Mastra server ${serverPid} while a provider process runs`);
+        const restartAfter = options.chaos?.crashServerAfterSpawn.restartAfterMs;
+        if (restartAfter !== undefined) {
+          setTimeout(() => {
+            const port = Number(new URL(String(backend.describe().serverUrl)).port);
+            createHttpBackend({ ...backendOptions, resume: true, port }).then((b) => {
+              restarted = b;
+              chaosLog = { ...chaosLog, restartedServerPid: b.describe().serverPid };
+            }, (e) => (chaosLog = { ...chaosLog, restartFailed: String(e) }));
+          }, restartAfter);
+        }
+      }, 50)
+    : undefined;
 
   const store = new SchedulerStore(join(outDir, 'scheduler.db'));
   const worktrees = new WorktreeManager(join(outDir, 'worktrees'));
@@ -306,7 +371,7 @@ export async function runM85Objective(options: M85Options): Promise<M85Result> {
   let runError: string | null = null;
   try {
     outcome = await runObjectiveLifecycle(
-      { store, worktrees, lifecycle, scheduler, executor: backend.executor, capacity, run: sandboxRunner(600_000), config, evidenceDir: join(outDir, 'objective'), maxRounds: limits.maxRounds, log: (l) => log(`  ${l}`) },
+      { store, worktrees, lifecycle, scheduler, executor: backend.executor, capacity, run: sandboxRunner(600_000, { denyRead }), config, evidenceDir: join(outDir, 'objective'), maxRounds: limits.maxRounds, log: (l) => log(`  ${l}`) },
       OBJECTIVE_ID,
       { actor: 'operator' },
     );
@@ -320,10 +385,25 @@ export async function runM85Objective(options: M85Options): Promise<M85Result> {
   const elapsedMs = Date.now() - started;
 
   // ---- cleanup: the server is stopped last, and only if no provider process is left
+  if (chaosTimer) clearInterval(chaosTimer);
+  const crashed = chaosLog !== undefined;
+  let orphansKilled: number[] = [];
+  if (crashed) {
+    // The server that supervised the provider processes is gone, so nothing else will end them: they are this run's own, tracked in its ledger.
+    await new Promise((r) => setTimeout(r, 1_000));
+    orphansKilled = backend.killOwned().sentSigkillTo;
+  }
   const deadline = Date.now() + limits.cancelConfirmationMs;
   while (backend.stillAlive().length > 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
   const leftRunning = backend.stillAlive();
-  const serverShutdown = leftRunning.length > 0 ? { skipped: 'a provider process is not confirmed gone: the server was left running so its runner keeps supervising it' } : await backend.shutdown();
+  const serverShutdown = leftRunning.length > 0 ? { skipped: 'a provider process is not confirmed gone: the server was left running so its runner keeps supervising it' } : await (restarted ?? backend).shutdown();
+  const crashedServerGone = crashed ? !pidAlive(Number((chaosLog as Record<string, unknown>).crashedServerPid)) : null;
+
+  // A holder that crashed (the server) leaves its lease row until the next admission reaps it, so "no lease row" is not proof the permit is
+  // free. Prove it: take the Codex permit ourselves and give it back. The rows are re-read after this.
+  const probeLease = capacityFor({ resource: 'codex', defaultPermits: 1 }, capacityDb).tryAcquire('m86-permit-probe');
+  const permitProbe = { acquiredAfterRun: probeLease !== undefined };
+  probeLease?.release();
 
   // ---- evidence
   const lc = lifecycle.require(OBJECTIVE_ID);
@@ -405,6 +485,7 @@ export async function runM85Objective(options: M85Options): Promise<M85Result> {
     ownedProviderGroupsGone: backend.ownedPids().every((pid) => !groupAlive(pid)),
     serverStopped: (serverShutdown as { exited?: boolean }).exited === true,
     modelPermitsHeld: taskReports.flatMap((t) => t.leasesStillHeld),
+    modelPermitFree: permitProbe.acquiredAfterRun,
   };
   const report = {
     at: new Date().toISOString(),
@@ -419,7 +500,10 @@ export async function runM85Objective(options: M85Options): Promise<M85Result> {
     acceptance,
     backend: { ...backend.describe(), shutdown: serverShutdown },
     ledger,
-    checks,
+    checks: { ...checks, ...(crashed ? { orphanProviderGroupsKilled: orphansKilled, crashedServerGone } : {}) },
+    telemetry: summarizeTelemetry(taskReports),
+    isolation: { enabled: isolated, denyRead },
+    chaos: chaosLog ? { ...chaosLog, orphansKilled, restartedBackend: restarted ? restarted.describe() : null } : null,
     audit: lifecycle.events(OBJECTIVE_ID),
     paths: { outDir, repo, oracleDir, pinned: join(pinnedDir, 'pinned-objective.json') },
   };
@@ -427,8 +511,47 @@ export async function runM85Objective(options: M85Options): Promise<M85Result> {
   return { outDir, report, outcome };
 }
 
+/**
+ * What each model call is known to have cost, exactly as far as the CLI reported it: model identity, tokens, inference latency and
+ * cost. A value nobody reported is the string `UNKNOWN`, never 0 and never an estimate. The Codex CLI reports token counts but neither
+ * the model it chose (unless the operator pinned one with AGENTIC_CODEX_MODEL) nor a cost.
+ */
+export interface TelemetrySummary {
+  perTask: { id: string; provider: string; model: string; inputTokens: number | 'UNKNOWN'; outputTokens: number | 'UNKNOWN'; inferenceMs: number | 'UNKNOWN'; activeMs: number | 'UNKNOWN'; costUsd: number | 'UNKNOWN' }[];
+  totals: { inputTokens: number | 'UNKNOWN'; outputTokens: number | 'UNKNOWN'; inferenceMs: number | 'UNKNOWN'; costUsd: number | 'UNKNOWN'; models: string[] };
+}
+const known = (v: unknown): number | 'UNKNOWN' => (typeof v === 'number' && Number.isFinite(v) ? v : 'UNKNOWN');
+const sumKnown = (vals: (number | 'UNKNOWN')[]): number | 'UNKNOWN' => (vals.length > 0 && vals.every((v) => typeof v === 'number') ? (vals as number[]).reduce((a, b) => a + b, 0) : 'UNKNOWN');
+export function summarizeTelemetry(tasks: { id: string; activeMs: number | null; telemetry: (Record<string, any> | null)[] }[]): TelemetrySummary {
+  const perTask: TelemetrySummary['perTask'] = tasks
+    .filter((t) => t.telemetry.length > 0)
+    .map((t) => {
+      const calls = t.telemetry.map((x) => x ?? {});
+      return {
+        id: t.id,
+        provider: String(calls[0].provider ?? 'UNKNOWN'),
+        model: String(calls[0].model ?? 'UNKNOWN'),
+        inputTokens: sumKnown(calls.map((c) => known(c.usage?.inputTokens))),
+        outputTokens: sumKnown(calls.map((c) => known(c.usage?.outputTokens))),
+        inferenceMs: sumKnown(calls.map((c) => known(c.inferenceMs))),
+        activeMs: t.activeMs ?? 'UNKNOWN',
+        costUsd: sumKnown(calls.map((c) => known(c.usage?.costUsd))),
+      };
+    });
+  return {
+    perTask,
+    totals: {
+      inputTokens: sumKnown(perTask.map((t) => t.inputTokens)),
+      outputTokens: sumKnown(perTask.map((t) => t.outputTokens)),
+      inferenceMs: sumKnown(perTask.map((t) => t.inferenceMs)),
+      costUsd: sumKnown(perTask.map((t) => t.costUsd)),
+      models: [...new Set(perTask.map((t) => t.model))],
+    },
+  };
+}
+
 /** Free, local, no model call: everything that must hold before the first Codex invocation. Returns the problems found (empty = go). */
-export async function preflightProblems(options: { codex?: CodexConfig }): Promise<string[]> {
+export async function preflightProblems(options: { codex?: CodexConfig; isolation?: boolean }): Promise<string[]> {
   const problems: string[] = [];
   const { codexEntry } = await import('../../src/workers/providers/codex.ts');
   const availability = await codexEntry(options.codex ?? {}).probe();
@@ -441,6 +564,7 @@ export async function preflightProblems(options: { codex?: CodexConfig }): Promi
   const probeDir = join(findProjectRoot() ?? process.cwd(), '.workdir');
   mkdirSync(probeDir, { recursive: true });
   const sandboxed = await runSandboxedCommand('go', ['version'], { cwd: probeDir, root: probeDir, timeoutMs: 60_000 });
+  if (options.isolation !== false) problems.push(...(await readIsolationProblems({ command: options.codex?.command })));
   if (sandboxed.exitCode !== 0) problems.push(`the OS sandbox cannot run the Go toolchain (exit ${sandboxed.exitCode}): ${sandboxed.stderr.slice(0, 200)}; verification would fail closed`);
   return problems;
 }
@@ -462,7 +586,7 @@ export function judge(report: Record<string, any>): { verdict: 'M8_5_REAL_OBJECT
     [c.fsckOk, 'git fsck clean'],
     [c.ownedProviderGroupsGone, 'every Codex process group is gone'],
     [c.serverStopped, 'the dedicated Mastra server exited'],
-    [c.modelPermitsHeld.length === 0, 'no model permit is held'],
+    [c.modelPermitsHeld.length === 0 && c.modelPermitFree === true, 'no model permit is held (and the Codex permit can be taken)'],
   ];
   const broken = hard.filter(([ok]) => !ok).map(([, what]) => `VIOLATED: ${what}`);
   if (accepted) {

@@ -203,3 +203,61 @@ describe('sandbox: fail closed', { skip: !darwin && 'macOS only' }, () => {
     assert.equal(existsSync(join(base, 'ran2.txt')), false);
   });
 });
+
+describe('sandbox: deny-read paths (oracle isolation)', { skip: !darwin && 'macOS only' }, () => {
+  let base: string;
+  let root: string;
+  let secret: string;
+  before(async () => {
+    base = realpathSync(await mkdtemp(join(tmpdir(), 'sbx-deny-')));
+    root = join(base, 'root');
+    secret = join(base, 'oracle');
+    await mkdir(root);
+    await mkdir(secret);
+    await writeFile(join(secret, 'acceptance_test.go'), 'ORACLE-SOURCE\n');
+    await writeFile(join(root, 'ok.txt'), 'fine\n');
+  });
+  after(() => rm(base, { recursive: true, force: true }));
+  const run = (script: string, denyRead?: string[]) => runSandboxedCommand('/bin/sh', ['-c', script], { cwd: root, root, timeoutMs: 20_000, denyRead });
+
+  it('without a deny list the same path is readable (so the next assertions prove the rule, not the path)', async () => {
+    const r = await run(`cat "${secret}/acceptance_test.go"`);
+    assert.match(r.stdout, /ORACLE-SOURCE/);
+  });
+  it('an explicit denyRead path cannot be read, listed or stat-ed, while the rest still works', async () => {
+    const r = await run(`cat "${secret}/acceptance_test.go"; echo "cat=$?"; ls "${secret}"; echo "ls=$?"; cat ok.txt; echo "ok=$?"`, [secret]);
+    assert.doesNotMatch(r.stdout, /ORACLE-SOURCE/);
+    assert.match(r.stdout, /cat=1/);
+    assert.match(r.stdout, /ls=1/);
+    assert.match(r.stdout, /fine\nok=0/);
+  });
+  it('is not bypassed through a symlink inside the root, nor a relative path', async () => {
+    await symlink(secret, join(root, 'link')).catch(() => undefined);
+    const r = await run(`cat link/acceptance_test.go; cat ../oracle/acceptance_test.go`, [secret]);
+    assert.doesNotMatch(r.stdout, /ORACLE-SOURCE/);
+  });
+  it('AGENTIC_SANDBOX_DENY_READ applies to processes that cannot pass options', async () => {
+    process.env.AGENTIC_SANDBOX_DENY_READ = secret;
+    try {
+      const r = await run(`cat "${secret}/acceptance_test.go"; echo "cat=$?"`);
+      assert.doesNotMatch(r.stdout, /ORACLE-SOURCE/);
+      assert.match(r.stdout, /cat=1/);
+    } finally {
+      delete process.env.AGENTIC_SANDBOX_DENY_READ;
+    }
+  });
+  it('fails closed: a deny path containing the root, or a malformed one, means the command does not run', async () => {
+    for (const bad of [base, 'relative/path', '/', '/a"b']) {
+      const r = await run('echo ran', [bad]);
+      assert.equal(r.sandboxUnavailable, true, bad);
+      assert.doesNotMatch(r.stdout, /ran/);
+    }
+  });
+  it('Go code that tries to read a denied path at test time cannot', async () => {
+    await mkdir(join(root, 'g'), { recursive: true });
+    await writeFile(join(root, 'g', 'go.mod'), 'module g\n\ngo 1.22\n');
+    await writeFile(join(root, 'g', 'g_test.go'), `package g\n\nimport ("os"; "testing")\n\nfunc TestRead(t *testing.T) {\n\tb, err := os.ReadFile(${JSON.stringify(`${secret}/acceptance_test.go`)})\n\tif err == nil {\n\t\tt.Fatalf("read the oracle: %q", b)\n\t}\n}\n`);
+    const r = await runSandboxedCommand('go', ['test', '-count=1', './...'], { cwd: join(root, 'g'), root, timeoutMs: 120_000, denyRead: [secret] });
+    assert.equal(r.exitCode, 0, `${r.stdout}${r.stderr}`);
+  });
+});

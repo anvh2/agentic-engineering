@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { integrateBatch, type CommandRunner } from '../../runtime/integration/integrate.ts';
@@ -103,7 +104,9 @@ const DRIVER_LOCK_TTL_MS = 5 * 60_000;
  */
 export async function runObjectiveLifecycle(deps: LifecycleDeps, objectiveId: string, options: { actor?: string } = {}): Promise<LifecycleOutcome> {
   const lc = deps.lifecycle.require(objectiveId);
-  const owner = `${options.actor ?? DRIVER}:${process.pid}`;
+  // Unique per call, not per process: the lock is re-entrant for the same owner, so a pid-only owner let a second driver in the SAME process
+  // (a double invocation, a retry that raced its predecessor) acquire the lock and run the same objective concurrently.
+  const owner = `${options.actor ?? DRIVER}:${process.pid}:${randomUUID()}`;
   const lockName = `lifecycle:${objectiveId}`;
   if (!deps.store.acquireLock(lockName, owner, DRIVER_LOCK_TTL_MS)) {
     return { ...summarize(lc, 0), reason: 'driver_locked', stops: [`another driver holds the lifecycle lock for ${objectiveId}; only one runs an objective at a time`] };

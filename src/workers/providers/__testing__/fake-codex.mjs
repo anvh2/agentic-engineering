@@ -12,7 +12,7 @@ if (process.env.FAKE_LOG) appendFileSync(process.env.FAKE_LOG, `${JSON.stringify
 if (args[0] === '--version') {
   console.log('codex-cli 0.0.0-fake');
 } else if (args[0] === 'exec' && args.includes('--help')) {
-  const flags = ['--sandbox <MODE>', '--cd <DIR>', '--ignore-user-config', '--ephemeral', '--color <COLOR>', '--model <MODEL>', '--json'].filter((f) => !omit.some((o) => f.startsWith(o)));
+  const flags = ['--config <KEY=VALUE>', '--sandbox <MODE>', '--cd <DIR>', '--ignore-user-config', '--ephemeral', '--color <COLOR>', '--model <MODEL>', '--json'].filter((f) => !omit.some((o) => f.startsWith(o)));
   console.log(`Run Codex non-interactively\n\nOptions:\n${flags.map((f) => `      ${f}`).join('\n')}`);
 } else if (args[0] === 'login' && args[1] === 'status') {
   if (process.env.FAKE_AUTH === 'none') {

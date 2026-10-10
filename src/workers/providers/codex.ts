@@ -1,3 +1,5 @@
+import { realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { runControlledCommand } from '../tools/execution-tools.ts';
 import { redact } from '../../runtime/execution/coding-task-trace.ts';
 import type { WorkerLike } from '../../runtime/execution/coding-task-runner.ts';
@@ -49,6 +51,26 @@ export interface CodexConfig {
   termGraceMs?: number;
   /** Receives the pid/process group of every CLI process this provider starts (for owner-side accounting and cleanup). */
   onProcess?: (info: { pid: number; exited: Promise<void> }) => void;
+  /**
+   * Absolute paths the model's commands must not be able to READ (an objective oracle, runtime state holding hidden tests). The
+   * CLI's `workspace-write` sandbox restricts writes only; every file the user can read, the model can read. With this set, the run
+   * uses a filesystem permission profile instead of the `--sandbox` flag (the CLI ignores a profile when `--sandbox` is given):
+   * read everywhere except these paths, write only the worktree and the temp dirs, `.git` and `.codex` read-only: the same writes as
+   * `workspace-write`, plus the denied reads. Paths are resolved through symlinks before they are handed to the sandbox.
+   */
+  denyReadPaths?: readonly string[];
+}
+
+/** Name of the permission profile built for `denyReadPaths`. */
+export const CODEX_ISOLATION_PROFILE = 'agentic-isolated';
+const DENY_PATH = /^\/[^\0-\x1f"'\\=]+$/;
+
+/** Throws unless every path is an absolute, normalized path the profile can express without quoting tricks. Fails closed. */
+export function checkDenyReadPaths(paths: readonly string[]): string[] {
+  for (const p of paths) {
+    if (!DENY_PATH.test(p) || p === '/' || p.endsWith('/') || p.split('/').some((seg) => seg === '..' || seg === '.')) throw new Error(`codex denyReadPaths: "${p}" is not an absolute, normalized path without quotes, backslashes or control characters`);
+  }
+  return [...paths];
 }
 
 /**
@@ -56,10 +78,12 @@ export interface CodexConfig {
  * process list nor hits argv limits). Throws if anything in it would weaken containment. No `-c` overrides are accepted at
  * all: every setting that matters is a dedicated flag verified against the installed help.
  */
-export function buildCodexArgs(workdir: string, options: { model?: string; json: boolean; ephemeral?: boolean; colorNever?: boolean }): string[] {
+export function buildCodexArgs(workdir: string, options: { model?: string; json: boolean; ephemeral?: boolean; colorNever?: boolean; denyReadPaths?: readonly string[] }): string[] {
+  const deny = options.denyReadPaths?.length ? checkDenyReadPaths(options.denyReadPaths) : undefined;
   const args = [
     'exec',
-    '--sandbox', 'workspace-write',
+    // With a profile the flag must be absent: the CLI silently ignores the profile when `--sandbox` is present (observed on 0.161.0).
+    ...(deny ? [] : ['--sandbox', 'workspace-write']),
     '--cd', workdir,
     '--ignore-user-config',
     ...(options.ephemeral ? ['--ephemeral'] : []),
@@ -69,7 +93,17 @@ export function buildCodexArgs(workdir: string, options: { model?: string; json:
   ];
   const bad = args.find((a) => FORBIDDEN_ARG.test(a));
   if (bad) throw new Error(`refusing to build a Codex command containing "${bad}": it would weaken the sandbox`);
-  return [...args, '-'];
+  if (!deny) return [...args, '-'];
+  // The only `-c` overrides this adapter ever emits: a profile that is the writes of `workspace-write` plus denied reads. Built from
+  // validated paths only; nothing a caller supplies reaches the CLI as a free-form setting.
+  const entries = [
+    '":root"="read"',
+    '":project_roots"={"."="write", ".git"="read", ".codex"="read"}',
+    '":tmpdir"="write"',
+    '":slash_tmp"="write"',
+    ...deny.map((p) => `"${p}"="none"`),
+  ];
+  return [...args, '-c', `default_permissions="${CODEX_ISOLATION_PROFILE}"`, '-c', `permissions.${CODEX_ISOLATION_PROFILE}.filesystem={${entries.join(', ')}}`, '-'];
 }
 
 const PREAMBLE = (r: ProviderRequest) =>
@@ -122,6 +156,16 @@ const groupAlive = (pid: number) => {
   }
 };
 
+/** The path the sandbox will see: symlinks resolved when it exists (macOS /var -> /private/var), the path itself otherwise. */
+function canonicalPath(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
+}
+const isInside = (child: string, parent: string) => child === parent || child.startsWith(`${parent}/`);
+
 async function headOf(workdir: string): Promise<string> {
   const r = await runControlledCommand('git', ['rev-parse', 'HEAD'], { cwd: workdir, timeoutMs: 10_000 });
   return r.success ? r.stdout.trim() : `unreadable:${r.exitCode}`;
@@ -171,7 +215,13 @@ export function createCodexProvider(config: CodexConfig = {}): WorkerProvider {
       const a = await probe(request.workdir);
       if (a.state !== 'available') throw new Error(`codex provider unavailable (${a.state}): ${a.detail}`);
     }
-    const args = buildCodexArgs(request.workdir, { model: config.model, json: probed!.advertises('--json'), ephemeral: probed!.advertises('--ephemeral'), colorNever: probed!.advertises('--color') });
+    const denyReadPaths = (config.denyReadPaths ?? []).map(canonicalPath);
+    if (denyReadPaths.length > 0) {
+      if (!probed!.advertises('--config')) throw new Error('codex provider: denyReadPaths needs `--config` in `codex exec --help`; this CLI cannot enforce read isolation, so nothing runs');
+      const inside = denyReadPaths.find((d) => isInside(canonicalPath(request.workdir), d) || isInside(d, canonicalPath(request.workdir)));
+      if (inside) throw new Error(`codex provider: the worktree ${request.workdir} overlaps the read-denied path ${inside}`);
+    }
+    const args = buildCodexArgs(request.workdir, { model: config.model, json: probed!.advertises('--json'), ephemeral: probed!.advertises('--ephemeral'), colorNever: probed!.advertises('--color'), denyReadPaths });
 
     const headBefore = await headOf(request.workdir);
     const r: ProviderProcessResult = await runProviderProcess({ command, args, stdin: `${PREAMBLE(request)}\n\n${prompt}`, cwd: request.workdir, timeoutMs: request.timeoutMs, signal, passEnv: config.passEnv, env: config.env, parentEnv: config.parentEnv, termGraceMs: config.termGraceMs, onProcess: config.onProcess });

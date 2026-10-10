@@ -1,5 +1,6 @@
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { createHash } from 'node:crypto';
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { Mastra } from '@mastra/core/mastra';
 import { LibSQLStore } from '@mastra/libsql';
 import { createNodeServer } from '@mastra/deployer/server';
@@ -28,7 +29,7 @@ import type { WorkerProvider } from '../../src/workers/providers/provider.ts';
 export interface SmokeServerConfig {
   /** The one cloud provider this server registers (default `codex`). */
   provider?: 'codex' | 'gemini';
-  codex?: Pick<CodexConfig, 'command' | 'model' | 'passEnv' | 'env' | 'termGraceMs'>;
+  codex?: Pick<CodexConfig, 'command' | 'model' | 'passEnv' | 'env' | 'termGraceMs' | 'denyReadPaths'>;
   gemini?: Pick<GeminiConfig, 'command' | 'model' | 'passEnv' | 'env' | 'termGraceMs' | 'maxTurns' | 'maxOutputTokens' | 'apiBaseUrl'>;
   artifactRoot: string;
   /** libsql url for Mastra's workflow snapshots (a file inside the smoke directory). */
@@ -63,26 +64,42 @@ export function limitInvocations(provider: WorkerProvider, max: number, note: (e
   } as WorkerProvider;
 }
 
-/** Server-wide state for `invocationBudget`: one instance per server process, shared by every provider the registry creates. */
+/**
+ * Server-wide budget for `invocationBudget`. It is NOT memory: every slot is a file created with `wx` (atomic, exclusive) next to the
+ * ledger, so the budget survives a server crash or restart and holds even if an old and a new server briefly overlap. A server that
+ * comes back after a crash therefore cannot spend what the first one already spent.
+ */
 export class SharedInvocationBudget {
-  private total = 0;
-  private readonly byWorkdir = new Map<string, number>();
   private readonly budget: { total: number; perWorkdir: number };
   private readonly note: (event: Record<string, unknown>) => void;
-  constructor(budget: { total: number; perWorkdir: number }, note: (event: Record<string, unknown>) => void) {
+  private readonly dir: string;
+  constructor(budget: { total: number; perWorkdir: number }, note: (event: Record<string, unknown>) => void, dir: string) {
     this.budget = budget;
     this.note = note;
+    this.dir = dir;
+    mkdirSync(dir, { recursive: true });
   }
 
-  /** Takes one invocation slot for `workdir`, or refuses (and records the refusal). Refused calls consume nothing. */
-  take(workdir: string): boolean {
-    const used = this.byWorkdir.get(workdir) ?? 0;
-    const allowed = this.total < this.budget.total && used < this.budget.perWorkdir;
-    if (allowed) {
-      this.total += 1;
-      this.byWorkdir.set(workdir, used + 1);
+  private claim(name: string): boolean {
+    try {
+      writeFileSync(join(this.dir, name), `${process.pid} ${new Date().toISOString()}\n`, { flag: 'wx' });
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false;
+      throw err;
     }
-    this.note({ event: 'invocation', n: this.total, max: this.budget.total, perWorkdirMax: this.budget.perWorkdir, workdir, workdirCalls: used + (allowed ? 1 : 0), allowed });
+  }
+
+  /** Takes one invocation slot for `workdir`, or refuses (and records the refusal). A refused call consumes nothing. */
+  take(workdir: string): boolean {
+    const key = createHash('sha256').update(workdir).digest('hex').slice(0, 16);
+    let workdirSlot: string | undefined;
+    for (let i = 1; i <= this.budget.perWorkdir && !workdirSlot; i += 1) if (this.claim(`wd-${key}-${i}`)) workdirSlot = `wd-${key}-${i}`;
+    let totalSlot: number | undefined;
+    if (workdirSlot) for (let i = 1; i <= this.budget.total && totalSlot === undefined; i += 1) if (this.claim(`total-${i}`)) totalSlot = i;
+    if (workdirSlot && totalSlot === undefined) rmSync(join(this.dir, workdirSlot), { force: true }); // the total is spent: give the task slot back
+    const allowed = workdirSlot !== undefined && totalSlot !== undefined;
+    this.note({ event: 'invocation', n: totalSlot ?? this.budget.total, max: this.budget.total, perWorkdirMax: this.budget.perWorkdir, workdir, allowed });
     return allowed;
   }
 
@@ -106,7 +123,7 @@ export async function buildSmokeMastra(config: SmokeServerConfig): Promise<Mastr
   const note = (event: Record<string, unknown>) => appendFileSync(config.ledgerPath, `${JSON.stringify({ ...event, at: new Date().toISOString(), serverPid: process.pid })}\n`);
   const onProcess = ({ pid }: { pid: number }) => note({ event: 'spawn', pid });
   const base = config.provider === 'gemini' ? geminiEntry({ ...config.gemini, onProcess }) : codexEntry({ ...config.codex, onProcess });
-  const shared = config.invocationBudget ? new SharedInvocationBudget(config.invocationBudget, note) : undefined;
+  const shared = config.invocationBudget ? new SharedInvocationBudget(config.invocationBudget, note, join(dirname(config.ledgerPath), 'invocation-budget')) : undefined;
   const providers = new ProviderRegistry().register({ ...base, create: (ctx) => (shared ? shared.wrap(base.create(ctx) as WorkerProvider) : limitInvocations(base.create(ctx) as WorkerProvider, config.maxInvocations, note)) });
   const workflow = createCodingTaskWorkflow({
     providers,
