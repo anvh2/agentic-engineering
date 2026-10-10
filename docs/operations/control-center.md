@@ -65,3 +65,11 @@ Verdict: **CONTROL_CENTER_SLICE_READY** for this first read-only slice, with the
 Branch: `codex/m8.4-control-center`, based on `ff5f234`. Only the new Platform directories and these handoff documents are committed. To integrate, cherry-pick the delivery commit reported by Codex onto the intended integration branch; root dependency manifests and Core ownership files are unchanged. Install the UI subpackage from its lockfile and follow the launch commands above.
 
 A sanitized, explicitly synthetic [snapshot example](../architecture/examples/control-center-synthetic.json) illustrates the wire shape; it is never loaded by production code. The outer `_notice` is documentation metadata, not an API field.
+
+## UI refinement — agent activity and usage
+
+The existing layout is preserved. Organization rows include claim elapsed time and reported current-task tokens; Overview includes a compact agent activity table. The existing inspector now has Overview / Usage / Runs tabs with keyboard navigation. Current-run usage and historical reported usage are separate and scoped to the selected objective; replayed call IDs are counted once. Missing telemetry remains UNKNOWN. Costs require explicit model/pricing provenance.
+
+No API schema, Gateway transport, scheduler, provider, lease, SQLite or verifier changes were made. See the [UI refinement Core handoff](../architecture/control-center-contract.md#ui-refinement-handoff--activity-and-usage-tabs) for unavailable heartbeat, per-run duration, retries and final-outcome fields. Existing launch commands are unchanged; rebuild the UI to use the refinement.
+
+Refinement validation (2026-10-10): root typecheck, UI typecheck and production build passed; 13 Gateway tests plus 4 UI observation tests passed; both installed-Chrome browser checks passed (including tab keyboard navigation and reconnect-safe usage). Full repository `npm test`, with real-provider opt-in explicitly removed, passed **756/756**. The new screenshot was inspected against the existing layout. Tests used synthetic task/call fixtures only; no cloud calls or existing runtime processes were invoked.

@@ -24,6 +24,7 @@ test(
       f.close();
     });
     const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+    page.setDefaultTimeout(15000);
     const errors = [];
     page.on('pageerror', (err) => errors.push(err.message));
     const mutations = [];
@@ -41,7 +42,14 @@ test(
     await page.keyboard.press('Enter');
     await page.getByRole('complementary', { name: 'Details inspector' }).waitFor();
     assert.equal(await page.getByRole('button', { name: 'Close inspector' }).evaluate((el) => el === document.activeElement), true);
-    assert.ok((await page.getByRole('complementary').innerText()).includes('Core telemetry unavailable'));
+    await page.getByRole('tab', { name: 'Overview', exact: true }).focus();
+    await page.keyboard.press('ArrowRight');
+    assert.equal(await page.getByRole('tab', { name: 'Usage', exact: true }).getAttribute('aria-selected'), 'true');
+    assert.ok((await page.getByRole('tabpanel').innerText()).includes('Core telemetry unavailable'));
+    await page.keyboard.press('End');
+    assert.equal(await page.getByRole('tab', { name: 'Runs', exact: true }).getAttribute('aria-selected'), 'true');
+    await page.keyboard.press('Home');
+    assert.equal(await page.getByRole('tab', { name: 'Overview', exact: true }).getAttribute('aria-selected'), 'true');
     await page.keyboard.press('Escape');
     assert.equal(await page.getByRole('complementary').count(), 0);
     assert.equal(await qwen.evaluate((el) => el === document.activeElement), true);
@@ -51,7 +59,9 @@ test(
     mkdirSync(output, { recursive: true });
     await page.screenshot({ path: `${output}/organization-light.png`, fullPage: true });
     await page.getByRole('button', { name: 'Switch to dark theme' }).click();
+    f.advance(Date.now() - f.reader.snapshot().observedAt);
     const claim = f.claim();
+    f.store.heartbeat('task-a', claim.fence, 60000);
     f.store.recordRun('task-a', claim.fence, 'synthetic-run-a');
     f.store.transition('task-a', 'CODING', { actor: 'worker-1', fence: claim.fence });
     f.store.transition('task-a', 'VERIFYING', { actor: 'worker-1', fence: claim.fence });
@@ -68,6 +78,15 @@ test(
     await inspector.getByText('Historically verified in this objective.', { exact: false }).waitFor();
     assert.ok((await inspector.innerText()).includes('UNKNOWN'));
     await page.getByRole('button', { name: 'Close inspector' }).click();
+    await page.getByRole('button', { name: 'Overview', exact: true }).click();
+    assert.deepEqual(await page.getByRole('table', { name: 'Agent activity' }).locator('th').allTextContents(), [
+      'Agent',
+      'Activity',
+      'Current Task',
+      'Elapsed',
+      'Tokens',
+      'Last Outcome',
+    ]);
     await page.getByRole('button', { name: /^Reviews/ }).click();
     await page.getByRole('button', { name: 'task-a', exact: true }).waitFor();
     await page.getByRole('button', { name: 'Runs', exact: true }).click();
@@ -88,5 +107,92 @@ test(
     assert.ok((await page.locator('.agent-table').innerText()).includes('UNKNOWN'));
     assert.deepEqual(errors, []);
     assert.deepEqual(mutations, []);
+  },
+);
+
+test(
+  'reported usage remains separated across replay, reconnect and completed task outcomes',
+  { skip: !process.env.CHROME_EXECUTABLE },
+  async (t) => {
+    const f = fixture(Date.now());
+    f.advance(Date.now() - f.reader.snapshot().observedAt);
+    const claim = f.claim();
+    f.store.heartbeat('task-a', claim.fence, 60000);
+    f.store.recordRun('task-a', claim.fence, 'current');
+    let completed = false;
+    const usage = {
+      inputTokens: 31,
+      outputTokens: 7,
+      cachedInputTokens: null,
+      reasoningTokens: null,
+      latencyMs: 50,
+      actualCostUsd: null,
+      estimatedCost: null,
+      source: 'core.model-call',
+      completeness: 'partial',
+    };
+    const current = {
+      id: 'call-current',
+      objectiveId: 'B1',
+      taskId: 'task-a',
+      runId: 'current',
+      workerId: 'worker-1',
+      provider: 'ollama',
+      modelId: 'reported-model',
+      attempt: 1,
+      startedAt: 1,
+      finishedAt: 2,
+      status: 'COMPLETED',
+      usage,
+    };
+    // Explicit test-only telemetry source. Production continues to show UNKNOWN until Core supplies it.
+    const reader = {
+      ...f.reader,
+      snapshot: (id) => {
+        const snapshot = f.reader.snapshot(id);
+        if (id === 'B1') {
+          snapshot.calls = [current, current, { ...current, id: 'call-old', runId: 'old', usage: { ...usage, inputTokens: 97 } }];
+          const agent = snapshot.agents.find((a) => a.id === 'ollama');
+          agent.activity = completed ? 'UNKNOWN' : 'RUNNING';
+          agent.modelId = 'reported-model';
+        }
+        return snapshot;
+      },
+    };
+    const gateway = createGateway({ reader, assetsDir: fileURLToPath(new URL('./dist/', import.meta.url)), pollMs: 100 });
+    gateway.server.listen(0, '127.0.0.1');
+    await once(gateway.server, 'listening');
+    const browser = await chromium.launch({ executablePath: process.env.CHROME_EXECUTABLE, headless: true });
+    t.after(async () => {
+      await browser.close();
+      gateway.closeStreams();
+      gateway.server.closeAllConnections();
+      await new Promise((resolve) => gateway.server.close(resolve));
+      f.close();
+    });
+    const page = await browser.newPage();
+    page.setDefaultTimeout(15000);
+    await page.goto(`http://127.0.0.1:${gateway.server.address().port}`);
+    await page.getByText('Scheduler connected', { exact: true }).waitFor();
+    await page.getByLabel('Objective', { exact: true }).selectOption('B1');
+    await page.getByRole('button', { name: 'Qwen' }).click();
+    await page.getByRole('tab', { name: 'Usage', exact: true }).click();
+    const panel = page.getByRole('tabpanel');
+    await panel.getByText('31', { exact: true }).waitFor();
+    await panel.getByText('97', { exact: true }).waitFor();
+    gateway.closeStreams();
+    await page.getByRole('alert').waitFor();
+    await page.getByText('Scheduler connected', { exact: true }).waitFor();
+    assert.equal(await panel.getByText('31', { exact: true }).count(), 1);
+    assert.equal(await panel.getByText('97', { exact: true }).count(), 1);
+    completed = true;
+    f.store.transition('task-a', 'CANCELLED', { actor: 'test' });
+    await panel.getByText('128', { exact: true }).waitFor();
+    assert.equal(await panel.getByText('31', { exact: true }).count(), 0);
+    await page.getByRole('tab', { name: 'Runs', exact: true }).click();
+    assert.ok((await panel.innerText()).includes('Final run outcome\nUNKNOWN'));
+    await page.getByRole('tab', { name: 'Overview', exact: true }).click();
+    assert.ok((await panel.innerText()).includes('CANCELLED'));
+    assert.equal(await panel.getByText('RUNNING', { exact: true }).count(), 0);
   },
 );

@@ -23,6 +23,7 @@ import {
   type Snapshot,
   type Usage,
 } from '../../../src/integrations/control-center/contract.ts';
+import { claimElapsed, currentTasks, inspectorObservations, observedActivity, priced, taskUsage } from './observations.ts';
 import './style.css';
 
 type Page = 'Overview' | 'Organization' | 'Objectives' | 'Runs' | 'Reviews';
@@ -34,9 +35,9 @@ const pages = [
   { name: 'Reviews', icon: CheckCheck },
 ] as const;
 const number = (n: number | null) => (n === null ? 'UNKNOWN' : n.toLocaleString());
-const date = (n: number | null) => (n === null ? 'Unknown' : new Date(n).toLocaleString());
+const date = (n: number | null) => (n === null ? 'UNKNOWN' : new Date(n).toLocaleString());
 const duration = (n: number | null) =>
-  n === null ? 'Unknown' : n < 60000 ? `${Math.floor(n / 1000)}s` : `${Math.floor(n / 60000)}m ${Math.floor(n / 1000) % 60}s`;
+  n === null ? 'UNKNOWN' : n < 60000 ? `${Math.floor(n / 1000)}s` : `${Math.floor(n / 60000)}m ${Math.floor(n / 1000) % 60}s`;
 function Badge({ value }: { value: string }) {
   return (
     <span
@@ -63,11 +64,11 @@ function Trace({ task }: { task: ControlTask }) {
     <span className="muted">Trace unavailable</span>
   );
 }
-function UsageView({ usage }: { usage: Usage }) {
+function UsageView({ usage, title = 'Token usage', callCount }: { usage: Usage; title?: string; callCount?: number | null }) {
   return (
     <>
       <div className="section-heading">
-        <h3>Token usage</h3>
+        <h3>{title}</h3>
         <Badge value={usage.completeness.toUpperCase()} />
       </div>
       <dl className="metrics">
@@ -78,7 +79,7 @@ function UsageView({ usage }: { usage: Usage }) {
             ['Cached input¹', usage.cachedInputTokens],
             ['Reasoning¹', usage.reasoningTokens],
             ['Latency (ms)', usage.latencyMs],
-            ['Provider cost (USD)', usage.actualCostUsd],
+            ['Provider cost (USD)', priced(usage) ? usage.actualCostUsd : null],
           ] as const
         ).map(([label, value]) => (
           <div key={label}>
@@ -87,12 +88,22 @@ function UsageView({ usage }: { usage: Usage }) {
           </div>
         ))}
       </dl>
+      {callCount !== undefined && (
+        <dl className="details">
+          <div>
+            <dt>Reported calls</dt>
+            <dd>{number(callCount)}</dd>
+          </div>
+        </dl>
+      )}
       <p className="footnote">¹ Detail counts are subsets, never added to input/output totals.</p>
       <dl className="details">
         <div>
           <dt>Estimated cost</dt>
           <dd>
-            {usage.estimatedCost ? `$${usage.estimatedCost.usd} · ${usage.estimatedCost.pricingSource}` : 'UNKNOWN · no pricing source'}
+            {priced(usage)
+              ? `$${usage.estimatedCost!.usd} · ${usage.estimatedCost!.modelId} · ${usage.estimatedCost!.pricingSource}`
+              : 'UNKNOWN · model/pricing unavailable'}
           </dd>
         </div>
         <div>
@@ -165,6 +176,40 @@ function useSnapshot(objectiveId: string) {
   }, [objectiveId]);
   return { snapshot, connection };
 }
+function AgentMeasurements({
+  agent,
+  snapshot,
+  now,
+  connected,
+  part = 'both',
+}: {
+  agent: ControlAgent;
+  snapshot: Snapshot;
+  now: number;
+  connected: boolean;
+  part?: 'both' | 'elapsed' | 'tokens';
+}) {
+  const tasks = currentTasks(snapshot, agent);
+  return tasks.length ? (
+    <>
+      {tasks.map((t) => {
+        const usage = taskUsage(snapshot, t);
+        return (
+          <div key={t.id} className="agent-measurement" title={`Task ${t.id}`}>
+            {part !== 'tokens' && <span className="mono">{duration(claimElapsed(t, now, connected))}</span>}
+            {part !== 'elapsed' && (
+              <small>
+                {number(usage.inputTokens)} in / {number(usage.outputTokens)} out
+              </small>
+            )}
+          </div>
+        );
+      })}
+    </>
+  ) : (
+    <span className="muted">UNKNOWN</span>
+  );
+}
 function TaskTable({ tasks, onSelect, now }: { tasks: ControlTask[]; onSelect: (id: string) => void; now: number }) {
   if (!tasks.length) return <Empty>No tasks in this scope. Select an objective with persisted scheduler data.</Empty>;
   return (
@@ -229,11 +274,19 @@ function Inspector({
     close.current?.focus();
     return () => previous?.focus();
   }, []);
-  const tasks = task ? [task] : snapshot.tasks.filter((t) => agent?.assignmentIds.includes(t.id));
-  const history = snapshot.tasks
-    .filter((t) => (task ? t.id === task.id : t.provider === agent?.provider))
-    .flatMap((t) => t.runIds.map((id) => ({ id, task: t })));
-  const activity = disconnected ? 'UNKNOWN' : (task?.activity ?? agent?.activity ?? 'UNKNOWN');
+  const [tab, setTab] = useState<'Overview' | 'Usage' | 'Runs'>('Overview');
+  const observations = inspectorObservations(snapshot, agent, task);
+  const tasks = task ? [task] : observations.assigned;
+  const history = observations.history;
+  const activity = disconnected
+    ? 'UNKNOWN'
+    : task
+      ? task.stale || (['RUNNING', 'VERIFYING'].includes(task.activity) && task.leaseExpiresAt !== null && task.leaseExpiresAt <= now)
+        ? 'UNKNOWN'
+        : task.activity
+      : agent
+        ? observedActivity(agent, observations.assigned, true, now)
+        : 'UNKNOWN';
   const events = snapshot.events.filter((e) =>
     task ? e.taskId === task.id : snapshot.tasks.some((t) => t.id === e.taskId && t.provider === agent?.provider),
   );
@@ -254,106 +307,203 @@ function Inspector({
           <X size={17} />
         </button>
       </header>
-      <div className="inspector-body">
-        <div className="section-heading">
-          <h3>Current activity</h3>
-          <Badge value={activity} />
-        </div>
+      <div className="inspector-tabs" role="tablist" aria-label="Inspector sections">
+        {(['Overview', 'Usage', 'Runs'] as const).map((name, index, tabs) => (
+          <button
+            key={name}
+            id={`inspector-tab-${name}`}
+            role="tab"
+            aria-selected={tab === name}
+            aria-controls="inspector-panel"
+            tabIndex={tab === name ? 0 : -1}
+            onClick={() => setTab(name)}
+            onKeyDown={(e) => {
+              const next =
+                e.key === 'ArrowRight'
+                  ? (index + 1) % tabs.length
+                  : e.key === 'ArrowLeft'
+                    ? (index + tabs.length - 1) % tabs.length
+                    : e.key === 'Home'
+                      ? 0
+                      : e.key === 'End'
+                        ? tabs.length - 1
+                        : null;
+              if (next !== null) {
+                e.preventDefault();
+                setTab(tabs[next]!);
+                document.getElementById(`inspector-tab-${tabs[next]}`)?.focus();
+              }
+            }}
+          >
+            {name}
+          </button>
+        ))}
+      </div>
+      <div
+        className="inspector-body inspector-panel"
+        role="tabpanel"
+        id="inspector-panel"
+        aria-labelledby={`inspector-tab-${tab}`}
+        tabIndex={0}
+      >
         {disconnected && <p className="notice">Disconnected. Details below are the last observed snapshot.</p>}
-        <dl className="details">
-          <div>
-            <dt>Provider</dt>
-            <dd>{task?.provider ?? agent?.provider}</dd>
-          </div>
-          <div>
-            <dt>Model</dt>
-            <dd>{agent?.modelId ?? 'UNKNOWN'}</dd>
-          </div>
-          <div>
-            <dt>Configuration</dt>
-            <dd>{agent?.configured === true ? 'Configured' : agent?.configured === false ? 'Not configured' : 'UNKNOWN'}</dd>
-          </div>
-          <div>
-            <dt>Availability</dt>
-            <dd>{agent?.availability ?? 'UNKNOWN'}</dd>
-          </div>
-          <div>
-            <dt>Last outcome</dt>
-            <dd>
-              {agent?.lastOutcome ??
-                (task && !['READY', 'CLAIMED', 'CODING', 'VERIFYING', 'BACKLOG'].includes(task.state) ? task.state : 'Unknown')}
-            </dd>
-          </div>
-          <div>
-            <dt>Last event</dt>
-            <dd>{date(task?.lastEventAt ?? agent?.lastEventAt ?? null)}</dd>
-          </div>
-        </dl>
-        <p className="footnote">
-          {agent?.historicallyVerified
-            ? 'Historically verified in this objective. This does not indicate online presence.'
-            : 'No live worker heartbeat is exposed by Core.'}
-        </p>
-        <section>
-          <h3>Assignment & execution</h3>
-          {tasks.length ? (
-            tasks.map((t) => (
-              <div className="assignment" key={t.id}>
-                <strong>{t.title}</strong>
-                <small className="mono">{t.id}</small>
-                <dl className="details">
-                  <div>
-                    <dt>Stage</dt>
-                    <dd>{t.stage}</dd>
-                  </div>
-                  <div>
-                    <dt>Worker ID</dt>
-                    <dd>{t.workerId ?? 'UNKNOWN'}</dd>
-                  </div>
-                  <div>
-                    <dt>Claim elapsed²</dt>
-                    <dd>{duration(!disconnected && t.activeSince !== null ? Math.max(0, now - t.activeSince) : null)}</dd>
-                  </div>
-                  <div>
-                    <dt>Permit queue</dt>
-                    <dd>{t.queuePosition ?? 'UNKNOWN'}</dd>
-                  </div>
-                  <div>
-                    <dt>Dependencies</dt>
-                    <dd>{t.dependsOn.length ? t.dependsOn.join(', ') : 'None'}</dd>
-                  </div>
-                </dl>
-                <Trace task={t} />
+        {tab === 'Overview' && (
+          <>
+            <div className="section-heading">
+              <h3>Current activity</h3>
+              <Badge value={activity} />
+            </div>
+            <dl className="details">
+              <div>
+                <dt>Provider</dt>
+                <dd>{task?.provider ?? agent?.provider}</dd>
               </div>
-            ))
-          ) : (
-            <p className="muted">No current assignment observed.</p>
-          )}
-          <p className="footnote">² Time since scheduler claim, including preparation and waiting. Inference duration is unavailable.</p>
-        </section>
-        <section>
-          <UsageView usage={task?.usage ?? agent!.usage} />
-          <p className="footnote">Per-call telemetry is not exposed yet. Failed, retried and cancelled call usage is unknown.</p>
-        </section>
-        <section>
-          <h3>
-            Run history <span className="count">{history.length}</span>
-          </h3>
-          {history.length ? (
-            history.map((r) => (
-              <div className="history-row" key={`${r.task.id}:${r.id}`}>
-                <span className="mono">{r.id}</span>
-                {r.id === r.task.runId ? <Trace task={r.task} /> : <span className="muted">Historical run</span>}
+              <div>
+                <dt>Model</dt>
+                <dd>
+                  {agent?.modelId ??
+                    (observations.current.length && observations.current.every((c) => c.modelId === observations.current[0]!.modelId)
+                      ? observations.current[0]!.modelId
+                      : null) ??
+                    'UNKNOWN'}
+                </dd>
               </div>
-            ))
-          ) : (
-            <p className="muted">No persisted runs in this objective.</p>
-          )}
-        </section>
-        <section>
-          <h3>Execution timeline</h3>
-          <Timeline events={events} />
-        </section>
+              <div>
+                <dt>Configuration</dt>
+                <dd>{agent?.configured === true ? 'Configured' : agent?.configured === false ? 'Not configured' : 'UNKNOWN'}</dd>
+              </div>
+              <div>
+                <dt>Availability</dt>
+                <dd>{agent?.availability ?? 'UNKNOWN'}</dd>
+              </div>
+              <div>
+                <dt>Last outcome</dt>
+                <dd>
+                  {agent?.lastOutcome ??
+                    (task && !['READY', 'CLAIMED', 'CODING', 'VERIFYING', 'BACKLOG'].includes(task.state) ? task.state : 'Unknown')}
+                </dd>
+              </div>
+              <div>
+                <dt>Last observed event</dt>
+                <dd>{date(task?.lastEventAt ?? agent?.lastEventAt ?? null)}</dd>
+              </div>
+            </dl>
+            <p className="footnote">
+              {agent?.historicallyVerified
+                ? 'Historically verified in this objective. This does not indicate online presence.'
+                : 'No live worker heartbeat is exposed by Core.'}
+            </p>
+            <section>
+              <h3>Assignment & execution</h3>
+              {tasks.length ? (
+                tasks.map((t) => (
+                  <div className="assignment" key={t.id}>
+                    <strong>{t.title}</strong>
+                    <small className="mono">{t.id}</small>
+                    <dl className="details">
+                      <div>
+                        <dt>Stage</dt>
+                        <dd>{t.stage}</dd>
+                      </div>
+                      <div>
+                        <dt>Worker ID</dt>
+                        <dd>{t.workerId ?? 'UNKNOWN'}</dd>
+                      </div>
+                      <div>
+                        <dt>Claim elapsed²</dt>
+                        <dd>{duration(claimElapsed(t, now, !disconnected))}</dd>
+                      </div>
+                      <div>
+                        <dt>Permit queue</dt>
+                        <dd>{t.queuePosition ?? 'UNKNOWN'}</dd>
+                      </div>
+                      <div>
+                        <dt>Dependencies</dt>
+                        <dd>{t.dependsOn.length ? t.dependsOn.join(', ') : 'None'}</dd>
+                      </div>
+                    </dl>
+                    <Trace task={t} />
+                  </div>
+                ))
+              ) : (
+                <>
+                  <p className="muted">No current assignment observed.</p>
+                  {history.find((r) => r.id !== null && r.id === r.task.runId && r.task.traceUrl) && (
+                    <p className="footnote">
+                      Latest recorded run:{' '}
+                      <Trace task={history.find((r) => r.id !== null && r.id === r.task.runId && r.task.traceUrl)!.task} />
+                    </p>
+                  )}
+                </>
+              )}
+              <p className="footnote">
+                ² Time since scheduler claim, including preparation and waiting. Inference duration is unavailable.
+              </p>
+            </section>
+          </>
+        )}
+        {tab === 'Usage' && (
+          <>
+            <UsageView title="Current run usage" usage={observations.currentUsage} callCount={observations.current.length || null} />
+            <p className="footnote">Current assignment runs only. Task totals are not substituted for run usage.</p>
+            <section>
+              <UsageView
+                title="Historical reported usage"
+                usage={observations.historicalUsage}
+                callCount={observations.historical.length || null}
+              />
+              <p className="footnote">
+                Other runs in this selected objective only. Reported call observations may be incomplete; retries and cancelled calls are
+                counted once when reported. UNKNOWN does not mean zero.
+              </p>
+            </section>
+          </>
+        )}
+        {tab === 'Runs' && (
+          <>
+            <section className="run-list">
+              <h3>
+                Recent tasks / runs <span className="count">{history.length}</span>
+              </h3>
+              {history.length ? (
+                history.map((r) => (
+                  <div className="assignment" key={`${r.task.id}:${r.id ?? 'no-run'}`}>
+                    <strong>{r.task.title}</strong>
+                    <small className="mono">{r.id ?? 'Run ID UNKNOWN'}</small>
+                    <dl className="details">
+                      <div>
+                        <dt>Execution duration</dt>
+                        <dd>UNKNOWN</dd>
+                      </div>
+                      <div>
+                        <dt>Retry count</dt>
+                        <dd>UNKNOWN</dd>
+                      </div>
+                      <div>
+                        <dt>Final run outcome</dt>
+                        <dd>UNKNOWN</dd>
+                      </div>
+                      <div>
+                        <dt>Task state</dt>
+                        <dd>{r.task.state}</dd>
+                      </div>
+                    </dl>
+                    {r.id !== null && r.id === r.task.runId ? <Trace task={r.task} /> : <span className="muted">Trace unavailable</span>}
+                  </div>
+                ))
+              ) : (
+                <p className="muted">No recent tasks or runs in this objective.</p>
+              )}
+              <p className="footnote">
+                Per-run duration, retries and final outcome are not exposed by Core. The task state is shown separately.
+              </p>
+            </section>
+            <section>
+              <h3>Execution timeline</h3>
+              <Timeline events={events} />
+            </section>
+          </>
+        )}
       </div>
     </aside>
   );
@@ -410,7 +560,7 @@ function Providers({ snapshot }: { snapshot: Snapshot }) {
                 <td className="muted">{number(p.usage.cachedInputTokens)}</td>
                 <td className="muted">{number(p.usage.reasoningTokens)}</td>
                 <td className="muted">
-                  {number(p.usage.actualCostUsd)} / {number(p.quota)}
+                  {number(priced(p.usage) ? p.usage.actualCostUsd : null)} / {number(p.quota)}
                 </td>
                 <td className="mono">{p.permits === null ? 'UNKNOWN' : `${p.permitsInUse} / ${p.permits}`}</td>
               </tr>
@@ -574,6 +724,7 @@ function App() {
                               <th>Agent / provider</th>
                               <th>Current activity</th>
                               <th>Current assignment</th>
+                              <th>Elapsed / task tokens</th>
                               <th>Last outcome</th>
                               <th>Last event</th>
                             </tr>
@@ -596,11 +747,11 @@ function App() {
                                   </button>
                                 </td>
                                 <td>
-                                  <Badge value={connected ? a.activity : 'UNKNOWN'} />
+                                  <Badge value={observedActivity(a, currentTasks(snapshot, a), connected, now)} />
                                 </td>
                                 <td>
-                                  {a.assignmentIds.length ? (
-                                    a.assignmentIds.map((id) => (
+                                  {currentTasks(snapshot, a).length ? (
+                                    currentTasks(snapshot, a).map(({ id }) => (
                                       <button key={id} className="text-button assignment-link" onClick={() => pickTask(id)}>
                                         {id}
                                       </button>
@@ -608,6 +759,9 @@ function App() {
                                   ) : (
                                     <span className="muted">No assignment observed</span>
                                   )}
+                                </td>
+                                <td>
+                                  <AgentMeasurements agent={a} snapshot={snapshot} now={now} connected={connected} />
                                 </td>
                                 <td>{a.lastOutcome ? <Badge value={a.lastOutcome} /> : <span className="muted">Unknown</span>}</td>
                                 <td className="muted">{date(a.lastEventAt)}</td>
@@ -638,6 +792,63 @@ function App() {
                 )}
                 {page === 'Overview' && (
                   <>
+                    <section className="panel">
+                      <div className="panel-heading">
+                        <h2>Agent activity</h2>
+                        <span className="muted">Current task usage · selected objective</span>
+                      </div>
+                      <div className="table-scroll">
+                        <table aria-label="Agent activity">
+                          <thead>
+                            <tr>
+                              <th>Agent</th>
+                              <th>Activity</th>
+                              <th>Current Task</th>
+                              <th>Elapsed</th>
+                              <th>Tokens</th>
+                              <th>Last Outcome</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {snapshot.agents.map((a) => {
+                              const assigned = currentTasks(snapshot, a);
+                              return (
+                                <tr key={a.id}>
+                                  <td>
+                                    <button className="text-button" onClick={() => setSelected({ kind: 'agent', id: a.id })}>
+                                      {a.name}
+                                    </button>
+                                  </td>
+                                  <td>
+                                    <Badge value={observedActivity(a, assigned, connected, now)} />
+                                  </td>
+                                  <td>
+                                    {assigned.length ? (
+                                      assigned.map((t) => (
+                                        <button key={t.id} className="text-button assignment-link" onClick={() => pickTask(t.id)}>
+                                          {t.id}
+                                        </button>
+                                      ))
+                                    ) : (
+                                      <span className="muted">No assignment observed</span>
+                                    )}
+                                  </td>
+                                  <td>
+                                    <AgentMeasurements agent={a} snapshot={snapshot} now={now} connected={connected} part="elapsed" />
+                                  </td>
+                                  <td>
+                                    <AgentMeasurements agent={a} snapshot={snapshot} now={now} connected={connected} part="tokens" />
+                                  </td>
+                                  <td>{a.lastOutcome ? <Badge value={a.lastOutcome} /> : 'UNKNOWN'}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                      <p className="panel-note">Elapsed is time since the scheduler claim, including preparation and waiting.</p>
+                    </section>
+
                     <section className="panel">
                       <div className="panel-heading">
                         <h2>Objective snapshot</h2>

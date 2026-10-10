@@ -714,3 +714,32 @@ dd {
     font-size: 21px;
   }
 }
+
+/* Inspector refinement: preserve the existing shell and theme tokens. */
+.inspector-tabs {
+  display: flex;
+  gap: 16px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--border);
+}
+.inspector-tabs button {
+  padding: 9px 0;
+  font-size: 11px;
+  color: var(--muted);
+  border-bottom: 2px solid transparent;
+}
+.inspector-tabs button[aria-selected='true'] {
+  color: var(--text);
+  border-bottom-color: var(--text);
+}
+.inspector-panel {
+  display: block;
+}
+.inspector .run-list {
+  border-top: 0;
+  padding-top: 0;
+  margin-top: 0;
+}
+.agent-measurement + .agent-measurement {
+  margin-top: 5px;
+}

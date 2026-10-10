@@ -6,7 +6,7 @@
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "start": "node --disable-warning=ExperimentalWarning ../../src/integrations/control-center/cli.ts",
-    "test": "node --disable-warning=ExperimentalWarning --test ../../src/integrations/control-center/*.test.ts",
+    "test": "node --disable-warning=ExperimentalWarning --test ../../src/integrations/control-center/*.test.ts && node --disable-warning=ExperimentalWarning --test src/*.test.ts",
     "test:ui": "node --disable-warning=ExperimentalWarning --test browser.test.mjs"
   },
   "dependencies": {

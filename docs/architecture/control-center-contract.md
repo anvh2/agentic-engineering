@@ -83,3 +83,17 @@ Provide a side-effect-free read module without importing providers or constructi
 7. Safe Mastra metadata links/trace IDs tied to each run; explicit run lifecycle and authoritative objective lifecycle if different from batches.
 
 Platform can then wire those interfaces into this contract. Coordinate any shape/semantic changes rather than independently changing the API. No instrumentation changes are included in this slice.
+
+## UI refinement handoff — activity and usage tabs
+
+The refinement preserves the existing neutral shell, hierarchy, inspector dimensions and Gateway/API schemas. Organization rows now show claim elapsed time and reported **current-task** tokens; Overview adds `Agent | Activity | Current Task | Elapsed | Tokens | Last Outcome`. The inspector has keyboard-accessible Overview/Usage/Runs tabs (arrow keys, Home/End, Escape).
+
+Usage is derived only from the existing `Snapshot.calls` and task usage fields. Current-run usage matches an assigned active task's exact `runId`; historical reported usage excludes those calls and remains within the selected objective/provider/task. A task total is never relabeled as a run total. Stable call IDs are deduplicated, completed observations take precedence over pending replays, and snapshots replace totals through the existing SSE path. Cached/reasoning breakdowns are never added to input/output. If a dimension is missing in any included call, its aggregate stays UNKNOWN. Reported call count is a count of known distinct observations, not an assertion of complete instrumentation; no observations means UNKNOWN. Costs display only with explicit matching model and pricing provenance.
+
+Missing Core fields, **not added to the API by this refinement**:
+
+- Per-agent `lastHeartbeatAt` plus freshness/availability evidence. The UI uses `lastEventAt` with that exact label, never pretending it is a heartbeat.
+- Per-run start/end or authoritative duration, retry count (coding retries versus runtime retries), and final run outcome. `ModelCall.attempt` cannot establish runtime retry count; task state cannot establish each run's outcome. Runs therefore show UNKNOWN for these fields and the task state separately.
+- Complete run/call collection coverage, task/run usage correlation and safe trace links for historical runs. Existing call `completeness` describes reported observations, not assurance that every call has been collected. Current and historical totals remain explicitly reported/scoped.
+
+Production currently supplies no model calls, so run usage and counts remain UNKNOWN until Claude exposes the existing requested read models. Tests use explicitly synthetic telemetry to exercise live updates, separate current/history values and SSE reconnection. No provider events or online presence are simulated in production; RUNNING is accepted only from the activity contract with a current, non-expired assignment. Historical success never creates activity.
