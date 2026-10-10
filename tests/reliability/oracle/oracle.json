@@ -1,7 +1,7 @@
 {
   "schema": "agentic.m10_1-oracle/1",
   "version": 3,
-  "sha256": "e28f26b7401f050a1e61ca68b6826b9ef5883728b4a8bb552be651ddb67f8cf7",
+  "sha256": "eae51c9b416444731c4cc33282528e983f95a44afe36143a599adafcd192c8b0",
   "pinnedAt": "2026-10-10",
   "baselineRef": "c77ffdd",
   "owner": "Claude (Engineering Lead session of M10.1, Sonnet 5.5): wrote the oracle AND will write the implementation. Disclosed; independence comes from the reviewer, the pinned-before-implementation order, the protected files and the mutants below.",
@@ -21,6 +21,12 @@
     {
       "version": 3,
       "note": "M10.1: O-F2 replaced by run-scoped ownership (16 cases + 3 guards), O-SA and O-PR added, O-FP/O-SM/O-RL carried; not-ready budget 15 s; lease-isolation must carry evidence of what it proves. Amendment reason: v2's O-F2 asserted behaviour that is itself unsafe; the operator's M10.1 mission specifies the corrected properties."
+    },
+    {
+      "version": "3.1",
+      "from": "e28f26b7401f050a1e61ca68b6826b9ef5883728b4a8bb552be651ddb67f8cf7",
+      "sha256": "eae51c9b416444731c4cc33282528e983f95a44afe36143a599adafcd192c8b0",
+      "note": "Type annotation only (`const copy: Record<string, any>`), required for `tsc --noEmit` to pass on the oracle file. No runtime change: node strips types. Made by the implementer before any candidate verdict, disclosed here; the baseline negative control was re-run on the new hash."
     }
   ],
   "reviewFindings": {

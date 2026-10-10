@@ -238,7 +238,7 @@ function leaseRows(db: string, resource: string): Record<string, any>[] {
 }
 /** Re-creates a lease row exactly (a holder that crashed: it never renews), with a new id and the given expiry. */
 function replayLease(db: string, row: Record<string, any>, expiresAt: number): void {
-  const copy = { ...row, id: randomUUID(), acquired_at: expiresAt - 1_000, expires_at: expiresAt };
+  const copy: Record<string, any> = { ...row, id: randomUUID(), acquired_at: expiresAt - 1_000, expires_at: expiresAt };
   const cols = Object.keys(copy);
   const d = new DatabaseSync(db);
   try {
