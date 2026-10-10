@@ -743,3 +743,25 @@ dd {
 .agent-measurement + .agent-measurement {
   margin-top: 5px;
 }
+
+/* Embedded under the actual Studio sidebar; existing hierarchy and inspector stay intact. */
+.app.embedded { min-height: 100vh; }
+/* .app is flex and .workspace is offset for the fixed standalone sidebar, which is not rendered here. */
+.embedded .workspace { margin-left: 0; width: 100%; }
+.embedded .topbar { display: none; }
+.organization-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--border); padding: 8px 16px; }
+.organization-tabs button, .thread-list button { padding: 8px 10px; background: transparent; color: inherit; border: 1px solid transparent; border-radius: 4px; cursor: pointer; text-align: left; }
+.organization-tabs [aria-current], .thread-list [aria-current] { border-color: var(--border); background: var(--surface); }
+.collaboration-layout { display: grid; grid-template-columns: minmax(150px, 220px) minmax(0, 1fr); gap: 12px; align-items: start; }
+.thread-list { display: flex; flex-direction: column; padding: 8px; }
+.collaboration-meta { padding: 0 16px; font-size: 12px; color: var(--muted); }
+.message { padding: 16px; border-top: 1px solid var(--border); font-size: 13px; overflow-wrap: anywhere; }
+.message header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.message time { margin-left: auto; font-size: 11px; color: var(--muted); }
+.message-text { white-space: pre-wrap; }
+.source-links { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; margin: 8px 0; }
+.selected-message { outline: 1px solid var(--muted); outline-offset: -2px; }
+.meeting-inspector { padding: 16px; font-size: 13px; overflow-wrap: anywhere; }
+.meeting-inspector h3 { margin-top: 20px; }
+.usage-panel { padding: 16px; }
+@media (max-width: 720px) { .collaboration-layout { grid-template-columns: 1fr; } }

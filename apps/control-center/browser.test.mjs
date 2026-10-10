@@ -196,3 +196,50 @@ test(
     assert.equal(await panel.getByText('RUNNING', { exact: true }).count(), 0);
   },
 );
+
+test('discussion and meeting inspectors: unavailable production, attributed fixtures, polling replay, sources and disconnect',
+  { skip: !process.env.CHROME_EXECUTABLE && 'Set CHROME_EXECUTABLE' }, async t => {
+    const { collaborationFixture } = await import('./__testing__/collaboration-fixture.ts');
+    const f = fixture(Date.now());
+    const gateway = createGateway({ reader: f.reader, assetsDir: fileURLToPath(new URL('./dist/', import.meta.url)) });
+    gateway.server.listen(0, '127.0.0.1'); await once(gateway.server, 'listening');
+    const browser = await chromium.launch({ executablePath: process.env.CHROME_EXECUTABLE, headless: true });
+    t.after(async () => { await browser.close(); gateway.closeStreams(); gateway.server.closeAllConnections(); await new Promise(r => gateway.server.close(r)); f.close(); });
+    const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+    await page.goto(`http://127.0.0.1:${gateway.server.address().port}`);
+    await page.getByRole('button', { name: 'Discussions', exact: true }).click();
+    await page.getByText('NOT AVAILABLE', { exact: true }).waitFor();
+    assert.equal(await page.getByText('SYNTHETIC TEST DATA', { exact: false }).count(), 0);
+    let polls = 0;
+    await page.route('**/api/v1/collaboration', route => {
+      polls++;
+      const payload = structuredClone(collaborationFixture);
+      payload.threads[0].messages.push({ ...payload.threads[0].messages[0], chainOfThought: 'NEVER_RENDER_PRIVATE' });
+      return route.fulfill({ json: payload });
+    });
+    await page.getByRole('region', { name: 'Discussion transcript' }).waitFor();
+    assert.equal(await page.locator('.message').count(), 3);
+    assert.ok((await page.locator('main').innerText()).includes('SYNTHETIC TEST DATA'));
+    assert.equal(await page.getByText('NEVER_RENDER_PRIVATE', { exact: false }).count(), 0);
+    await page.getByText('Objection: OPEN', { exact: true }).waitFor();
+    await page.getByRole('link', { name: 'm1', exact: true }).click();
+    await page.getByRole('button', { name: 'Meetings', exact: true }).click();
+    const inspector = page.getByRole('region', { name: 'Meeting inspector' });
+    await inspector.waitFor();
+    assert.ok((await inspector.innerText()).includes('Cancellation evidence remains unresolved.'));
+    assert.ok((await inspector.innerText()).includes('Input: UNKNOWN · Output: UNKNOWN'));
+    assert.ok((await inspector.innerText()).includes('Owner: Codex · Follow-up: PENDING'));
+    await inspector.getByRole('button', { name: 'Source message m3', exact: true }).last().click();
+    await page.locator('#message-m3.selected-message').waitFor();
+    const previous = polls;
+    await page.waitForTimeout(5500);
+    assert.ok(polls > previous);
+    assert.equal(await page.locator('.message').count(), 3);
+    for (const width of [1440, 768, 390]) {
+      await page.setViewportSize({ width, height: 960 });
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+    }
+    await page.route('**/api/v1/collaboration', route => route.abort());
+    await page.getByText('Collaboration connection unavailable.', { exact: false }).waitFor();
+    assert.equal(await page.locator('.message').count(), 0);
+  });

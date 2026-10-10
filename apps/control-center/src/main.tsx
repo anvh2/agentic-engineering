@@ -24,15 +24,21 @@ import {
   type Usage,
 } from '../../../src/integrations/control-center/contract.ts';
 import { claimElapsed, currentTasks, inspectorObservations, observedActivity, priced, taskUsage } from './observations.ts';
+import { CollaborationView } from './collaboration.tsx';
 import './style.css';
+const embedded = window.location.pathname.startsWith('/organization-app/');
+const apiBase = embedded ? '/control-center/v1' : '/api/v1';
 
-type Page = 'Overview' | 'Organization' | 'Objectives' | 'Runs' | 'Reviews';
+type Page = 'Overview' | 'Organization' | 'Objectives' | 'Runs' | 'Reviews' | 'Discussions' | 'Meetings' | 'Usage';
 const pages = [
   { name: 'Overview', icon: Layers },
   { name: 'Organization', icon: Network },
   { name: 'Objectives', icon: ListChecks },
   { name: 'Runs', icon: Activity },
   { name: 'Reviews', icon: CheckCheck },
+  { name: 'Discussions', icon: ListChecks },
+  { name: 'Meetings', icon: Network },
+  { name: 'Usage', icon: Activity },
 ] as const;
 const number = (n: number | null) => (n === null ? 'UNKNOWN' : n.toLocaleString());
 const date = (n: number | null) => (n === null ? 'UNKNOWN' : new Date(n).toLocaleString());
@@ -57,7 +63,7 @@ function Empty({ children }: { children: ReactNode }) {
 }
 function Trace({ task }: { task: ControlTask }) {
   return task.traceUrl ? (
-    <a className="trace" href={task.traceUrl} target="_blank" rel="noreferrer">
+    <a className="trace" href={task.traceUrl} target={embedded ? "_top" : "_blank"} rel="noreferrer">
       Mastra run <ArrowUpRight size={12} />
     </a>
   ) : (
@@ -136,7 +142,7 @@ function useSnapshot(objectiveId: string) {
       setSnapshot(parsed.data);
       setConnection(parsed.data.source);
     };
-    fetch(`/api/v1/snapshot${query}`, { signal: abort.signal })
+    fetch(`${apiBase}/snapshot${query}`, { signal: abort.signal })
       .then((r) => {
         if (!r.ok) throw new Error();
         return r.json();
@@ -147,7 +153,7 @@ function useSnapshot(objectiveId: string) {
       .catch(() => {
         if (active && !eventArrived) setConnection('disconnected');
       });
-    const stream = new EventSource(`/api/v1/events${query}`);
+    const stream = new EventSource(`${apiBase}/events${query}`);
     stream.addEventListener('snapshot', (event) => {
       eventArrived = true;
       try {
@@ -583,6 +589,16 @@ function App() {
       return 'dark';
     }
   });
+  useEffect(() => {
+    if (!embedded) return;
+    window.parent.postMessage({ type: 'organization-ready' }, window.location.origin);
+    const parent = window.parent.document.documentElement;
+    const sync = () => setTheme(parent.classList.contains('dark') || parent.dataset.theme === 'dark' ? 'dark' : 'light');
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(parent, { attributes: true, attributeFilter: ['class', 'data-theme'] });
+    return () => observer.disconnect();
+  }, []);
   const [now, setNow] = useState(Date.now());
   const { snapshot, connection } = useSnapshot(objectiveId);
   useEffect(() => {
@@ -600,11 +616,11 @@ function App() {
   const pickTask = (id: string) => setSelected({ kind: 'task', id });
   const connected = connection === 'connected';
   return (
-    <div className="app">
+    <div className={`app ${embedded ? 'embedded' : ''}`}>
       <a className="skip-link" href="#main">
         Skip to content
       </a>
-      <nav className="sidebar" aria-label="Primary">
+      {!embedded && <nav className="sidebar" aria-label="Primary">
         <div className="brand">
           <Terminal size={19} />
           <span>
@@ -634,8 +650,9 @@ function App() {
           </span>
           <p>No execution controls</p>
         </div>
-      </nav>
+      </nav>}
       <div className="workspace">
+        {embedded && <nav className="organization-tabs" aria-label="Organization views">{pages.map(({name}) => <button key={name} aria-current={page === name ? 'page' : undefined} onClick={() => { setPage(name); setSelected(null); }}>{name === 'Organization' ? 'Agent Chart' : name}</button>)}</nav>}
         <header className="topbar">
           <div className="breadcrumb">
             <PanelLeft size={16} />
@@ -706,6 +723,7 @@ function App() {
                 Choose an objective to inspect its tasks and runs. Agent roles below do not indicate configuration or online presence.
               </div>
             )}
+            {(page === 'Discussions' || page === 'Meetings') && <CollaborationView kind={page} apiBase={apiBase} />}
             {snapshot && (
               <>
                 {page === 'Organization' && (
@@ -771,6 +789,7 @@ function App() {
                         </table>
                       </div>
                       <p className="panel-note">Activity and outcome are separate. A completed run does not make a worker online.</p>
+                      <div className="panel-note" aria-label="Verifier role"><strong>Verifier</strong> · Deterministic runtime verification role · Activity UNKNOWN. Individual verifier identity and heartbeat are not exposed by Core.</div>
                     </section>
                     <Providers snapshot={snapshot} />
                     <section className="panel compact">
@@ -874,6 +893,10 @@ function App() {
                       </div>
                       <TaskTable tasks={snapshot.tasks} onSelect={pickTask} now={connected ? now : snapshot.observedAt} />
                     </section>
+                    <section className="panel">
+                      <div className="panel-heading"><h2>Objective DAG</h2><span className="muted">Persisted dependency edges</span></div>
+                      {snapshot.tasks.length ? <div className="table-scroll"><table aria-label="Objective DAG"><thead><tr><th>Task</th><th>Depends on</th></tr></thead><tbody>{snapshot.tasks.map(t => <tr key={t.id}><td><button className="text-button" onClick={() => pickTask(t.id)}>{t.id}</button></td><td>{t.dependsOn.length ? t.dependsOn.map(id => <button className="text-button assignment-link" key={id} onClick={() => pickTask(id)}>{id}</button>) : 'None'}</td></tr>)}</tbody></table></div> : <Empty>No dependency graph in this scope.</Empty>}
+                    </section>
                     <section className="panel compact">
                       <UsageView usage={snapshot.usage} />
                     </section>
@@ -929,6 +952,7 @@ function App() {
                     )}
                   </section>
                 )}
+                {page === 'Usage' && <><section className="panel usage-panel"><UsageView usage={snapshot.usage} title="Objective usage" /></section><Providers snapshot={snapshot} /></>}
                 {page === 'Reviews' && (
                   <section className="panel">
                     <div className="panel-heading">
