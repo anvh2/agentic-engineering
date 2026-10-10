@@ -8,6 +8,7 @@ import { RequestContext } from '@mastra/core/request-context';
 import { z } from 'zod';
 import { REPOSITORY_ROOT_CONTEXT_KEY } from '../../workers/tools/repository-tools.ts';
 import { runSandboxedCommand, sandboxStatus } from '../sandbox/sandbox.ts';
+import { scrubForWorker } from './worker-feedback.ts';
 import { CapacityWaitTimeout, capacityFor, modelWaitBudgetMs, type CapacityLease, type ModelCapacity } from '../capacity/model-capacity.ts';
 import { createRepairLoopTracker } from './repair-loop-tracker.ts';
 import { runtimeMetrics, type RuntimeMetrics } from '../../observability/metrics.ts';
@@ -598,7 +599,7 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
         trace.emit('verification_finished', { command, phase: 'format', exitCode: r.exitCode, timedOut: r.timedOut, output: tail(r.stderr || r.stdout, 500) });
         if (!r.success) {
           formatterOk = false;
-          previousFailure = `gofmt failed on ${f}:\n${tail(r.stderr || r.stdout, MAX_FAILURE_CHARS)}`;
+          previousFailure = scrubForWorker(`gofmt failed on ${f}:\n${tail(r.stderr || r.stdout, MAX_FAILURE_CHARS)}`, { roots: { [repoRoot]: '<repo>' } });
         }
       }
       // Non-Go files have no formatter; the runtime only normalizes the EOF newline so a whole-file rewrite
@@ -633,7 +634,8 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
             record.verification = { command, exitCode: r.exitCode, timedOut: r.timedOut, output };
             trace.emit('verification_finished', { command, phase: 'verify', exitCode: r.exitCode, timedOut: r.timedOut, durationMs: Date.now() - started, output });
             if (!r.success) {
-              previousFailure = `$ ${command.join(' ')}\nexit code: ${r.exitCode}${r.timedOut ? ' (timed out)' : ''}\n${output}`;
+              // The output goes to the next attempt's prompt (a cloud provider, for Codex): host identity is scrubbed first (worker-feedback.ts).
+              previousFailure = scrubForWorker(`$ ${command.join(' ')}\nexit code: ${r.exitCode}${r.timedOut ? ' (timed out)' : ''}\n${output}`, { roots: { [repoRoot]: '<repo>' } });
               break;
             }
           }

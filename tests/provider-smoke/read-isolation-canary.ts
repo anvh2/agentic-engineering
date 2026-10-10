@@ -308,3 +308,65 @@ export async function launcherAuthCheck(options: { command?: string; readAllowPa
     rmSync(codexHome, { recursive: true, force: true });
   }
 }
+
+/**
+ * The verifier sandbox (worker-written code run by `go test`, review, integration, acceptance) proves itself the same way: a synthetic file
+ * planted in the real home directory must be unreadable to a command run through `runSandboxedCommand`, worker-style Go test code must not
+ * find it, and the Go toolchain must still build and test. Returns the problems found; empty means contained.
+ */
+export async function verifierSandboxProblems(): Promise<string[]> {
+  const { runSandboxedCommand, sandboxStatus } = await import('../../src/runtime/sandbox/sandbox.ts');
+  const problems: string[] = [];
+  const status = await sandboxStatus();
+  if (!status.available) return [`the verifier sandbox is unavailable: ${status.reason ?? 'unknown'}`];
+  const realHome = realpathSync(homedir());
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'agentic-vcanary-')));
+  const synth = join(realHome, `.agentic-vcanary-${Math.random().toString(36).slice(2, 8)}`);
+  const marker = `M87BSYNTH-${Math.random().toString(36).slice(2, 12)}`;
+  try {
+    mkdirSync(join(synth, '.ssh'), { recursive: true });
+    writeFileSync(join(synth, '.ssh', 'id_ed25519'), `${marker}\n`);
+    writeFileSync(join(synth, 'notes.txt'), `${marker}\n`);
+    const root = join(base, 'root');
+    mkdirSync(root);
+    writeFileSync(join(root, 'go.mod'), 'module canary\n\ngo 1.22\n');
+    writeFileSync(join(root, 'a.go'), 'package canary\n\nfunc F() int { return 1 }\n');
+    writeFileSync(
+      join(root, 'a_test.go'),
+      `package canary
+
+import (
+	"os"
+	"testing"
+)
+
+func TestF(t *testing.T) {
+	for _, p := range []string{${JSON.stringify(join(synth, '.ssh', 'id_ed25519'))}, ${JSON.stringify(join(synth, 'notes.txt'))}} {
+		if b, err := os.ReadFile(p); err == nil {
+			t.Fatalf("read %q", string(b))
+		}
+	}
+	if F() != 1 {
+		t.Fatal("F")
+	}
+}
+`,
+    );
+    const run = (cmd: string, args: string[]) => runSandboxedCommand(cmd, args, { cwd: root, root, timeoutMs: 180_000 });
+    for (const file of [join(synth, '.ssh', 'id_ed25519'), join(synth, 'notes.txt')]) {
+      const r = await run('/bin/cat', [file]);
+      if (`${r.stdout}${r.stderr}`.includes(marker) || r.exitCode === 0) problems.push(`verifier sandbox: a command read ${file.replace(realHome, '~')}`);
+    }
+    for (const args of [['build', './...'], ['test', '-count=1', './...'], ['vet', './...']]) {
+      const r = await run('go', args);
+      if (r.exitCode !== 0) problems.push(`verifier sandbox: go ${args[0]} fails (exit ${r.exitCode}): ${`${r.stdout}${r.stderr}`.slice(0, 160)}`);
+      if (`${r.stdout}${r.stderr}`.includes(marker)) problems.push('verifier sandbox: worker-style test code read a planted file');
+    }
+    const fmt = await run('gofmt', ['-l', '.']);
+    if (fmt.exitCode !== 0) problems.push(`verifier sandbox: gofmt fails (exit ${fmt.exitCode})`);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+    rmSync(synth, { recursive: true, force: true });
+  }
+  return problems;
+}

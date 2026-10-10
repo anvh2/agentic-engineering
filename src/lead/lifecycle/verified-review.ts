@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { redact } from '../../runtime/execution/coding-task-trace.ts';
+import { scrubForWorker } from '../../runtime/execution/worker-feedback.ts';
 import type { CommandRunner } from '../../runtime/integration/integrate.ts';
 import type { SchedulerStore } from '../../runtime/scheduler/store.ts';
 import { ownedFilesOf } from '../../runtime/scheduler/types.ts';
@@ -82,7 +83,8 @@ export interface VerifiedReviewDeps {
 const REPAIRABLE_WARNINGS = new Set(['comment_removed', 'too_large']);
 const MAX_FEEDBACK_CHARS = 2000;
 
-const clean = (text: string): string => redact(text).replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, ' ');
+/** Text that becomes the correction task's prompt: redacted, control-stripped and scrubbed of host identity (worker-feedback.ts). */
+const clean = (text: string): string => scrubForWorker(text);
 
 export async function verifyReview(deps: VerifiedReviewDeps, taskId: string): Promise<ReviewVerdict> {
   const { store, worktrees } = deps;

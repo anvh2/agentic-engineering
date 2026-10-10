@@ -204,6 +204,36 @@ describe('sandbox: fail closed', { skip: !darwin && 'macOS only' }, () => {
   });
 });
 
+describe('sandbox: fail closed on reads (M8.7B)', { skip: !darwin && 'macOS only' }, () => {
+  let base: string;
+  before(async () => {
+    base = realpathSync(await mkdtemp(join(tmpdir(), 'sbx-failclosed-read-')));
+  });
+  afterEach(() => {
+    delete process.env.AGENTIC_SANDBOX_EXEC;
+    resetSandboxStatusForTests();
+  });
+  after(() => rm(base, { recursive: true, force: true }));
+
+  it('a sandbox that confines writes but lets the command read anything fails the self-test, so nothing runs', async () => {
+    // The previous profile's isolation: real sandbox-exec, writes confined, reads open.
+    const fake = join(base, 'write-only-sandbox-exec');
+    await writeFile(
+      fake,
+      '#!/bin/sh\nargs=""\nwhile [ "$1" = "-D" ]; do args="$args -D $2"; shift 2; done\n[ "$1" = "-p" ] && shift 2\nexec /usr/bin/sandbox-exec $args -p \'(version 1)(allow default)(deny file-write*)(allow file-write* (subpath (param "ROOT")) (subpath (param "TMP")))\' "$@"\n',
+    );
+    await chmod(fake, 0o755);
+    process.env.AGENTIC_SANDBOX_EXEC = fake;
+    resetSandboxStatusForTests();
+    const status = await sandboxStatus();
+    assert.equal(status.available, false);
+    assert.match(status.reason ?? '', /read outside the root and the allow-list was not blocked/);
+    const r = await sh(base, 'echo ran > ran3.txt');
+    assert.equal(r.sandboxUnavailable, true);
+    assert.equal(existsSync(join(base, 'ran3.txt')), false, 'the command never executed');
+  });
+});
+
 describe('sandbox: deny-read paths (oracle isolation)', { skip: !darwin && 'macOS only' }, () => {
   let base: string;
   let root: string;
@@ -220,9 +250,13 @@ describe('sandbox: deny-read paths (oracle isolation)', { skip: !darwin && 'macO
   after(() => rm(base, { recursive: true, force: true }));
   const run = (script: string, denyRead?: string[]) => runSandboxedCommand('/bin/sh', ['-c', script], { cwd: root, root, timeoutMs: 20_000, denyRead });
 
-  it('without a deny list the same path is readable (so the next assertions prove the rule, not the path)', async () => {
-    const r = await run(`cat "${secret}/acceptance_test.go"`);
-    assert.match(r.stdout, /ORACLE-SOURCE/);
+  it('a path outside the root, the temp dir and the toolchain is unreadable by default; an explicit readAllow opens it; denyRead still wins', async () => {
+    const closed = await run(`cat "${secret}/acceptance_test.go"; echo "cat=$?"`);
+    assert.doesNotMatch(closed.stdout, /ORACLE-SOURCE/, 'the allow-list keeps it closed without any deny rule');
+    const opened = await runSandboxedCommand('/bin/sh', ['-c', `cat "${secret}/acceptance_test.go"`], { cwd: root, root, timeoutMs: 20_000, readAllow: [secret] });
+    assert.match(opened.stdout, /ORACLE-SOURCE/, 'the trusted caller can add a path');
+    const denied = await runSandboxedCommand('/bin/sh', ['-c', `cat "${secret}/acceptance_test.go"; echo "cat=$?"`], { cwd: root, root, timeoutMs: 20_000, readAllow: [secret], denyRead: [secret] });
+    assert.doesNotMatch(denied.stdout, /ORACLE-SOURCE/, 'a deny rule beats an allow rule');
   });
   it('an explicit denyRead path cannot be read, listed or stat-ed, while the rest still works', async () => {
     const r = await run(`cat "${secret}/acceptance_test.go"; echo "cat=$?"; ls "${secret}"; echo "ls=$?"; cat ok.txt; echo "ok=$?"`, [secret]);

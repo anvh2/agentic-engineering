@@ -16,7 +16,7 @@ import { WorktreeManager } from '../../src/runtime/worktree/worktree.ts';
 import type { CodexConfig } from '../../src/workers/providers/codex.ts';
 import { createHttpBackend, groupAlive, type SmokeBackend } from './http-backend.ts';
 import { credentialDenyPaths, discoverToolchainReadPaths } from '../../src/workers/providers/codex-isolation.ts';
-import { readIsolationProblems } from './read-isolation-canary.ts';
+import { readIsolationProblems, verifierSandboxProblems } from './read-isolation-canary.ts';
 
 /**
  * M8.5, the first REAL autonomous objective: one deterministic Go objective with two dependent coding tasks, run through
@@ -575,6 +575,7 @@ export async function preflightProblems(options: { codex?: CodexConfig; isolatio
   const probeDir = join(findProjectRoot() ?? process.cwd(), '.workdir');
   mkdirSync(probeDir, { recursive: true });
   const sandboxed = await runSandboxedCommand('go', ['version'], { cwd: probeDir, root: probeDir, timeoutMs: 60_000 });
+  problems.push(...(await verifierSandboxProblems()));
   if (options.isolation !== false) problems.push(...(await readIsolationProblems({ command: options.codex?.command })));
   if (sandboxed.exitCode !== 0) problems.push(`the OS sandbox cannot run the Go toolchain (exit ${sandboxed.exitCode}): ${sandboxed.stderr.slice(0, 200)}; verification would fail closed`);
   return problems;

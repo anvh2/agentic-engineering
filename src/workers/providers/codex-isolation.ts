@@ -1,7 +1,8 @@
-import { execFileSync } from 'node:child_process';
-import { accessSync, constants, existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { delimiter, dirname, join, resolve } from 'node:path';
+import { join } from 'node:path';
+import { SAFE_PATH, TOO_BROAD, canonicalPath, discoverToolchainReadPaths, isInside } from '../../runtime/sandbox/toolchain.ts';
+
+export { canonicalPath, discoverToolchainReadPaths, isInside };
 
 /**
  * What the model's commands may read, write and see when Codex runs as a coding worker. Codex executes model-issued shell commands
@@ -37,26 +38,12 @@ export const CODEX_TOOL_SURFACE_ARGS: readonly string[] = [
   '-c', 'features.view_image=false',
 ];
 
-/** A path as the profile and the TOML key quoting can carry it. Anything else is refused, never escaped. */
-const SAFE_PATH = /^\/[^\0-\x1f"'\\=]+$/;
-const TOO_BROAD = new Set(['/', '/usr', '/usr/local', '/opt', '/opt/homebrew', '/Users', '/home', '/Library', '/System', '/private', '/var', '/etc', '/Applications', '/bin', '/sbin', '/tmp']);
-
 export function checkIsolationPaths(paths: readonly string[], label: string): string[] {
   for (const p of paths) {
     if (!SAFE_PATH.test(p) || p === '/' || p.endsWith('/') || p.split('/').some((seg) => seg === '..' || seg === '.')) throw new Error(`codex ${label}: "${p}" is not an absolute, normalized path without quotes, backslashes or control characters`);
   }
   return [...paths];
 }
-
-/** The path the sandbox will see: symlinks resolved when it exists (macOS /var -> /private/var), the path itself otherwise. */
-export function canonicalPath(p: string): string {
-  try {
-    return realpathSync(p);
-  } catch {
-    return resolve(p);
-  }
-}
-export const isInside = (child: string, parent: string): boolean => child === parent || child.startsWith(`${parent}/`);
 
 /**
  * Credential and secret locations of a user account, relative to HOME. Paths that do not exist are harmless in the profile. Not a
@@ -79,61 +66,6 @@ export function credentialDenyPaths(env: NodeJS.ProcessEnv = process.env): strin
   const codexHome = env.CODEX_HOME ? canonicalPath(env.CODEX_HOME) : join(home, '.codex');
   out.add(codexHome);
   return [...out].filter((p) => SAFE_PATH.test(p)).sort();
-}
-
-const which = (tool: string, pathVar: string | undefined): string | undefined => {
-  for (const dir of (pathVar ?? '').split(delimiter)) {
-    if (!dir) continue;
-    const candidate = join(dir, tool);
-    try {
-      accessSync(candidate, constants.X_OK);
-      return candidate;
-    } catch {
-      /* next */
-    }
-  }
-  return undefined;
-};
-
-/**
- * The directories a coding toolchain needs to be READABLE inside the sandbox, found from PATH by the trusted launcher: each tool's
- * directory, its package root (a Homebrew keg, `/usr/local/go`), GOROOT, and the Xcode command-line-tools directory the `git` shim
- * needs. Anything too broad (`/opt/homebrew`, `/usr/local`, a home directory) is dropped, never granted.
- */
-export function discoverToolchainReadPaths(options: { tools?: readonly string[]; env?: NodeJS.ProcessEnv } = {}): string[] {
-  // Default: the Go toolchain only. `git` is not offered by default: inside an isolated worktree its git directory is unreadable, so the
-  // worker cannot use it, and its Xcode shim would put the whole command-line-tools directory (python, swift, clang) in reach.
-  const env = options.env ?? process.env;
-  const found = new Set<string>();
-  const add = (p: string | undefined) => {
-    if (!p) return;
-    const real = canonicalPath(p);
-    if (!SAFE_PATH.test(real) || TOO_BROAD.has(real) || !existsSync(real)) return;
-    const home = canonicalPath(env.HOME ?? homedir());
-    if (isInside(home, real) || real.startsWith(`${home}/`)) return; // never anything inside or above the home directory
-    found.add(real);
-  };
-  for (const tool of options.tools ?? ['go', 'gofmt']) {
-    const path = which(tool, env.PATH);
-    if (!path) continue;
-    add(dirname(path));
-    const real = canonicalPath(path);
-    const keg = real.match(/^(\/(?:opt\/homebrew|usr\/local)\/Cellar\/[^/]+\/[^/]+)\//);
-    if (keg) add(keg[1]);
-    else if (!/^\/(usr\/bin|bin|usr\/sbin|sbin)\//.test(real)) add(dirname(dirname(real)));
-  }
-  const toolEnv = { PATH: env.PATH ?? '', GOTOOLCHAIN: 'local', GOFLAGS: '' };
-  const run = (cmd: string, args: string[]) => {
-    try {
-      return execFileSync(cmd, args, { env: toolEnv, encoding: 'utf8', timeout: 15_000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    } catch {
-      return undefined;
-    }
-  };
-  if (which('go', env.PATH)) add(run('go', ['env', 'GOROOT']));
-  const xcode = which('xcode-select', env.PATH) ? run('xcode-select', ['-p']) : undefined;
-  if (xcode && which('git', env.PATH) && canonicalPath(which('git', env.PATH)!).startsWith('/usr/bin/')) add(xcode);
-  return [...found].sort();
 }
 
 export interface CodexIsolationOptions {

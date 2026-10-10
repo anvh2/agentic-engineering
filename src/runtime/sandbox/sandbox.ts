@@ -1,8 +1,9 @@
 import { existsSync, realpathSync } from 'node:fs';
-import { access, constants, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { access, constants, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { delimiter, isAbsolute, join } from 'node:path';
 import { runControlledCommand, type ControlledCommandResult } from '../../workers/tools/execution-tools.ts';
+import { SAFE_PATH, TOO_BROAD, canonicalPath, executableAccess, isInside } from './toolchain.ts';
 
 /**
  * OS-level isolation for every command that executes model-generated code: the runtime verifier, the worker's own
@@ -10,12 +11,18 @@ import { runControlledCommand, type ControlledCommandResult } from '../../worker
  * repository-relative checks elsewhere (mutation snapshot, change gate) only see what it did AFTER it ran.
  *
  * Inside the sandbox a command can:
+ *   - READ only an allow-list: the system pieces a toolchain needs to start, the toolchain of the executable it runs (its package root,
+ *     GOROOT, the Go module cache), its task root, its private temp dir, and paths the trusted caller adds explicitly. Everything else on the
+ *     host (the home directory, credentials, other tasks' worktrees and artifacts, the oracle) is unreadable; stat() still answers, so
+ *     existence and size of a path are observable, contents and directory listings are not. The credential and `.env` deny rules stay
+ *     underneath as a second layer;
  *   - write only inside its task root and a private temp dir created for this one command (fresh build/test caches,
  *     so one run cannot poison another's) - never the root's `.git` or `node_modules`;
- *   - not use the network at all, loopback included (the Mastra API and Ollama listen on loopback);
- *   - not read credential stores or `.env` files outside its root;
+ *   - not use the network at all, loopback included (the Mastra API and Ollama listen on loopback), and reach no Mach service but
+ *     user-info lookup: pasteboard, Keychain (securityd), preferences and the other daemons are closed (the profile is `deny default`);
  *   - not signal or inspect processes outside its own sandbox (on macOS `ps` exposes other processes' environment);
- *   - see only an allow-listed environment (the runtime's own secrets are never passed down).
+ *   - see only a built environment: locale, a PATH of the toolchain and system directories, and a HOME that is its private temp dir. The
+ *     runtime's secrets, the user name and the real home path are never passed down.
  *
  * Fail closed: if the platform has no supported sandbox, or the self-test cannot prove that a write outside the root is
  * blocked, nothing is executed and the command reports `sandboxUnavailable`. There is deliberately no opt-out.
@@ -33,10 +40,34 @@ export interface SandboxedCommandResult extends ControlledCommandResult {
   sandboxUnavailable?: boolean;
 }
 
-const PROFILE = `(version 1)
-(allow default)
-(deny network*)
-(deny file-write*)
+/**
+ * Kernel queries a toolchain makes at start-up (CPU, page size, OS version, and the host name that `uname` returns, which node's `os`
+ * module needs). Not the process table. The host name is therefore observable to sandboxed code; see `scrubForWorker`.
+ */
+const SYSCTLS = [
+  'hw.activecpu', 'hw.byteorder', 'hw.cacheconfig', 'hw.cachelinesize', 'hw.cachelinesize_compat', 'hw.cpufamily', 'hw.cputype', 'hw.l1dcachesize', 'hw.l1icachesize', 'hw.l2cachesize', 'hw.l3cachesize',
+  'hw.logicalcpu', 'hw.logicalcpu_max', 'hw.machine', 'hw.memsize', 'hw.ncpu', 'hw.nperflevels', 'hw.packages', 'hw.pagesize', 'hw.pagesize_compat', 'hw.physicalcpu', 'hw.physicalcpu_max', 'hw.cpufrequency', 'hw.tbfrequency', 'hw.vectorunit', 'hw.busfrequency_compat', 'hw.cpufrequency_compat', 'hw.l1dcachesize_compat', 'hw.l1icachesize_compat', 'hw.l2cachesize_compat', 'hw.l3cachesize_compat', 'hw.tbfrequency_compat', 'kern.hostname',
+  'machdep.cpu.brand_string', 'kern.argmax', 'kern.maxfilesperproc', 'kern.maxproc', 'kern.osproductversion', 'kern.osrelease', 'kern.ostype', 'kern.osvariant_status', 'kern.osversion', 'kern.secure_kernel', 'kern.usrstack64', 'kern.version',
+  'sysctl.proc_cputype', 'vm.loadavg', 'kern.sysv.semmns',
+];
+const SYSCTL_PREFIXES = ['hw.optional.arm.', 'hw.optional.armv8_', 'hw.perflevel', 'kern.proc.pgrp.', 'kern.proc.pid.', 'net.routetable.'];
+
+/** What every command may read besides its own toolchain, root and temp dir: system binaries and libraries, time zone data, devices. */
+const SYSTEM_READ_SUBPATHS = ['/usr/bin', '/usr/lib', '/usr/libexec', '/usr/share', '/bin', '/System', '/dev', '/Library/Apple', '/private/var/db/timezone'];
+const SYSTEM_READ_LITERALS = ['/', '/private/etc/localtime'];
+
+const PROFILE_BASE = `(version 1)
+(deny default)
+(allow process-exec)
+(allow process-fork)
+(allow signal (target same-sandbox))
+(allow process-info* (target same-sandbox))
+(allow sysctl-read ${SYSCTLS.map((n) => `(sysctl-name "${n}")`).join(' ')} ${SYSCTL_PREFIXES.map((n) => `(sysctl-name-prefix "${n}")`).join(' ')})
+(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))
+(allow file-map-executable)
+(allow ipc-posix-sem)
+(allow pseudo-tty)
+(allow file-ioctl)
 (allow file-write*
   (subpath (param "ROOT"))
   (subpath (param "TMP"))
@@ -45,25 +76,36 @@ const PROFILE = `(version 1)
 (deny file-write*
   (subpath (string-append (param "ROOT") "/.git"))
   (subpath (string-append (param "ROOT") "/node_modules")))
-(deny file-read*
+(allow file-read-metadata)
+(allow file-read* (subpath (param "ROOT")) (subpath (param "TMP")))
+`;
+
+/** Defense in depth under the allow-list: the credential and `.env` rules of the previous profile, applied after every allow. */
+const PROFILE_CREDENTIAL_DENIES = `(deny file-read*
   (subpath (string-append (param "HOME") "/.ssh"))
   (subpath (string-append (param "HOME") "/.aws"))
   (subpath (string-append (param "HOME") "/.gnupg"))
   (subpath (string-append (param "HOME") "/.docker"))
   (subpath (string-append (param "HOME") "/.kube"))
   (subpath (string-append (param "HOME") "/.claude"))
+  (subpath (string-append (param "HOME") "/.codex"))
   (subpath (string-append (param "HOME") "/.config/gh"))
+  (subpath (string-append (param "HOME") "/.config/gcloud"))
   (subpath (string-append (param "HOME") "/Library/Keychains"))
   (literal (string-append (param "HOME") "/.claude.json"))
   (literal (string-append (param "HOME") "/.netrc"))
   (literal (string-append (param "HOME") "/.npmrc"))
   (literal (string-append (param "HOME") "/.git-credentials"))
   (require-all (regex #"/\\.env(\\.[^/]*)?$") (require-not (subpath (param "ROOT")))))
-(deny signal)
-(allow signal (target same-sandbox))
-(deny process-info*)
-(allow process-info* (target same-sandbox))
 `;
+
+/** The full profile: deny-default base, the read allow-list, then the deny rules (which win over the allows that come before them). */
+function buildProfile(extraReads: readonly string[], extraDenies: string): string {
+  const reads = [...SYSTEM_READ_LITERALS.map((p) => `(literal "${p}")`), ...[...SYSTEM_READ_SUBPATHS, ...extraReads].map((p) => `(subpath "${p}")`)];
+  return `${PROFILE_BASE}(allow file-read*\n  ${reads.join('\n  ')})\n${PROFILE_CREDENTIAL_DENIES}${extraDenies}(deny signal)
+(allow signal (target same-sandbox))
+`;
+}
 
 /**
  * Extra paths the sandboxed code must not read (an objective oracle, hidden tests): `options.denyRead`, plus `AGENTIC_SANDBOX_DENY_READ`
@@ -84,8 +126,27 @@ async function denyReadProfile(explicit: readonly string[] | undefined, root: st
   return { profile: rules };
 }
 
-/** Environment passed through to sandboxed commands; everything else (tokens, API keys, NODE_OPTIONS...) is dropped. */
-const PASS_THROUGH_ENV = ['PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'GOPATH', 'GOROOT', 'GOMODCACHE'];
+/**
+ * Extra paths the trusted caller makes READABLE on top of the toolchain: `options.readAllow`, plus `AGENTIC_SANDBOX_READ_ALLOW` (absolute
+ * paths separated by the OS path delimiter). Needed when a task's dependencies live outside its worktree (a linked `node_modules`). Never
+ * derived from the worktree, whose symlinks a worker controls. Refused (the command does not run) if a path is not expressible, is too
+ * broad, or is the home directory or an ancestor of it.
+ */
+async function readAllowPaths(explicit: readonly string[] | undefined): Promise<{ paths: string[] } | { problem: string }> {
+  const env = (process.env.AGENTIC_SANDBOX_READ_ALLOW ?? '').split(delimiter).filter(Boolean);
+  const paths: string[] = [];
+  const home = canonicalPath(homeDir);
+  for (const raw of [...(explicit ?? []), ...env]) {
+    if (!SAFE_PATH.test(raw)) return { problem: `read-allow path "${raw}" must be absolute, without quotes, backslashes or control characters` };
+    const real = canonicalPath(raw);
+    if (TOO_BROAD.has(real) || isInside(home, real)) return { problem: `read-allow path ${real} is too broad (it is, or contains, the home directory or a system root)` };
+    paths.push(real);
+  }
+  return { paths };
+}
+
+/** Environment kept from the runtime's own: locale and terminal only. No user name, no home path, no secrets, no tool configuration. */
+const PASS_THROUGH_ENV = ['LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'TZ'];
 
 function sandboxExecutable(): string {
   // Override only for tests that simulate a missing/broken sandbox. A replacement that does not actually isolate
@@ -123,9 +184,24 @@ async function probe(): Promise<SandboxStatus> {
     const outside = join(dir, 'outside');
     await mkdir(root);
     await mkdir(outside);
-    const r = await runControlledCommand(exe, [...defines(root, root), '-p', PROFILE, '/bin/sh', '-c', 'echo in > "$1/in"; echo leak > "$2/out"', 'probe', root, outside], { cwd: root, timeoutMs: 10_000 });
+    await writeFile(join(outside, 'secret'), 'probe-secret\n');
+    // inside the root: write and read work; outside it: neither a write nor a read may. The read of the outside file is captured into a
+    // variable and a marker proves the statement RAN: a read that never executed (a redirect the profile refused, a crashed shell) is not
+    // evidence that reads are blocked.
+    const script = [
+      'echo in > "$1/in"',
+      'echo leak > "$2/out"',
+      'out=$(cat "$2/secret" 2>&1)',
+      'echo ran > "$1/read-ran"',
+      'printf "%s" "$out" > "$1/read-outside"',
+      'cat "$1/in" > "$1/read-inside"',
+    ].join('; ');
+    const r = await runControlledCommand(exe, [...defines(root, root), '-p', buildProfile([], ''), '/bin/sh', '-c', script, 'probe', root, outside], { cwd: root, timeoutMs: 10_000 });
     if (!existsSync(join(root, 'in'))) return { available: false, mechanism: null, reason: `sandbox self-test could not run a command: ${(r.stderr || r.stdout).trim().slice(0, 200)}` };
     if (existsSync(join(outside, 'out'))) return { available: false, mechanism: null, reason: 'sandbox self-test failed: a write outside the root was not blocked' };
+    if ((await readFile(join(root, 'read-inside'), 'utf8').catch(() => '')).trim() !== 'in') return { available: false, mechanism: null, reason: 'sandbox self-test failed: a read inside the root did not work' };
+    if (!existsSync(join(root, 'read-ran'))) return { available: false, mechanism: null, reason: 'sandbox self-test could not complete: the read probe did not run' };
+    if ((await readFile(join(root, 'read-outside'), 'utf8').catch(() => '')).includes('probe-secret')) return { available: false, mechanism: null, reason: 'sandbox self-test failed: a read outside the root and the allow-list was not blocked' };
     return { available: true, mechanism: 'sandbox-exec' };
   } catch (err) {
     return { available: false, mechanism: null, reason: `sandbox self-test failed: ${(err as Error).message}` };
@@ -177,7 +253,7 @@ function refused(command: string, reason: string, start: number): SandboxedComma
 export async function runSandboxedCommand(
   command: string,
   args: string[],
-  options: { cwd: string; root: string; timeoutMs: number; signal?: AbortSignal; denyRead?: readonly string[] },
+  options: { cwd: string; root: string; timeoutMs: number; signal?: AbortSignal; denyRead?: readonly string[]; readAllow?: readonly string[] },
 ): Promise<SandboxedCommandResult> {
   const start = Date.now();
   const status = await sandboxStatus();
@@ -193,15 +269,25 @@ export async function runSandboxedCommand(
   try {
     const deny = await denyReadProfile(options.denyRead, root, tmp);
     if ('problem' in deny) return refused(command, deny.problem, start);
+    const extra = await readAllowPaths(options.readAllow);
+    if ('problem' in extra) return refused(command, extra.problem, start);
+    const toolchain = executableAccess(executable);
     await writeFile(join(tmp, 'npmrc'), '');
     const env: NodeJS.ProcessEnv = {};
     for (const key of PASS_THROUGH_ENV) if (process.env[key] !== undefined) env[key] = process.env[key];
     Object.assign(env, {
+      // The command's own world: PATH is the toolchain and the system, HOME is its private temp dir (not the user's), no user name.
+      PATH: [...new Set([...toolchain.binDirs, '/usr/bin', '/bin'])].join(delimiter),
+      HOME: tmp,
       TMPDIR: tmp,
       GOTMPDIR: tmp,
       GOCACHE: join(tmp, 'go-build'),
+      GOPATH: join(tmp, 'go'),
       GOTOOLCHAIN: 'local',
       GOPROXY: 'off',
+      GOTELEMETRY: 'off',
+      // a worktree's git directory is not readable, so Go cannot stamp VCS information
+      GOFLAGS: '-buildvcs=false',
       CGO_ENABLED: '0',
       npm_config_cache: join(tmp, 'npm'),
       npm_config_userconfig: join(tmp, 'npmrc'),
@@ -209,8 +295,17 @@ export async function runSandboxedCommand(
       npm_config_fund: 'false',
       npm_config_audit: 'false',
       CI: '1',
+      ...toolchain.env,
     });
-    return await runControlledCommand(sandboxExecutable(), [...defines(root, tmp), '-p', PROFILE + deny.profile, executable, ...args], { cwd: options.cwd, timeoutMs: options.timeoutMs, env, signal: options.signal });
+    if (toolchain.env.GOMODCACHE) {
+      // The module cache lives under the user's home directory; its path would put the home path and the user name into the command's
+      // environment and error output. The command gets a private alias inside its temp dir; the profile grants the real directory.
+      const alias = join(tmp, 'modcache');
+      await symlink(toolchain.env.GOMODCACHE, alias);
+      env.GOMODCACHE = alias;
+    }
+    const profile = buildProfile([...toolchain.read, ...extra.paths], deny.profile);
+    return await runControlledCommand(sandboxExecutable(), [...defines(root, tmp), '-p', profile, executable, ...args], { cwd: options.cwd, timeoutMs: options.timeoutMs, env, signal: options.signal });
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }

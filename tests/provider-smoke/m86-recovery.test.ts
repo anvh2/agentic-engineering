@@ -316,17 +316,17 @@ describe('M8.6 oracle read isolation', () => {
     assert.equal(report.acceptance.verdict, 'ACCEPTED', 'isolation did not stop the objective from being judged');
   });
 
-  it('worker-written code that probes for the oracle while the verifier runs it: leaks WITHOUT isolation, finds nothing WITH it', { timeout: 600_000 }, async () => {
+  it('worker-written code that probes for the oracle while the verifier runs it finds nothing, with or without the harness isolation (the verifier sandbox is itself an allow-list since M8.7B)', { timeout: 600_000 }, async () => {
     const probe = (isolated: boolean) => (outDir: string) => ({ FAKE_ORACLE_FILE: join(isolated ? `${sandboxPath(outDir)}.oracle` : join(sandboxPath(outDir), 'oracle'), 'acceptance_test.go') });
-    const control = await run('read-oracle', { isolation: false, env: probe(false) });
-    const controlA = task(control.report, TASK_A);
-    assert.equal(control.report.isolation.enabled, false);
-    assert.notEqual(controlA.state, 'DONE', 'control: the verifier let worker-written code read the oracle (the probe panicked), so the task could not pass');
-    assert.equal(controlA.state, 'RUNTIME_FAILURE');
+    // Before M8.7B the verifier let this code read the oracle when the harness did not deny it (the probe panicked and the task could not pass).
+    // The control that the probe CAN read is now the sandbox-level test with an explicit readAllow (sandbox.test.ts); here both runs must be clean.
+    const open = await run('read-oracle', { isolation: false, env: probe(false) });
+    assert.equal(open.report.isolation.enabled, false);
+    assert.equal(task(open.report, TASK_A).state, 'DONE', 'even with no harness deny list, the allow-list verifier does not let the code read the oracle');
 
     const isolated = await run('read-oracle', { env: probe(true) });
     assert.equal(isolated.report.lifecycle.phase, 'ACCEPTED', JSON.stringify(isolated.report.lifecycle));
-    assert.equal(task(isolated.report, TASK_A).state, 'DONE', 'with isolation the same code finds nothing, so the verifier, the review and the acceptance all pass');
+    assert.equal(task(isolated.report, TASK_A).state, 'DONE', 'the same code finds nothing, so the verifier, the review and the acceptance all pass');
     assertBoundedAndClean(isolated.report, 'isolated probe');
   });
 });

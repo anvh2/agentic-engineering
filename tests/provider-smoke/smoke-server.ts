@@ -9,7 +9,7 @@ import { codexEntry, type CodexConfig } from '../../src/workers/providers/codex.
 import { geminiEntry, type GeminiConfig } from '../../src/workers/providers/gemini.ts';
 import { ProviderRegistry } from '../../src/workers/providers/registry.ts';
 import type { WorkerProvider } from '../../src/workers/providers/provider.ts';
-import { readIsolationProblems } from './read-isolation-canary.ts';
+import { readIsolationProblems, verifierSandboxProblems } from './read-isolation-canary.ts';
 
 /**
  * A dedicated, disposable Mastra HTTP server for the provider smoke test. It is NOT a second execution architecture: it
@@ -49,7 +49,7 @@ export interface SmokeServerConfig {
   runtimeRetryDelayMs?: number;
   /**
    * Fail closed: before this server accepts work, run the credential-isolation canary against the REAL codex binary with this config's
-   * allow-list, and refuse to start (nothing can then spawn Codex) if any synthetic credential is readable, any tool outside the audited
+   * allow-list, the same for the verifier sandbox, and refuse to start (nothing can then spawn Codex) if any synthetic credential is readable, any tool outside the audited
    * set is offered, or the toolchain stops working. Real runs set it; tests with a fake CLI cannot (a fake has no sandbox to test).
    */
   requireIsolationCanary?: boolean;
@@ -127,8 +127,8 @@ export class SharedInvocationBudget {
 
 export async function buildSmokeMastra(config: SmokeServerConfig): Promise<Mastra> {
   if (config.requireIsolationCanary) {
-    const problems = await readIsolationProblems({ command: config.codex?.command, readAllowPaths: config.codex?.readAllowPaths });
-    if (problems.length > 0) throw new Error(`refusing to start: Codex read isolation could not be validated:\n  - ${problems.join('\n  - ')}`);
+    const problems = [...(await verifierSandboxProblems()), ...(await readIsolationProblems({ command: config.codex?.command, readAllowPaths: config.codex?.readAllowPaths }))];
+    if (problems.length > 0) throw new Error(`refusing to start: read isolation could not be validated:\n  - ${problems.join('\n  - ')}`);
   }
   mkdirSync(dirname(config.ledgerPath), { recursive: true });
   const note = (event: Record<string, unknown>) => appendFileSync(config.ledgerPath, `${JSON.stringify({ ...event, at: new Date().toISOString(), serverPid: process.pid })}\n`);

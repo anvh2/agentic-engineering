@@ -8,7 +8,7 @@ import { describe, it } from 'node:test';
 import { CODEX_AUDITED_TOOLS, CODEX_TOOL_SURFACE_ARGS, credentialDenyPaths, discoverToolchainReadPaths } from '../../src/workers/providers/codex-isolation.ts';
 import { tempDir } from '../../src/runtime/scheduler/test-helpers.ts';
 import { TASK_A, TASK_B, runM85Objective } from './m85-objective.ts';
-import { CANARY_CREDENTIAL_NAMES, canaryProblems, launcherAuthCheck, readIsolationCanary, type CanaryResult } from './read-isolation-canary.ts';
+import { CANARY_CREDENTIAL_NAMES, canaryProblems, launcherAuthCheck, readIsolationCanary, verifierSandboxProblems, type CanaryResult } from './read-isolation-canary.ts';
 import { buildSmokeMastra } from './smoke-server.ts';
 
 /**
@@ -174,6 +174,12 @@ describe('M8.7A credential canary against the real codex CLI (local stub model)'
   });
 });
 
+describe('M8.7B verifier sandbox canary (preflight form)', () => {
+  it('passes on this machine: planted files unreadable, worker-style test code finds nothing, Go builds, tests, vets and formats', { timeout: 300_000 }, async () => {
+    assert.deepEqual(await verifierSandboxProblems(), []);
+  });
+});
+
 describe('M8.7A fail closed', () => {
   it('an allow-list that would contain a protected path is refused before anything runs', real, async () => {
     await assert.rejects(() => readIsolationCanary({ mode: 'allowlist', readAllowPaths: [realpathSync(homedir())] }), /too broad|would contain the protected path/);
@@ -183,7 +189,7 @@ describe('M8.7A fail closed', () => {
     const dir = tempDir('m87-server-');
     await assert.rejects(
       () => buildSmokeMastra({ artifactRoot: join(dir, 'a'), storageUrl: `file:${join(dir, 'm.db')}`, ledgerPath: join(dir, 'l.jsonl'), maxInvocations: 1, modelTimeoutMs: 10_000, codex: { command: FAKE, readAllowPaths: [] }, requireIsolationCanary: true }),
-      /refusing to start: Codex read isolation could not be validated/,
+      /refusing to start: read isolation could not be validated/,
     );
   });
 });

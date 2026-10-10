@@ -293,7 +293,7 @@ describe('Codex HTTP smoke: cancellation and timeouts through HTTP (deterministi
   });
 
   it('active-execution timeout: the run is cancelled over HTTP and confirmed; no late result can complete the task', async () => {
-    const h = hanging({ termGraceMs: 200, taskTimeoutMs: 2_500 });
+    const h = hanging({ termGraceMs: 200, taskTimeoutMs: 10_000 }); // the budget includes starting the CLI inside the server step; 2.5 s only held on a quiet machine
     const pid = await h.pid();
     const { report } = await h.run;
     assert.equal(report.taskState, 'RUNTIME_FAILURE');
