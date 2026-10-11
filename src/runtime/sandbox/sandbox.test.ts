@@ -177,11 +177,32 @@ describe('sandbox: real toolchains work inside it', { skip: !darwin && 'macOS on
     const npx = await runSandboxedCommand('npx', ['--no-install', 'fixture-tool'], { cwd: mod, root: mod, timeoutMs: 20_000 });
     assert.equal(npx.exitCode, 0, npx.stderr);
     assert.match(npx.stdout, /npx-ok/);
+  });
 
-    const home = realpathSync(homedir());
-    const denied = await runSandboxedCommand('/bin/sh', ['-c', `cat '${home}/.npmrc' '${home}/.ssh/config' 2>/dev/null; echo denied-ok`], { cwd: mod, root: mod, timeoutMs: 20_000 });
-    assert.equal(denied.exitCode, 0, denied.stderr);
-    assert.equal(denied.stdout.trim(), 'denied-ok');
+  it('credential fixtures are readable outside the sandbox but denied inside it', async () => {
+    // Synthetic credential fixture: a directory outside the worktree root that holds a
+    // known-content "credential" file, simulating ~/.npmrc or ~/.ssh/config.
+    const credDir = realpathSync(await mkdtemp(join(tmpdir(), 'sbx-cred-')));
+    const credFile = join(credDir, 'fake-npmrc');
+    const credContent = 'SYNTHETIC_CREDENTIAL_TOKEN=secret-fixture-value\n';
+    try {
+      await writeFile(credFile, credContent, { mode: 0o600 });
+
+      // CONTROL: readable from outside the sandbox (proves the file actually exists and is legible).
+      const { readFileSync } = await import('node:fs');
+      const outsideRead = readFileSync(credFile, 'utf8');
+      assert.equal(outsideRead, credContent, 'control: credential must be readable outside sandbox');
+
+      // DENY INSIDE: the sandbox must block the read (file is not in root, readAllow, or toolchain).
+      const denied = await runSandboxedCommand('/bin/sh', ['-c', `cat '${credFile}'; echo "cat=$?"`], {
+        cwd: mod, root: mod, timeoutMs: 20_000,
+      });
+      assert.doesNotMatch(denied.stdout, /secret-fixture-value/, 'credential content must not leak inside sandbox');
+      // The cat must have failed (non-zero) — "denied-ok" pattern from a 2>/dev/null trick is insufficient.
+      assert.match(denied.stdout, /cat=[^0]/, 'cat must exit non-zero when credential is denied');
+    } finally {
+      await rm(credDir, { recursive: true, force: true });
+    }
   });
 });
 

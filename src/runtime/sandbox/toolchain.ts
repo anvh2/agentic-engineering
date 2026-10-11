@@ -61,15 +61,32 @@ const run = (cmd: string, args: string[], env: NodeJS.ProcessEnv): string | unde
 const SYSTEM_BIN = /^\/(usr\/bin|bin|usr\/sbin|sbin)\//;
 const KEG = /^(\/(?:opt\/homebrew|usr\/local)\/Cellar\/[^/]+\/[^/]+)\//;
 
-/** The one NVM installation version containing `path`, never NVM_DIR or HOME. */
+/**
+ * The one NVM installation version containing `path`, never NVM_DIR or HOME.
+ *
+ * Security requirements:
+ * 1. The version name must look like a real Node version (`vMAJOR.MINOR.PATCH`); arbitrary first-child
+ *    directory names (adversarial or accidental) are rejected.
+ * 2. The returned canonical root must be strictly inside `versions/node/`, not just string-prefixed — this
+ *    prevents a crafted symlink from escaping the versions subtree.
+ * 3. The root must exist on disk; a non-existent path is never granted.
+ */
 export function nvmNodeVersionRoot(path: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
   const nvm = canonicalPath(env.NVM_DIR ?? join(env.HOME ?? homedir(), '.nvm'));
   const versions = join(nvm, 'versions', 'node');
   const real = canonicalPath(path);
+  // The resolved path must start strictly inside the versions subtree.
   if (!real.startsWith(`${versions}/`)) return undefined;
   const version = real.slice(versions.length + 1).split('/')[0];
-  if (!version || version === '.' || version === '..') return undefined;
-  return join(versions, version);
+  // Reject dot components and anything that doesn't look like a Node semver tag.
+  if (!version || version === '.' || version === '..' || !/^v\d+\.\d+\.\d+$/.test(version)) return undefined;
+  const root = join(versions, version);
+  // Canonical containment: the resolved root must still be strictly inside the versions parent.
+  const canonicalRoot = canonicalPath(root);
+  if (!isInside(canonicalRoot, versions)) return undefined;
+  // The directory must exist — never grant a path that is absent or unreachable.
+  if (!existsSync(canonicalRoot)) return undefined;
+  return canonicalRoot;
 }
 
 /** Read access needed for a trusted launcher to re-exec itself inside its child sandbox. */
@@ -90,6 +107,22 @@ export function executableReadPaths(command: string, env: NodeJS.ProcessEnv = pr
  * The directories a coding toolchain needs to be READABLE inside the Codex sandbox, found from PATH by the trusted launcher: each tool's
  * directory, its package root (a Homebrew keg, `/usr/local/go`), GOROOT, and the Xcode command-line-tools directory the `git` shim
  * needs. Anything too broad (`/opt/homebrew`, `/usr/local`, a home directory) is dropped, never granted.
+ *
+ * ## ASDF / version-manager prerequisite
+ *
+ * If Go is managed through ASDF (or a similar shim-based version manager), the shims live inside the user's home directory
+ * (`~/.asdf/shims/go`). The sandbox explicitly blocks execution of binaries from inside HOME to prevent credential or
+ * configuration exposure. This is by design and cannot be relaxed.
+ *
+ * **Operator requirement:** ensure the **native Go binary directory** (`/usr/local/go/bin` by default) appears before any
+ * shim directory on the PATH that is visible to this process. For example:
+ *
+ *   ```sh
+ *   PATH=/usr/local/go/bin:$PATH node --test src/runtime/sandbox/sandbox.test.ts
+ *   ```
+ *
+ * A follow-up native-binary resolver that auto-detects the real binary path through ASDF's data directory is tracked as a
+ * future improvement; it must never broadly grant `~/.asdf` or any other per-user directory.
  */
 export function discoverToolchainReadPaths(options: { tools?: readonly string[]; env?: NodeJS.ProcessEnv } = {}): string[] {
   // Default: the Go toolchain only. `git` is not offered by default: inside an isolated worktree its git directory is unreadable, so the
