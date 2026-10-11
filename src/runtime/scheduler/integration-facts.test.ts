@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { SchedulerStore, StoreError } from './store.ts';
 import { computeMetrics, integrationNote, renderBacklog } from './report.ts';
-import { makeStore } from './test-helpers.ts';
+import { makeStore, tempDir } from './test-helpers.ts';
 import { runObjectiveLifecycle } from '../../lead/lifecycle/driver.ts';
 import { harness } from '../../lead/lifecycle/__testing__/fixture.ts';
 
@@ -21,6 +23,28 @@ function done(store: SchedulerStore, id: string): void {
 const batch = (store: SchedulerStore, ...tasks: ReturnType<typeof claudeTask>[]) => store.createBatch({ batchId: 'B', project: 'p', repository: '/tmp/none', tasks });
 
 describe('integration facts are append-only at the database level', () => {
+  it('adds the table to an existing scheduler database without rewriting task history', () => {
+    const path = join(tempDir('integration-migration-'), 'scheduler.db');
+    const before = new SchedulerStore(path);
+    batch(before, claudeTask('a'));
+    done(before, 'a');
+    const events = before.events('a');
+    before.close();
+
+    // Production-shaped pre-M10.1 database: all scheduler data exists, only the additive objects do not.
+    const legacy = new DatabaseSync(path);
+    legacy.exec('DROP TRIGGER integration_facts_no_update; DROP TRIGGER integration_facts_no_delete; DROP TABLE integration_facts;');
+    legacy.close();
+
+    const migrated = new SchedulerStore(path);
+    assert.equal(migrated.requireTask('a').state, 'DONE');
+    assert.deepEqual(migrated.events('a'), events, 'opening the new schema did not rewrite history');
+    assert.deepEqual(migrated.integrationFacts('a'), []);
+    migrated.recordRevert('a', { actor: 'lead', reason: 'audited after backup', commit: 'abc' });
+    assert.equal(migrated.projection('a').accepted, false);
+    migrated.close();
+  });
+
   it('UPDATE and DELETE of a fact are refused by the database itself, not only by the API', () => {
     const store = makeStore();
     batch(store, claudeTask('a'));

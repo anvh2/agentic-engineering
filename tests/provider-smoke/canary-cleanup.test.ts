@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -59,7 +59,7 @@ describe('canary cleanup', () => {
       assert.equal(r.removed, false);
       assert.match(r.refused ?? '', /symlink|real directory/);
       assert.equal(readFileSync(join(victim, 'precious.txt'), 'utf8'), 'keep');
-      rmSync(dir, { force: true });
+      unlinkSync(dir);
 
       const dir2 = createOwnedDir(parent, '.agentic-canary-');
       writeFileSync(join(dir2, '.agentic-canary-owner.json'), JSON.stringify({ pid: 1, nonce: 'someone-else' }));

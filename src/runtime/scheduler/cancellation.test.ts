@@ -18,6 +18,7 @@ import { makeRepo, makeStore, plan, sleep, tempDir, workerTask } from './test-he
  */
 
 const PASS: ExecutorOutcome = { status: 'PASS', reasons: [], codingAttempts: 1, runtimeRetries: 0, verifier: { command: ['x'], exitCode: 0 } };
+const CONFIRMED_EMPTY_CAPACITY = { isWaiting: () => false, engagedBy: () => [] };
 const waitFor = async (cond: () => boolean, what: string, ms = 5_000) => {
   const end = Date.now() + ms;
   while (!cond()) {
@@ -58,7 +59,7 @@ function setup(ids: string[], options: { executor: Executor; capacity?: ModelCap
     store,
     executor: options.executor,
     workspace: worktrees,
-    capacity: options.capacity,
+    capacity: options.capacity ?? CONFIRMED_EMPTY_CAPACITY,
     cancelGraceMs: 100,
     config: { pollMs: 20, workerLeaseTimeoutMs: 600, taskTimeoutMs: 60_000, maxCapacityWaitMs: 60_000, ...options.config },
   });
@@ -151,7 +152,7 @@ describe('operator cancel', () => {
     const { store, scheduler } = setup(['a'], { executor });
     const running = scheduler.run();
     await waitFor(() => Boolean(store.requireTask('a').runId), 'run recorded');
-    const result = await cancelTask(store, { taskId: 'a', reason: 'user stop', executor });
+    const result = await cancelTask(store, { taskId: 'a', reason: 'user stop', executor, capacity: CONFIRMED_EMPTY_CAPACITY });
     assert.equal(result.task.state, 'CANCELLED');
     assert.equal(result.run.outcome, 'stopped');
     assert.equal(result.clean, true);
@@ -182,11 +183,11 @@ describe('operator cancel', () => {
     const { store, scheduler } = setup(['a'], { executor });
     const running = scheduler.run();
     await waitFor(() => Boolean(store.requireTask('a').runId), 'run recorded');
-    const first = await cancelTask(store, { taskId: 'a', executor });
+    const first = await cancelTask(store, { taskId: 'a', executor, capacity: CONFIRMED_EMPTY_CAPACITY });
     assert.equal(first.clean, false, 'server down: not confirmed');
     assert.equal(first.run.outcome, 'unreachable');
     up = true;
-    const second = await cancelTask(store, { taskId: 'a', executor });
+    const second = await cancelTask(store, { taskId: 'a', executor, capacity: CONFIRMED_EMPTY_CAPACITY });
     assert.equal(second.alreadyCancelled, true);
     assert.equal(second.clean, true);
     await running;
@@ -276,6 +277,17 @@ describe('model permit', () => {
     const freed = await cancelTaskRun({ store, executor, capacity, task: store.requireTask('a'), actor: 't', reason: 'test', graceMs: 2_000, pollMs: 10 });
     assert.equal(freed.outcome, 'stopped');
     assert.equal(capacity.engagedBy('a').length, 0);
+  });
+
+  it('a terminal run is unconfirmed when the capacity probe is unavailable', async () => {
+    const { executor } = blockingExecutor();
+    const { store } = setup(['a'], { executor });
+    const claim = store.claim({ workerId: 'w', languages: ['go', 'js'], leaseMs: 60_000, maxActive: 1 });
+    assert.ok(claim);
+    store.recordRun('a', claim.fence, 'run-a');
+    const result = await cancelTaskRun({ store, executor, task: store.requireTask('a'), actor: 't', reason: 'test' });
+    assert.equal(result.outcome, 'unconfirmed');
+    assert.match(result.detail, /capacity probe unavailable/);
   });
 });
 

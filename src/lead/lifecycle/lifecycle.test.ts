@@ -354,6 +354,7 @@ describe('M8.5 lifecycle: cancellation during transitions', () => {
   it('a cancel that lands between a review verdict and its decision wins: nothing is approved or integrated', async () => {
     const h = harness({ solutions });
     h.deps.executor = { cancel: async () => ({ run: 'terminal' as const, runStatus: 'canceled' }) };
+    h.deps.capacity = { engagedBy: () => [] };
     await h.pin();
     let cancelled: Awaited<ReturnType<typeof cancelObjective>> | undefined;
     h.hooks.beforeDecision = async () => {

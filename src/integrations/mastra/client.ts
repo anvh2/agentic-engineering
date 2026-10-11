@@ -40,12 +40,13 @@ export async function runCodingTaskWorkflow(request: DelegationRequest, reposito
 
   try {
     await call(`/create-run?runId=${runId}`, { method: 'POST', body: '{}' });
+    // Persist the identity before execution can begin. If the scheduler lost its fence,
+    // onStart throws and the created-but-never-started run is safe to abandon/cancel.
+    options.onStart?.({ runId, studioUrl });
     await call(`/start?runId=${runId}`, { method: 'POST', body: JSON.stringify({ inputData: { ...request, repository } }) });
   } catch (err) {
     return { runId, studioUrl, status: undefined, result: undefined, error: `Cannot start the workflow on ${server} (${(err as Error).message}). Is the server running? Start it with: npm run dev` };
   }
-  options.onStart?.({ runId, studioUrl });
-
   return awaitRun(call, runId, studioUrl, options);
 }
 

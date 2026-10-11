@@ -342,7 +342,10 @@ export class Scheduler {
           signal: ctl.signal,
           log: this.log,
           onRunStart: ({ runId }) => {
-            if (!store.recordRun(task.id, fence, runId)) unrecordedRunId = runId;
+            if (!store.recordRun(task.id, fence, runId)) {
+              unrecordedRunId = runId;
+              throw new Error(`refusing to start workflow run ${runId}: task ${task.id} lost its execution fence`);
+            }
             const entry = this.live.get(liveKey);
             if (entry) entry.runId = runId;
           },
@@ -387,7 +390,7 @@ export class Scheduler {
     if (!task) return;
     try {
       const result = await cancelTaskRun({ store: this.store, executor: this.executor, capacity: this.capacity, task, runId, actor: 'scheduler', reason, graceMs: this.cancelGraceMs, log: this.log });
-      if (result.outcome === 'still_active' || result.outcome === 'unreachable') this.stillActive.push(result);
+      if (result.outcome !== 'stopped' && result.outcome !== 'no_run') this.stillActive.push(result);
     } catch (err) {
       this.log(`${taskId}: could not cancel run ${task.runId ?? '(none)'}: ${(err as Error).message}`);
     }

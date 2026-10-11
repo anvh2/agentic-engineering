@@ -42,7 +42,7 @@ export interface CancelRunResult {
 export interface CancelRunOptions {
   store: SchedulerStore;
   executor: Pick<Executor, 'cancel'>;
-  /** Machine-wide model capacity probe; without it only the run's own status is confirmed. */
+  /** Machine-wide model capacity probe; without it a stopped run cannot be confirmed clean. */
   capacity?: { engagedBy?(tag: string, scope?: { runId?: string }): { kind: 'lease' | 'waiter'; holder: string; pid: number; run?: string }[] };
   task: TaskRow;
   /** The run to stop when the task row does not carry it (a run started after the task lost its lease was never recorded). */
@@ -66,7 +66,8 @@ export async function cancelTaskRun(options: CancelRunOptions): Promise<CancelRu
   const task = store.getTask(options.task.id) ?? options.task;
   const runId = options.runId ?? task.runId ?? undefined;
   const tag = task.spec.request?.contract.taskId ?? task.id; // what the runner names its permit/queue entry after
-  const engagedNow = () => capacity?.engagedBy?.(tag, { runId }) ?? []; // this run's entries, plus any whose owner is unknown
+  const capacityProbe = capacity?.engagedBy;
+  const engagedNow = () => capacityProbe?.call(capacity, tag, { runId }) ?? []; // this run's entries, plus any whose owner is unknown
   const record = (result: CancelRunResult): CancelRunResult => {
     log(`${task.id}: cancel (${reason}): ${result.outcome}${result.runId ? ` run ${result.runId}` : ''}${result.detail ? ` - ${result.detail}` : ''}`);
     try {
@@ -98,8 +99,8 @@ export async function cancelTaskRun(options: CancelRunOptions): Promise<CancelRu
   }
 
   const stoppedRun = runReport.run === 'terminal';
-  const detail = [runReport.detail, runReport.runStatus ? `run status ${runReport.runStatus}` : undefined, engaged.length ? `model still engaged: ${engaged.map((e) => `${e.kind} pid ${e.pid}`).join(', ')}` : undefined].filter(Boolean).join('; ');
+  const detail = [runReport.detail, runReport.runStatus ? `run status ${runReport.runStatus}` : undefined, engaged.length ? `model still engaged: ${engaged.map((e) => `${e.kind} pid ${e.pid}`).join(', ')}` : undefined, !capacityProbe ? 'model capacity probe unavailable; release cannot be confirmed' : undefined].filter(Boolean).join('; ');
   if (runReport.run === 'unreachable') return record({ taskId: task.id, runId, outcome: 'unreachable', engaged, detail });
   if (runReport.run === 'still_active' || engaged.length > 0) return record({ taskId: task.id, runId, outcome: 'still_active', engaged, detail });
-  return record({ taskId: task.id, runId, outcome: stoppedRun ? 'stopped' : 'unconfirmed', engaged, detail });
+  return record({ taskId: task.id, runId, outcome: stoppedRun && capacityProbe ? 'stopped' : 'unconfirmed', engaged, detail });
 }
