@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runControlledCommand } from '../tools/execution-tools.ts';
 import { redact } from '../../runtime/execution/coding-task-trace.ts';
+import { executableReadPaths, which } from '../../runtime/sandbox/toolchain.ts';
 import type { WorkerLike } from '../../runtime/execution/coding-task-runner.ts';
 import type { ProviderAvailability, ProviderDescriptor, ProviderRequest, RawUsage } from '../../runtime/execution/worker-provider.ts';
 import { probeCli, type CliProbeResult } from './cli-probe.ts';
@@ -173,7 +174,9 @@ export function probeCodex(config: CodexConfig = {}, cwd = process.cwd()): Promi
 }
 
 export function createCodexProvider(config: CodexConfig = {}): WorkerProvider {
-  const command = config.command ?? 'codex';
+  const configuredCommand = config.command ?? 'codex';
+  const locatedCommand = configuredCommand.includes('/') ? configuredCommand : which(configuredCommand, config.parentEnv?.PATH ?? process.env.PATH);
+  const command = locatedCommand ? canonicalPath(locatedCommand) : configuredCommand;
   let descriptor = codexDescriptor(config);
   let probed: CliProbeResult | undefined;
   const probe = async (cwd = process.cwd()): Promise<ProviderAvailability> => {
@@ -206,7 +209,12 @@ export function createCodexProvider(config: CodexConfig = {}): WorkerProvider {
       const overlapping = effectiveDenyPaths({ denyReadPaths: deny, env }).find((d) => isInside(workdir, d) || isInside(d, workdir));
       if (overlapping) throw new Error(`codex provider: the worktree ${request.workdir} overlaps the read-denied path ${overlapping}`);
       scratch = mkdtempSync(join(canonicalPath(tmpdir()), 'agentic-codex-'));
-      isolation = { denyReadPaths: deny, ...(config.readAllowPaths ? { readAllowPaths: config.readAllowPaths.map(canonicalPath) } : {}), scratchDir: scratch, env };
+      isolation = {
+        denyReadPaths: deny,
+        ...(config.readAllowPaths ? { readAllowPaths: [...new Set([...config.readAllowPaths.map(canonicalPath), ...executableReadPaths(command, env)])] } : {}),
+        scratchDir: scratch,
+        env,
+      };
     }
     try {
       const args = buildCodexArgs(request.workdir, { model: config.model, json: probed!.advertises('--json'), ephemeral: probed!.advertises('--ephemeral'), colorNever: probed!.advertises('--color'), isolation });

@@ -4,6 +4,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { buildCodexArgs } from '../../src/workers/providers/codex.ts';
 import { CODEX_AUDITED_TOOLS, credentialDenyPaths, discoverToolchainReadPaths } from '../../src/workers/providers/codex-isolation.ts';
+import { canonicalPath, executableReadPaths, which } from '../../src/runtime/sandbox/toolchain.ts';
 import { startStubModel } from './stub-model-server.ts';
 import { createOwnedDir, killGroup, removeOwnedSync, sweepCanaryLeftovers } from './canary-fs.ts';
 
@@ -139,6 +140,8 @@ const parse = (output: string, prefix: string) => Object.fromEntries([...output.
 export async function readIsolationCanary(options: { command?: string; mode: CanaryMode; timeoutMs?: number; readAllowPaths?: readonly string[]; /** Tests only: weakens the adapter's arguments to prove the canary notices. */ argsTransform?: (args: string[]) => string[] }): Promise<CanaryResult> {
   sweepCanaryLeftovers();
   const realHome = realpathSync(homedir());
+  const command = options.command ?? 'codex';
+  const launcher = canonicalPath(command.includes('/') ? command : which(command, process.env.PATH) ?? command);
   const base = createOwnedDir(tmpdir(), 'agentic-canary-');
   // The synthetic home must NOT be under a temp directory (the profile makes those writable and readable by design) and must sit where a
   // real credential would: inside the user's home.
@@ -190,7 +193,7 @@ export async function readIsolationCanary(options: { command?: string; mode: Can
         ? undefined
         : {
             denyReadPaths: credentialDenyPaths({ HOME: synthHome, CODEX_HOME: join(synthHome, '.codex') }),
-            ...(options.mode === 'allowlist' ? { readAllowPaths: options.readAllowPaths ?? discoverToolchainReadPaths() } : {}),
+            ...(options.mode === 'allowlist' ? { readAllowPaths: options.readAllowPaths ?? [...discoverToolchainReadPaths(), ...executableReadPaths(launcher)] } : {}),
             scratchDir: scratch,
             env: launcherEnv,
           };
@@ -199,7 +202,7 @@ export async function readIsolationCanary(options: { command?: string; mode: Can
     const full = [...args.slice(0, dash), ...stub.codexArgs, '-'];
     const exit = await new Promise<number | null>((resolve) => {
       // its own process group: the CLI starts background workers (plugin clones...) that outlive it and keep writing into CODEX_HOME
-      const child = spawn(options.command ?? 'codex', full, { cwd: work, env: launcherEnv, stdio: ['pipe', 'ignore', 'ignore'], detached: true });
+      const child = spawn(launcher, full, { cwd: work, env: launcherEnv, stdio: ['pipe', 'ignore', 'ignore'], detached: true });
       launcherGroup = child.pid;
       const timer = setTimeout(() => void killGroup(child.pid), options.timeoutMs ?? 150_000);
       child.on('exit', (code) => {
@@ -280,6 +283,8 @@ export async function readIsolationProblems(options: { command?: string; readAll
  */
 export async function launcherAuthCheck(options: { command?: string; readAllowPaths?: readonly string[] } = {}): Promise<{ launcherAuthenticated: boolean; commandDenied: boolean; exitCode: number | null }> {
   const realHome = realpathSync(homedir());
+  const command = options.command ?? 'codex';
+  const launcher = canonicalPath(command.includes('/') ? command : which(command, process.env.PATH) ?? command);
   const base = createOwnedDir(tmpdir(), 'agentic-auth-');
   const work = join(base, 'work');
   mkdirSync(work);
@@ -292,10 +297,10 @@ export async function launcherAuthCheck(options: { command?: string; readAllowPa
   let authGroup: number | undefined;
   try {
     const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: realHome, CODEX_HOME: codexHome };
-    const args = buildCodexArgs(work, { json: true, isolation: { readAllowPaths: options.readAllowPaths ?? discoverToolchainReadPaths(), denyReadPaths: [], scratchDir: scratch, env } });
+    const args = buildCodexArgs(work, { json: true, isolation: { readAllowPaths: options.readAllowPaths ?? [...discoverToolchainReadPaths(), ...executableReadPaths(launcher)], denyReadPaths: [], scratchDir: scratch, env } });
     const full = [...args.slice(0, args.lastIndexOf('-')), ...stub.codexArgs, '-'];
     const exitCode = await new Promise<number | null>((resolve) => {
-      const child = spawn(options.command ?? 'codex', full, { cwd: work, env, stdio: ['pipe', 'ignore', 'ignore'], detached: true });
+      const child = spawn(launcher, full, { cwd: work, env, stdio: ['pipe', 'ignore', 'ignore'], detached: true });
       authGroup = child.pid;
       const timer = setTimeout(() => void killGroup(child.pid), 90_000);
       child.on('exit', (code) => {

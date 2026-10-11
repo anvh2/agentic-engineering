@@ -61,6 +61,31 @@ const run = (cmd: string, args: string[], env: NodeJS.ProcessEnv): string | unde
 const SYSTEM_BIN = /^\/(usr\/bin|bin|usr\/sbin|sbin)\//;
 const KEG = /^(\/(?:opt\/homebrew|usr\/local)\/Cellar\/[^/]+\/[^/]+)\//;
 
+/** The one NVM installation version containing `path`, never NVM_DIR or HOME. */
+export function nvmNodeVersionRoot(path: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const nvm = canonicalPath(env.NVM_DIR ?? join(env.HOME ?? homedir(), '.nvm'));
+  const versions = join(nvm, 'versions', 'node');
+  const real = canonicalPath(path);
+  if (!real.startsWith(`${versions}/`)) return undefined;
+  const version = real.slice(versions.length + 1).split('/')[0];
+  if (!version || version === '.' || version === '..') return undefined;
+  return join(versions, version);
+}
+
+/** Read access needed for a trusted launcher to re-exec itself inside its child sandbox. */
+export function executableReadPaths(command: string, env: NodeJS.ProcessEnv = process.env): string[] {
+  const path = command.includes('/') ? command : which(command, env.PATH);
+  if (!path) return [];
+  const real = canonicalPath(path);
+  if (SYSTEM_BIN.test(real)) return [];
+  const nvm = nvmNodeVersionRoot(path, env) ?? nvmNodeVersionRoot(real, env);
+  // An NVM command is a script plus the Node interpreter and package files in this one version. Native launchers need only
+  // their resolved executable, not their containing bin directory (which could expose unrelated tools).
+  if (nvm) return [nvm];
+  const home = canonicalPath(env.HOME ?? homedir());
+  return !real.startsWith(`${home}/`) && real !== home && SAFE_PATH.test(real) && existsSync(real) ? [real] : [];
+}
+
 /**
  * The directories a coding toolchain needs to be READABLE inside the Codex sandbox, found from PATH by the trusted launcher: each tool's
  * directory, its package root (a Homebrew keg, `/usr/local/go`), GOROOT, and the Xcode command-line-tools directory the `git` shim
@@ -110,6 +135,7 @@ export function executableAccess(exe: string, env: NodeJS.ProcessEnv = process.e
   if (hit) return hit;
   const read = new Set<string>();
   const add = adder(env, read);
+  const addInsideHome = adder(env, read, { allowInsideHome: true });
   const name = basename(exe);
   const real = canonicalPath(exe);
   const binDirs = [...new Set([dirname(exe), dirname(real)].filter((d) => SAFE_PATH.test(d)))];
@@ -117,6 +143,9 @@ export function executableAccess(exe: string, env: NodeJS.ProcessEnv = process.e
   const goFamily = name === 'go' || name === 'gofmt';
   const keg = real.match(KEG);
   if (!SYSTEM_BIN.test(real)) {
+    // NVM is commonly inside HOME. Grant only the exact installed Node version that owns the trusted executable; this includes
+    // node plus npm/npx's package files without exposing NVM_DIR, sibling versions, HOME, or credential directories.
+    addInsideHome(nvmNodeVersionRoot(exe, env) ?? nvmNodeVersionRoot(real, env));
     if (keg) add(keg[1]);
     else add(dirname(dirname(real)));
     // `npx` is a symlink into the npm package directory, `node` is a keg: look at where the command was FOUND as well as where it resolves

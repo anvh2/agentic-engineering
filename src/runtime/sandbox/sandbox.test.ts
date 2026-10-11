@@ -165,6 +165,24 @@ describe('sandbox: real toolchains work inside it', { skip: !darwin && 'macOS on
     assert.equal(r.exitCode, 0, r.stderr);
     assert.match(r.stdout, /IPC 42/);
   });
+
+  it('NVM node and npx run without opening HOME or sibling credential paths', async () => {
+    const node = await runSandboxedCommand('node', ['-e', "console.log('node-ok')"], { cwd: mod, root: mod, timeoutMs: 20_000 });
+    assert.equal(node.exitCode, 0, node.stderr);
+    assert.match(node.stdout, /node-ok/);
+
+    await mkdir(join(mod, 'node_modules', '.bin'), { recursive: true });
+    const fixture = join(mod, 'node_modules', '.bin', 'fixture-tool');
+    await writeFile(fixture, '#!/bin/sh\necho npx-ok\n', { mode: 0o755 });
+    const npx = await runSandboxedCommand('npx', ['--no-install', 'fixture-tool'], { cwd: mod, root: mod, timeoutMs: 20_000 });
+    assert.equal(npx.exitCode, 0, npx.stderr);
+    assert.match(npx.stdout, /npx-ok/);
+
+    const home = realpathSync(homedir());
+    const denied = await runSandboxedCommand('/bin/sh', ['-c', `cat '${home}/.npmrc' '${home}/.ssh/config' 2>/dev/null; echo denied-ok`], { cwd: mod, root: mod, timeoutMs: 20_000 });
+    assert.equal(denied.exitCode, 0, denied.stderr);
+    assert.equal(denied.stdout.trim(), 'denied-ok');
+  });
 });
 
 describe('sandbox: fail closed', { skip: !darwin && 'macOS only' }, () => {
