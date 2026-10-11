@@ -1,90 +1,74 @@
-# agentic-engineering
+# Agentic Engineering
 
-A local-first autonomous software-engineering runtime.
+**Experimental local-first, evidence-driven autonomous software-engineering runtime.**
 
-- **Human** — Chief Architect: sets goals, approves, overrides.
-- **Claude** — Engineering Lead: plans work, reviews, escalates, integrates.
-- **Scheduler** — owns persistent work (SQLite): claims, leases, retries, audit trail.
-- **Local AI workers** (Qwen via Ollama) — implement tasks small enough to delegate.
-- **Sandbox + worktrees** — every task runs in an isolated git worktree; model-generated code runs in an OS sandbox.
-- **Deterministic verification** — only the runtime's own test run can mark a task PASS; the model's word counts for nothing.
-- **Integration** — approved tasks are merged into a `lead-integration/<batch>` branch and re-verified. Nothing is ever pushed, and the user's checkout is never touched.
+A human operator scopes work and approves actions; a model-backed Engineering Lead plans and reviews a task DAG; the persistent scheduler delegates bounded implementation tasks to coding workers. The runtime owns verification, audit and integration—not the models' claims of success.
 
-Mastra, Ollama, Qwen, Claude and Trellis are integrations behind adapters. They are not the architecture.
+> **Experimental, not production-ready.** Neither `master` nor the M10.1 safety branch is certified for unattended operation on valuable or secret-bearing repositories. M10.1 has a partial regression verdict and is not merged into `master`. No provider call, repository mutation, push or unattended run is authorized merely by installing this repository.
 
-## How a task flows (the one supported path)
+## Architecture
 
-```
-Objective → Engineering Lead (Claude, `npm run lead -- plan`)
-  → Scheduler (`src/runtime/scheduler`)         claim + lease + fencing
-  → Executor (`src/integrations/mastra/executor`) one task → one workflow run
-  → Coding workflow (Mastra, `coding-task-workflow`)
-  → Coding runner (`src/runtime/execution`)     bounded attempts, mutation policy
-  → Worker (`src/workers`)                      edits via guarded repository tools
-  → Sandboxed verification (`src/runtime/sandbox`)
-  → Review (deterministic change review + a recorded Lead decision)
-  → Integration (`src/runtime/integration`)     merge, re-verify, roll back on failure
+```text
+Human operator (scope, budgets, approvals)
+  -> Engineering Lead (Claude CLI integration; others under development)
+  -> SQLite Scheduler (DAG, atomic claims, leases, fencing, events)
+  -> Mastra workflow adapter -> bounded coding runner -> provider worker
+  -> isolated Git worktree -> sandboxed verifier
+  -> independent review/acceptance -> audited integration
 ```
 
-Details and guarantees: [docs/architecture/runtime.md](docs/architecture/runtime.md).
+Mastra, Ollama, Qwen, Claude and other providers are replaceable adapters, not the source of execution authority. Core packages live in `src/runtime`, `src/lead`, `src/workers` and `src/integrations`. See [runtime architecture](docs/architecture/runtime.md).
 
-## Layout
+## Requirements and limitations
 
-```
-src/
-  core/             project-root discovery
-  runtime/
-    scheduler/      task model, lifecycle state machine, SQLite store, reports
-    execution/      task contract, eligibility gate, coding runner, trace/artifacts
-    sandbox/        macOS sandbox-exec wrapper (fails closed)
-    worktree/       per-task git worktrees and the stale-base guard
-    review/         deterministic change review
-    integration/    merge + verification + rollback
-    capacity/       machine-wide limit on concurrent local-model (Ollama) calls
-  workers/          Qwen coding workers and their guarded tools
-  lead/             review packs/decisions (`review.ts`), session checkpoints (`session/`)
-  integrations/
-    mastra/         the only framework integration: workflow adapter, executor, client, server entry, metrics route
-  observability/    Prometheus metrics, scheduler-state reader
-scripts/            supported CLI entrypoints (`lead.ts`)
-docs/               architecture, operations, plans, audits
-tests/bench/        worker capability benchmark (Go ladder): fixtures, runner, summarizer
-.workdir/           local runtime state (gitignored): scheduler DB, worktrees, artifacts, session projects
-```
+- **macOS** is required for the currently supported `sandbox-exec` path. Linux/Windows are not currently claimed supported.
+- **Node.js >=22.13**, npm, Git, and the language toolchain required by a test target.
+- Ollama with the configured local model for the default coding worker. Cloud/CLI providers are optional and require explicit authorization and their own credentials/quotas.
+- A disposable **secret-free** target Git repository. Sandbox policy is defense-in-depth, not a substitute for OS isolation or backups.
+- Scheduler DB is local SQLite under `.workdir/`; model capacity DB is shared on the same machine. Do not put these files on an untested network filesystem.
 
-## Quick start
+## Local development quickstart
 
-Requirements: Node ≥ 22.13, git, Ollama with the worker model (`OLLAMA_MODEL`, default `qwen3:8b`), macOS for the sandbox, and Go/Node toolchains for the target repository.
-
-```shell
-npm install
+```sh
+git clone https://github.com/anvh2/agentic-engineering.git
+cd agentic-engineering
+node --version  # >=22.13
+npm ci
 cp .env.example .env
-npm run dev                      # Mastra server + Studio on :4111 (needed for `lead run`)
-```
-
-## Commands
-
-```shell
-npm run lead -- plan <plan.json>               # create a batch (tasks → BACKLOG/READY)
-npm run lead -- tasks [--batch B] [--state S]
-npm run lead -- run [--batch B] [--workers N]  # needs `npm run dev`; N logical workers (or AGENTIC_WORKER_CONCURRENCY), model calls stay limited by AGENTIC_MODEL_CONCURRENCY
-npm run lead -- status [--batch B]
-npm run lead -- review list | pack | decide <task> approve|reject|escalate --feedback "..."
-npm run lead -- integrate <batch>
-npm run lead -- resume [--steal] [--run]       # recover expired leases / interrupted integrations
-npm run lead -- cancel <task>
-npm run session -- checkpoint|resume|status <project>   # lead session checkpoints (.workdir/projects/<name>)
+# Install/start Ollama and provision OLLAMA_MODEL separately before running a worker.
 npm run typecheck
-npm test                                       # unit tests
-npm run bench:go                               # worker capability ladder (uses Ollama)
+npm run dev     # Mastra development server / Studio (typically localhost:4111)
 ```
 
-`npm run lead:<verb>` aliases exist for each verb (`lead:plan`, `lead:run`, …).
+Starting the development server does **not** start an autonomous engineering mission. Follow the [OSS local quickstart](docs/operations/oss-quickstart.md) before submitting a bounded task plan, and use a disposable target for first experiments.
 
-## More
+**Organization UI:** The customized `/organization` sidebar requires the separately built version-pinned Studio fork; it is **not** bundled automatically by `npm run dev`. See [Studio build and launch](docs/operations/m8.4-studio-organization.md). Its local Gateway is not suitable for exposure on a public interface.
 
-- [AGENTS.md](AGENTS.md) — rules for AI agents working in this repo
-- [docs/architecture/runtime.md](docs/architecture/runtime.md) — lifecycle, guarantees, delegation eligibility
-- [docs/operations/lead-principles.md](docs/operations/lead-principles.md) — principles injected into every Lead session packet
-- [docs/plans/vision.md](docs/plans/vision.md) — long-term target
-- [docs/audits/](docs/audits/) — reliability audit (2026-10-06) and evidence
+## CLI and checks
+
+```sh
+npm run typecheck
+npm test                           # may be slow; includes OS-sensitive subprocess tests
+npm run lead -- tasks
+npm run lead -- status
+npm run lead -- plan <plan.json>    # explicit operator decision
+npm run lead -- run --batch <id>    # can invoke models and mutate managed worktrees
+npm run lead -- cancel <task-id>
+npm run lead -- resume
+```
+
+See `package.json` for the canonical scripts. Full regression has not yet been shown reliably green on the M10.1 candidate; no hosted CI guarantee is implied.
+
+## Safety, source privacy and model costs
+
+- A model's final text never counts as verification; runtime tests and acceptance evidence decide.
+- Do not give workers production secrets, credentials or valuable repositories. Cloud model prompts can contain source snippets even when files remain local.
+- Store API keys in ignored environment files or an approved secret manager, not in commits, logs or evidence archives. Subscription plans do not imply free API usage.
+- No automatic paid calls, pushes or direct modifications of the user's checkout are authorized by default.
+- See [SECURITY.md](SECURITY.md) and [OSS release gate](docs/operations/oss-release-checklist.md).
+
+## Contributing and licensing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md) and [Apache-2.0](LICENSE). This license applies to repository-owned material unless a file specifies otherwise. The version-pinned Studio fork, upstream code and bundled third-party components retain their own licenses/notices; do not assume this root license supersedes them.
+
+There is not yet a stable publicly supported release, cloud service or SLA.
