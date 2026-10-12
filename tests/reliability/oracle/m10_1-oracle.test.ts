@@ -6,14 +6,15 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFil
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { describe, it } from 'node:test';
+import { describe, it, type TestContext } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 /**
  * M10.1 ACCEPTANCE ORACLE v3 - pinned BEFORE any M10.1 implementation (see oracle.json for the hash, owner, reviewer, review
  * findings and the amendment lineage from v1 and v2). It states behaviour through public interfaces only and imports every module
  * under test dynamically, so on a baseline that lacks a feature each case fails by itself with a reason instead of the file
- * failing to load. The implementation may not edit this file; run-oracle.ts refuses to run it if its hash differs from oracle.json,
+ * failing to load. Synchronization amendments are disclosed in oracle.json lineage. The implementation may not edit this file;
+ * run-oracle.ts refuses to run it if its hash differs from oracle.json,
  * and also refuses a candidate whose pre-existing safety contract tests (oracle.json `protectedFiles`) were edited.
  *
  *   O-F2  run-scoped permit ownership: a cancel is confirmed against THE TARGET RUN, and never reports STOPPED while that run's
@@ -1042,7 +1043,7 @@ describe('O-FP fault points', () => {
   });
 });
 
-// ---- O-SM: the HTTP smoke timeout, deterministic (carried from v2; only the not-ready budget changes) -----------------------------
+// ---- O-SM: the HTTP smoke timeout, deterministic (v3.3: boundary-acknowledged execution clock) -----------------------------
 
 const FAKE = join(ROOT, 'src', 'workers', 'providers', '__testing__', 'fake-gemini.mjs');
 const RIGHT = 'package smoke\n\nfunc Double(n int) int {\n\treturn n * 2\n}\n';
@@ -1055,21 +1056,46 @@ const alive = (pid: number) => {
   }
 };
 
-async function timeoutSmoke(extra: { fake?: Record<string, string>; faults?: Record<string, unknown>; taskTimeoutMs?: number }) {
+async function timeoutSmoke(extra: { fake?: Record<string, string>; faults?: Record<string, unknown> } & ({ boundary: 'before-spawn' | 'after-spawn'; t: TestContext } | { boundary?: undefined; t?: undefined })) {
   const { runSchedulerSmoke, TASK_ID } = await mod('tests/provider-smoke/scheduler-smoke.ts');
   const { capacityFor } = await mod('src/runtime/capacity/model-capacity.ts');
   const outDir = tmp('m10-oracle-sm-');
   const pidfile = join(outDir, 'pid');
   const capacityDb = join(outDir, 'capacity.db');
   const fakeLog = join(outDir, 'fake-gemini.log');
+  const modelTimeoutMs = 20_000;
+  const taskTimeoutMs = 2_500;
+  if (extra.boundary) {
+    // Control only the parent's execution-budget samples, never Date, leases, HTTP cancellation,
+    // provider deadlines or permit accounting. The real tick decides when the budget is exhausted.
+    // Fault/ledger records acknowledge the boundary in the child; elapsed startup time cannot do so.
+    const { ExecutionClock } = await mod('src/runtime/scheduler/execution-clock.ts');
+    const tick = ExecutionClock.prototype.tick;
+    const evidence = extra.boundary === 'before-spawn' ? join(outDir, 'faults.jsonl') : join(outDir, 'server', 'provider-ledger.jsonl');
+    let reached = false;
+    extra.t.mock.method(ExecutionClock.prototype, 'tick', function (this: InstanceType<typeof ExecutionClock>, now: number, waiting: boolean) {
+      if (!reached && existsSync(evidence)) {
+        // Ignore an incomplete trailing line while the server is appending the record.
+        const lines = readFileSync(evidence, 'utf8').split('\n').slice(0, -1);
+        reached = lines.some((line) => {
+          const event = JSON.parse(line);
+          return extra.boundary === 'before-spawn' ? event.point === 'provider.before-spawn' : event.event === 'spawn';
+        });
+      }
+      // If the boundary never arrives, use the existing model budget as a watchdog: let the real
+      // timeout clean up, then fail the boundary assertion. Never turn missing evidence into a pass.
+      const sampled = reached || now - this.startedAt >= modelTimeoutMs ? this.startedAt + this.waitedMs + taskTimeoutMs : this.startedAt;
+      return tick.call(this, sampled, waiting);
+    });
+  }
   const { report } = await runSchedulerSmoke({
     outDir,
     transport: 'http',
     provider: 'gemini',
     gemini: { command: FAKE, termGraceMs: 200, env: { FAKE_FILE: 'smoke/double.go', FAKE_CONTENT: JSON.stringify(RIGHT), FAKE_LOG: fakeLog, FAKE_MODE: 'hang', FAKE_PIDFILE: pidfile, ...extra.fake } },
     http: { capacityDb, maxInvocations: 1, pollMs: 100, ...(extra.faults ? { faults: extra.faults } : {}) },
-    modelTimeoutMs: 20_000,
-    taskTimeoutMs: extra.taskTimeoutMs ?? 2_500, // the original budget: deliberately NOT widened
+    modelTimeoutMs,
+    taskTimeoutMs, // original budget; forced cases advance it only after acknowledged boundary evidence
     signalSource: new EventEmitter(),
     log: () => {},
   });
@@ -1090,8 +1116,10 @@ function assertTimedOutCleanly(r: Awaited<ReturnType<typeof timeoutSmoke>>) {
 }
 
 describe('O-SM HTTP smoke timeout, each interleaving forced', () => {
-  it('timeout BEFORE the CLI is spawned: no provider process ever exists, no late spawn', async () => {
-    const r = await timeoutSmoke({ faults: { 'provider.before-spawn': { delayMs: 60_000 } } });
+  it('timeout BEFORE the CLI is spawned: no provider process ever exists, no late spawn', async (t) => {
+    // Deliberately exceed the original budget before reaching the target boundary: a regression
+    // to wall-clock forcing must fail even on an otherwise idle machine.
+    const r = await timeoutSmoke({ t, boundary: 'before-spawn', faults: { 'runner.before-permit': { delayMs: 3_500 }, 'provider.before-spawn': { delayMs: 60_000 } } });
     assertTimedOutCleanly(r);
     assert.ok(r.fired.includes('provider.before-spawn'), `the boundary was reached: ${JSON.stringify(r.fired)}`);
     assert.deepEqual(r.report.processes, [], 'no provider process was started');
@@ -1099,10 +1127,8 @@ describe('O-SM HTTP smoke timeout, each interleaving forced', () => {
     assert.equal(existsSync(r.pidfile), false);
   });
 
-  it('timeout AFTER spawn but before the CLI is ready: the started group is killed although it never reported in', async () => {
-    // v3: the 60 s start delay holds "not ready"; the budget only has to land after the spawn, so it is sized for spawn latency
-    // under full-suite load (v2 used 2.5 s, which landed before the spawn in one of two full runs: M10 report, section 6).
-    const r = await timeoutSmoke({ fake: { FAKE_START_DELAY_MS: '60000' }, taskTimeoutMs: 15_000 });
+  it('timeout AFTER spawn but before the CLI is ready: the started group is killed although it never reported in', async (t) => {
+    const r = await timeoutSmoke({ t, boundary: 'after-spawn', fake: { FAKE_START_DELAY_MS: '60000' } });
     assertTimedOutCleanly(r);
     assert.equal(existsSync(r.pidfile), false, 'the CLI never became ready');
     assert.equal(r.report.processes.length, 1, 'exactly one provider process was started');

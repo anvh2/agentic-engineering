@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,35 +12,78 @@ import { createOwnedDir, findRealCredentialCopies, killGroup, removeOwnedSync, s
 const scratch = () => realpathSync(mkdtempSync(join(tmpdir(), 'canary-cleanup-test-')));
 
 describe('canary cleanup', () => {
-  it('removes an owned directory even while a background process keeps writing into it (the ENOTEMPTY race)', { timeout: 60_000 }, async () => {
+  // Keep the writer anchored to the original directory inode. Absolute mkdir -p can recreate the
+  // removed root without its ownership marker; a successful removal cannot promise it stays absent.
+  function writer(dir: string, signal: AbortSignal) {
+    const child = spawn('/bin/sh', ['-c', 'mkdir -p .codex/a/b; echo x > .codex/a/b/f; echo ready; while true; do mkdir -p .codex/a/b 2>/dev/null; echo x > .codex/a/b/f 2>/dev/null; done'], { cwd: dir, detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    const closed = once(child, 'close');
+    const ready = Promise.race([once(child.stdout, 'data', { signal }), closed.then(() => { throw new Error('writer exited before readiness'); })]);
+    let stopping: Promise<void> | undefined;
+    return {
+      ready,
+      stop() {
+        return stopping ??= (async () => {
+          assert.equal(await killGroup(child.pid), true, 'the writer process group is gone');
+          await closed;
+        })();
+      },
+    };
+  }
+
+  it('removes an owned directory even while a background process keeps writing into it (the ENOTEMPTY race)', { timeout: 60_000 }, async (t) => {
     const parent = scratch();
+    const dir = createOwnedDir(parent, '.agentic-canary-');
+    const child = writer(dir, t.signal);
     try {
-      const dir = createOwnedDir(parent, '.agentic-canary-');
-      // a detached shell that keeps creating nested directories and files inside the tree, like the Codex plugin clone did
-      const child = spawn('/bin/sh', ['-c', `i=0; while true; do i=$((i+1)); mkdir -p "${dir}/.codex/.tmp/clone-$i/plugins" 2>/dev/null; echo x > "${dir}/.codex/.tmp/clone-$i/plugins/f" 2>/dev/null; done`], { detached: true, stdio: 'ignore' });
-      await new Promise((r) => setTimeout(r, 300));
-      assert.ok(existsSync(join(dir, '.codex')), 'the background writer is active');
-      assert.equal(await killGroup(child.pid), true, 'its process group is gone');
+      await child.ready;
+      assert.ok(existsSync(join(dir, '.codex', 'a', 'b', 'f')), 'the background writer is active');
+      await child.stop();
       assert.deepEqual(removeOwnedSync(dir), { removed: true });
       assert.equal(existsSync(dir), false);
     } finally {
+      await child.stop();
       rmSync(parent, { recursive: true, force: true });
     }
   });
 
-  it('even with the writer still running, removal retries until the tree is gone or reports it did not remove it', { timeout: 60_000 }, async () => {
+  it('even with the writer still running, removal retries until the tree is gone or reports it did not remove it', { timeout: 60_000 }, async (t) => {
     const parent = scratch();
+    const dir = createOwnedDir(parent, '.agentic-canary-');
+    const child = writer(dir, t.signal);
     try {
-      const dir = createOwnedDir(parent, '.agentic-canary-');
-      const child = spawn('/bin/sh', ['-c', `while true; do mkdir -p "${dir}/a/b/c" 2>/dev/null; echo x > "${dir}/a/b/c/f" 2>/dev/null; done`], { detached: true, stdio: 'ignore' });
-      await new Promise((r) => setTimeout(r, 200));
+      await child.ready;
       const r = removeOwnedSync(dir);
-      await killGroup(child.pid);
+      await child.stop();
       assert.equal(typeof r.removed, 'boolean');
       if (!r.removed) assert.match(r.refused ?? '', /not empty/);
       else assert.equal(existsSync(dir), false);
       assert.equal(removeOwnedSync(dir).removed, true, 'once the writer is dead the second removal succeeds');
     } finally {
+      await child.stop();
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a directory recreated by a writer after successful removal', { timeout: 60_000 }, async (t) => {
+    const parent = scratch();
+    const dir = createOwnedDir(parent, '.agentic-canary-');
+    // Force the old race: remove -> writer recreates the absolute path -> writer exits -> inspect.
+    const script = `import { mkdirSync, writeFileSync } from 'node:fs'; process.stdin.once('data', () => { mkdirSync(${JSON.stringify(dir)}, { recursive: true }); writeFileSync(${JSON.stringify(join(dir, 'new-file'))}, 'keep'); process.stdin.destroy(); }); console.log('ready');`;
+    const child = spawn(process.execPath, ['--input-type=module', '-e', script], { detached: true, stdio: ['pipe', 'pipe', 'inherit'] });
+    const closed = once(child, 'close');
+    try {
+      await Promise.race([once(child.stdout, 'data', { signal: t.signal }), closed.then(() => { throw new Error('writer exited before readiness'); })]);
+      assert.deepEqual(removeOwnedSync(dir), { removed: true });
+      assert.equal(existsSync(dir), false);
+      child.stdin.end('recreate');
+      const [code] = await closed;
+      assert.equal(code, 0);
+      assert.equal(existsSync(dir), true, 'a live writer can recreate a successfully removed path');
+      assert.deepEqual(removeOwnedSync(dir), { removed: false, refused: 'not created by this process' });
+      assert.equal(readFileSync(join(dir, 'new-file'), 'utf8'), 'keep', 'the replacement is never adopted');
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) assert.equal(await killGroup(child.pid), true);
+      await closed;
       rmSync(parent, { recursive: true, force: true });
     }
   });
