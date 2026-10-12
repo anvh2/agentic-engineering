@@ -115,8 +115,8 @@
     "the original scenario, original 2.5 s budget, NO forcing: whichever interleaving the machine produces, the timeout is clean"
   ],
   "protectedFiles": {
-    "src/integrations/mastra/http-boundary.test.ts": "3f14e0840f3c8fdd45de41fedcf437148c34e709f228ea5e52b54dd71a08044a",
-    "src/runtime/scheduler/cancellation.test.ts": "5bdedcb27ce3ac6b290135b4df3957716fa03a8b0cc728e3cd0d199011a3d263",
+    "src/integrations/mastra/http-boundary.test.ts": "083ab82d5ba75e29c601bdcba8db25ab6975e4507b077f9f17ac757c0a6624b3",
+    "src/runtime/scheduler/cancellation.test.ts": "8a34dae694d138ddbb48c6c183234290b223d3507072385f5d8e38d68e83f229",
     "src/runtime/execution/worker-provider.test.ts": "f02e6175821cc35df275f0a0a77a791c03d5872f2871244c4962dd07eecb8e79",
     "src/integrations/mastra/gemini-scheduler.test.ts": "3e5b74b44f3f47ab05c833df8f632bd46af3dae479710058d1827e8aff54d90a",
     "src/integrations/mastra/codex-scheduler.test.ts": "24a22e131b35d9d35354bd2df9966e2423db29dce6d19f6c60e5c7a7154dd1e6",
