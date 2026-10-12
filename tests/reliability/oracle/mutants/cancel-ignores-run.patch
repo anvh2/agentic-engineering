@@ -2,12 +2,13 @@ diff --git a/src/runtime/scheduler/cancel.ts b/src/runtime/scheduler/cancel.ts
 index dd8ce4a..7b21a7e 100644
 --- a/src/runtime/scheduler/cancel.ts
 +++ b/src/runtime/scheduler/cancel.ts
-@@ -66,7 +66,7 @@ export async function cancelTaskRun(options: CancelRunOptions): Promise<CancelRu
+@@ -66,8 +66,8 @@ export async function cancelTaskRun(options: CancelRunOptions): Promise<CancelRu
    const task = store.getTask(options.task.id) ?? options.task;
    const runId = options.runId ?? task.runId ?? undefined;
    const tag = task.spec.request?.contract.taskId ?? task.id; // what the runner names its permit/queue entry after
--  const engagedNow = () => capacity?.engagedBy?.(tag, { runId }) ?? []; // this run's entries, plus any whose owner is unknown
-+  const engagedNow = () => capacity?.engagedBy?.(tag) ?? []; // this run's entries, plus any whose owner is unknown
+   const capacityProbe = capacity?.engagedBy;
+-  const engagedNow = () => capacityProbe?.call(capacity, tag, { runId }) ?? []; // this run's entries, plus any whose owner is unknown
++  const engagedNow = () => capacityProbe?.call(capacity, tag) ?? []; // intentionally ignores run identity
    const record = (result: CancelRunResult): CancelRunResult => {
      log(`${task.id}: cancel (${reason}): ${result.outcome}${result.runId ? ` run ${result.runId}` : ''}${result.detail ? ` - ${result.detail}` : ''}`);
      try {
