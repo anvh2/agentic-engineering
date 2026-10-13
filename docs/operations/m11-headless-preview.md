@@ -1,61 +1,64 @@
-# M11: headless lifecycle runner (experimental preview)
+# M11 supervisor preview — one Engineering Lead CLI
 
-This preview adds **one detached, persistent supervisor process** over the existing pinned-oracle `lead lifecycle` path. It does **not** introduce another Engineering Lead, bypass review, modify the worker TypeScript policy, authorize a provider, merge to master, or deploy.
+**Draft / not certified for unattended use.** M11 continues the existing
+`scripts/lead.ts -> SchedulerStore -> lifecycle -> Scheduler/Mastra -> verifier -> integration`
+execution path. There is no second job DB or independent scheduling framework.
 
-**Not yet certified for unattended self-development or valuable repositories.** Treat this PR as a test candidate, not a release.
+The Gemini prototype contributed the operator UX (`start/status/pause/resume/stop`) and
+a supervisor abstraction. The PID-driven SIGTERM, stale-lock takeover, separate
+mission checkpoint store and auto-review permissions were deliberately **not** reused.
 
-## Setup: disposable/secret-free isolated environment
+## Operator setup (disposable repositories only)
 
-An operator must first provision a separate Mastra server bound to loopback **other than :4111**, with independent storage and no paid-provider authorization. The runner does not start that server.
-
-Create `/tmp/m11-mission.json`:
-
-```json
-{
-  "mission": "disposable-m11-smoke",
-  "server": "http://127.0.0.1:4211",
-  "objectives": ["DISPOSABLE-OBJECTIVE-001"]
-}
-```
-
-Beforehand submit the corresponding batch and pin its independent oracle using the existing `lead objective` / `lead lifecycle pin` commands. Mission objective IDs must exactly match those pre-pinned lifecycle rows.
+M11 preview **must** run with separate scheduler, model-capacity, artifact and Mastra
+storage. Do not reuse the live :4111 service or production SQLite. The preview
+only manages an already **submitted batch with pinned independent Oracle**; it
+does not generate plans or expand its own authorization.
 
 ```sh
+cd /path/to/agentic-engineering-m11-review
+npm ci
+
 export AGENTIC_SCHED_ROOT="$PWD/.workdir/m11-isolated"
 export AGENTIC_SCHED_DB="$AGENTIC_SCHED_ROOT/scheduler/scheduler.db"
 export AGENTIC_MODEL_LOCK_DB="$AGENTIC_SCHED_ROOT/model-capacity.db"
 export AGENTIC_ARTIFACT_ROOT="$AGENTIC_SCHED_ROOT/artifacts"
 export AGENTIC_ALLOW_PROVIDERS=""
 
-npm run lead:headless -- init --manifest /tmp/m11-mission.json
-npm run lead:headless -- start
-npm run lead:headless -- status
-npm run lead:headless -- pause
-npm run lead:headless -- status
-npm run lead:headless -- resume
-npm run lead:headless -- stop
+# Provision a separate private Mastra server on 127.0.0.1:4211 using its own storage.
+# Submit a disposable batch and independently pin its Oracle first.
+npm run lead -- supervisor start --batch DISPOSABLE_BATCH --server http://127.0.0.1:4211 --once
+npm run lead -- supervisor status
+npm run lead -- supervisor pause
+npm run lead -- supervisor resume
+npm run lead -- supervisor stop
 ```
 
-Runner journal and logs: `$AGENTIC_SCHED_ROOT/headless/`.
+The supervisor start command **runs in foreground**; run controls in a separate
+terminal with identical isolated env variables. The supervisor holds a
+non-expiring filesystem gate under `$AGENTIC_SCHED_ROOT/supervisor/holder` and
+a renewable owner-specific DB lock. The gate is released only after the
+existing lifecycle call settles and ownership is proven. After an unknown crash,
+**do not remove the gate automatically**, even if its PID is dead. Inspect all
+children, Mastra run IDs and lifecycle state before any operator recovery.
 
-Gemini's useful status concepts are derived from mission checkpoints: activeTasks, processedTasks, pendingTasks and blockedTasks. No separate supervisor DB or heartbeat lock is introduced. Pause/resume uses durable request flags read by the running worker; it is **cooperative between objectives**, not a cancellation command. There is no PID-based cross-process signalling. CLI exit 1 is ambiguous and conservatively recorded UNKNOWN rather than being assumed to mean a validated NOT_ACCEPTED outcome.
+`pause` and `stop` are cross-process cooperative requests, checked
+between objectives or when idle. They are **not** immediate cancellation.
+To cancel a running model, use the existing `lead lifecycle cancel` with
+confirmed capacity release.
 
-The queue stops on the first non-ACCEPTED exit code. `stop` is **cooperative at the objective boundary**, not immediate cancellation of a live model run. To cancel an in-flight run, use the existing operator-authorized `lead lifecycle cancel` command and confirm release. A process that crashes mid-objective leaves a `RUNNING` checkpoint and a non-expiring gate. **Never auto-remove an orphan gate** without confirming the prior process and all descendants have stopped and reconciling the persisted lifecycle/run state.
+## Verification required before leaving Draft
 
-## Limits and required acceptance before promoting from Draft
+1. `npm run typecheck`
+2. `node --disable-warning=ExperimentalWarning --test src/lead/supervisor/cli.test.ts`
+3. `npm test` once on final candidate
+4. Disposable pinned Oracle + real Qwen run through a **separate Mastra server**,
+   with a proven worker trace and runtime verification
+5. Pause/resume during idle; stop during in-flight work; forced crash followed
+   by inspected orphan gate; no duplicate run or premature lock release
+6. Review the CLI's isolation and loss-of-ownership negative controls.
 
-- This is an **M11-01/M11-02 prototype**, not complete M11.
-- Mastra server startup/restart, OS reboot survival, and fully automated orphan recovery are **not implemented**.
-- No automatic review/repair permission expansion. Existing lifecycle review/Oracle remains authoritative.
-- Do not infer that detached means crash-safe across Mac power failures.
-- A child exit of 1 can also be an unexpected CLI error rather than a verified NOT_ACCEPTED decision. It is classified UNKNOWN (fail-closed), pending authoritative lifecycle reconciliation.
-- No real Ollama/Mastra smoke or `npm test` is claimed for this PR. Run `npm run typecheck`, scoped state tests, full regression, then a disposable kill/restart and stop/resume trial on the Mac before approving.
-- No live Studio :4111 or operational database was accessed.
-
-Goal for follow-up: add supervised isolated Mastra server lifecycle, recoverable child run reconciliation, restart tests and worker capability routing **without weakening M10.1 gates**.
-
-## Focused local review against Gemini supervisor prototype
-
-Reused: CLI `pause/resume/status` UX, active/processed task status fields, state contracts and machine-readable metrics. Did **not** reuse: expiring DB-only leader lock, PID-based SIGTERM from a fresh CLI process, autoReview/autoIntegrate defaults, or tick() that only increments a counter. The headless launcher stays a wrapper around the already-authorized lifecycle (NOT an alternate scheduler). All reconciliation and authorizations remain with the operator.
-
-Run unit tests and typecheck on the pulled PR branch before approving. Add a disposable end-to-end pause/stop/resume smoke; a passing state-machine test alone does not establish cross-process safety.
+This PR is **M11 supervisor integration groundwork**, not the finished M11
+closed-loop headless service. It does not self-start Mastra, detach from terminal,
+restart on reboot, auto-clear orphan gates, use cloud providers, or autonomously
+create mission plans. No test results are claimed until run on the actual branch.
