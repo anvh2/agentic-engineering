@@ -30,11 +30,15 @@ export AGENTIC_ALLOW_PROVIDERS=""
 npm run lead:headless -- init --manifest /tmp/m11-mission.json
 npm run lead:headless -- start
 npm run lead:headless -- status
-npm run lead:headless -- stop
+npm run lead:headless -- pause
+npm run lead:headless -- status
 npm run lead:headless -- resume
+npm run lead:headless -- stop
 ```
 
 Runner journal and logs: `$AGENTIC_SCHED_ROOT/headless/`.
+
+Gemini's useful status concepts are derived from mission checkpoints: activeTasks, processedTasks, pendingTasks and blockedTasks. No separate supervisor DB or heartbeat lock is introduced. Pause/resume uses durable request flags read by the running worker; it is **cooperative between objectives**, not a cancellation command. There is no PID-based cross-process signalling. CLI exit 1 is ambiguous and conservatively recorded UNKNOWN rather than being assumed to mean a validated NOT_ACCEPTED outcome.
 
 The queue stops on the first non-ACCEPTED exit code. `stop` is **cooperative at the objective boundary**, not immediate cancellation of a live model run. To cancel an in-flight run, use the existing operator-authorized `lead lifecycle cancel` command and confirm release. A process that crashes mid-objective leaves a `RUNNING` checkpoint and a non-expiring gate. **Never auto-remove an orphan gate** without confirming the prior process and all descendants have stopped and reconciling the persisted lifecycle/run state.
 
@@ -44,8 +48,14 @@ The queue stops on the first non-ACCEPTED exit code. `stop` is **cooperative at 
 - Mastra server startup/restart, OS reboot survival, and fully automated orphan recovery are **not implemented**.
 - No automatic review/repair permission expansion. Existing lifecycle review/Oracle remains authoritative.
 - Do not infer that detached means crash-safe across Mac power failures.
-- A child exit of 1 can also be an unexpected CLI error rather than a verified NOT_ACCEPTED decision; the next iteration must cross-check the durable lifecycle verdict before classifying it. It is never treated as ACCEPTED.
+- A child exit of 1 can also be an unexpected CLI error rather than a verified NOT_ACCEPTED decision. It is classified UNKNOWN (fail-closed), pending authoritative lifecycle reconciliation.
 - No real Ollama/Mastra smoke or `npm test` is claimed for this PR. Run `npm run typecheck`, scoped state tests, full regression, then a disposable kill/restart and stop/resume trial on the Mac before approving.
 - No live Studio :4111 or operational database was accessed.
 
 Goal for follow-up: add supervised isolated Mastra server lifecycle, recoverable child run reconciliation, restart tests and worker capability routing **without weakening M10.1 gates**.
+
+## Focused local review against Gemini supervisor prototype
+
+Reused: CLI `pause/resume/status` UX, active/processed task status fields, state contracts and machine-readable metrics. Did **not** reuse: expiring DB-only leader lock, PID-based SIGTERM from a fresh CLI process, autoReview/autoIntegrate defaults, or tick() that only increments a counter. The headless launcher stays a wrapper around the already-authorized lifecycle (NOT an alternate scheduler). All reconciliation and authorizations remain with the operator.
+
+Run unit tests and typecheck on the pulled PR branch before approving. Add a disposable end-to-end pause/stop/resume smoke; a passing state-machine test alone does not establish cross-process safety.
