@@ -4,7 +4,7 @@
 
 A human operator scopes work and approves actions; a model-backed Engineering Lead plans and reviews a task DAG; the persistent scheduler delegates bounded implementation tasks to coding workers. The runtime owns verification, audit and integration—not the models' claims of success.
 
-> **Experimental, not production-ready.** Neither `master` nor the M10.1 safety branch is certified for unattended operation on valuable or secret-bearing repositories. M10.1 has a partial regression verdict and is not merged into `master`. No provider call, repository mutation, push or unattended run is authorized merely by installing this repository.
+> **Experimental, not production-ready.** M10.1 safety closure was merged in [PR #44](https://github.com/anvh2/agentic-engineering/pull/44), but this does **not** certify unattended operation on valuable or secret-bearing repositories. No provider call, repository mutation, push or unattended run is authorized merely by installing this repository.
 
 ## Architecture
 
@@ -57,7 +57,7 @@ npm run lead -- cancel <task-id>
 npm run lead -- resume
 ```
 
-See `package.json` for the canonical scripts. Full regression has not yet been shown reliably green on the M10.1 candidate; no hosted CI guarantee is implied.
+See `package.json` for the canonical scripts. At PR #44 final HEAD `4fa9bc6`, the operator reported **1,082/1,082** local regression tests passing (Node v22.23.2, macOS, exit 0); this is historical local evidence, **not** a claim about the current tree or hosted CI. No hosted CI guarantee is implied.
 
 ## Safety, source privacy and model costs
 
