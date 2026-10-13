@@ -38,6 +38,18 @@ import { DatabaseSync } from 'node:sqlite';
  * Schema note: `waiters` was added by CREATE TABLE IF NOT EXISTS (no migration). A process running pre-FIFO code on the
  * same database still honours the permit count (it only ever counts `leases`) but ignores the queue, so it can overtake;
  * run one version at a time.
+ *
+ * RUN OWNERSHIP. A task id names a piece of planned work, not an execution: two runs of the same id (a retry, a second
+ * provider, another test process, another checkout on the same machine) can hold permits at the same time. A permit therefore
+ * names the RUN that owns it, in its holder: `<label>:<taskId>:pid<pid>:run=<encodeURIComponent(runId)>` (see `permitHolder`).
+ * Confirming that a cancelled run released the model (`engagedBy(tag, { runId })`) then asks only about that run:
+ *   - a permit or queue entry of ANOTHER run is not engaged for this one;
+ *   - a permit or queue entry of this run is;
+ *   - a permit whose owner cannot be established (the pre-run-id holder format, a malformed marker) is engaged for everyone:
+ *     it fails closed, because a false "stopped" leaves an unsupervised model running and a false "still active" only warns.
+ * Resource, provider and handle never decide ownership: the probe looks across every resource, so a task that was
+ * mis-identified, or a handle on another resource, can neither hide the target's permit nor adopt somebody else's.
+ * Without a run id the probe is the task-level one it always was (every entry carrying the task id).
  */
 
 /** Default cumulative time one task run may spend queued for model permits (AGENTIC_MODEL_WAIT_BUDGET_MS overrides). */
@@ -80,6 +92,42 @@ export interface AcquireOptions {
   maxWaitMs?: number;
 }
 
+/** One permit or queue entry that is (or may be) engaged on behalf of a task. `run` is the owning run when it can be read. */
+export interface EngagedEntry {
+  kind: 'lease' | 'waiter';
+  holder: string;
+  pid: number;
+  run?: string;
+}
+
+/** Narrows a task-level probe to one run. */
+export interface EngagedScope {
+  runId?: string;
+}
+
+const RUN_MARKER = ':run=';
+
+/**
+ * The holder a run names its permits and queue entries with. Without a run id (a direct runner use, a bench) it is the legacy
+ * `<label>:<taskId>:pid<pid>`, whose owner nobody can establish: such an entry blocks every run's cancel confirmation.
+ */
+export function permitHolder(parts: { label: string; taskId: string; runId?: string; pid?: number }): string {
+  const base = `${parts.label}:${parts.taskId}:pid${parts.pid ?? process.pid}`;
+  return parts.runId === undefined || parts.runId === '' ? base : `${base}${RUN_MARKER}${encodeURIComponent(parts.runId)}`;
+}
+
+/** The run that owns `holder`, or undefined when that cannot be established (legacy format, missing or malformed marker). */
+export function holderRunId(holder: string): string | undefined {
+  const m = /:pid\d+(?::run=([^:]+))?$/.exec(holder);
+  if (!m || m[1] === undefined) return undefined;
+  try {
+    const id = decodeURIComponent(m[1]);
+    return id === '' ? undefined : id;
+  } catch {
+    return undefined;
+  }
+}
+
 export interface ModelCapacityOptions {
   resource?: string;
   /** Used only when the database has no permit count yet. */
@@ -107,6 +155,11 @@ CREATE TABLE IF NOT EXISTS waiters (
 );
 CREATE INDEX IF NOT EXISTS waiters_resource ON waiters(resource, ticket);
 `;
+
+function entry(kind: EngagedEntry['kind'], row: { holder: string; pid: number }): EngagedEntry {
+  const run = holderRunId(row.holder);
+  return { kind, holder: row.holder, pid: row.pid, ...(run === undefined ? {} : { run }) };
+}
 
 function defaultIsAlive(pid: number): boolean {
   try {
@@ -174,16 +227,23 @@ export class ModelCapacity {
 
   /**
    * Permits held, or queue entries waiting, on behalf of work tagged `tag` (the task's contract id). The runner names its
-   * holder `<model>:<taskId>:pid<pid>`. Used to confirm that a cancelled run really released the model.
+   * holder with `permitHolder` (`<model>:<taskId>:pid<pid>:run=<runId>`). Used to confirm that a cancelled run really released
+   * the model.
+   *
+   * With `scope.runId` the question is about ONE run: entries owned by another run are left out, entries of this run and
+   * entries whose owner cannot be established are kept (fail closed). Without it, every entry carrying the tag is returned.
+   * Either way it looks across every resource and never filters on provider or resource.
    */
-  engagedBy(tag: string): { kind: 'lease' | 'waiter'; holder: string; pid: number }[] {
+  engagedBy(tag: string, scope: EngagedScope = {}): EngagedEntry[] {
     const marker = `:${tag}:pid`;
     const now = this.now();
     // Across every resource: a cancelled task must have released the permit of whichever provider it was using.
     // Matched in code, not with LIKE, so task ids containing '_' or '%' cannot match each other.
     const leases = (this.db.prepare('SELECT holder, pid FROM leases WHERE expires_at > ? ORDER BY acquired_at').all(now) as { holder: string; pid: number }[]).filter((l) => l.holder.includes(marker));
     const waiters = (this.db.prepare('SELECT holder, pid, tag FROM waiters WHERE expires_at > ? ORDER BY ticket').all(now) as { holder: string; pid: number; tag: string | null }[]).filter((w) => w.tag === tag || w.holder.includes(marker));
-    return [...leases.map((l) => ({ kind: 'lease' as const, holder: l.holder, pid: l.pid })), ...waiters.map((w) => ({ kind: 'waiter' as const, holder: w.holder, pid: w.pid }))];
+    const entries: EngagedEntry[] = [...leases.map((l) => entry('lease', l)), ...waiters.map((w) => entry('waiter', w))];
+    if (scope.runId === undefined) return entries;
+    return entries.filter((e) => e.run === undefined || e.run === scope.runId); // another run's entry is not this run's; unknown ownership stays
   }
 
   private tx<T>(fn: () => T): T {

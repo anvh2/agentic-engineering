@@ -99,9 +99,10 @@ describe('scheduler <-> Mastra HTTP boundary (scripted server)', () => {
       assert.equal(task.claims, 1);
       assert.deepEqual(summary.requeued, []);
       assert.equal(store.events('a').some((e) => e.to === 'REVIEW_PENDING' || e.to === 'VERIFYING'), false, 'the late PASS never entered the lifecycle');
-      // the late terminal state was observed by the confirmation, which is all it may do with it
+      // The run is terminal, but without a capacity probe release cannot be confirmed clean.
       const audit = store.events('a').find((e) => /run cancellation \(task timeout\)/.test(e.reason ?? ''));
-      assert.match(audit?.reason ?? '', /stopped/);
+      assert.match(audit?.reason ?? '', /unconfirmed/);
+      assert.equal(summary.stillActive[0]?.outcome, 'unconfirmed');
       assert.ok(m.calls.some((c) => c.startsWith('POST') && c.endsWith('/cancel')), 'the scheduler cancelled the run over HTTP');
     } finally {
       await m.close();

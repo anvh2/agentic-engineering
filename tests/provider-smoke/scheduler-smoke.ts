@@ -13,6 +13,7 @@ import { geminiEntry, type GeminiConfig } from '../../src/workers/providers/gemi
 import { ProviderRegistry } from '../../src/workers/providers/registry.ts';
 import type { Executor } from '../../src/runtime/scheduler/scheduler.ts';
 import { createHttpBackend, groupAlive, type SmokeBackend } from './http-backend.ts';
+import type { FaultPlan } from '../../src/runtime/reliability/faults.ts';
 
 /**
  * One task through the real scheduler on a disposable Go repository:
@@ -59,6 +60,8 @@ export interface SmokeOptions {
     capacityDb?: string;
     startTimeoutMs?: number;
     pollMs?: number;
+    /** Reliability Lab fault plan for the Mastra server; each firing is logged to <outDir>/faults.jsonl. */
+    faults?: FaultPlan;
   };
   /** The scheduler's own operator allow-list (default: `<provider>:smoke-double`). */
   schedulerAllowProviders?: string[];
@@ -114,6 +117,7 @@ export async function runSchedulerSmoke(options: SmokeOptions) {
         existingServer: options.http?.existingServer,
         startTimeoutMs: options.http?.startTimeoutMs,
         executor: { pollMs: options.http?.pollMs, taskTimeoutMs: taskTimeoutMs + maxCapacityWaitMs },
+        ...(options.http?.faults ? { faults: options.http.faults, faultsLog: join(outDir, 'faults.jsonl') } : {}),
         log,
       })
     : inProcessBackend(options, outDir, modelTimeoutMs);

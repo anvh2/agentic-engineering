@@ -9,6 +9,7 @@ import type { CodexConfig } from '../../src/workers/providers/codex.ts';
 import type { GeminiConfig } from '../../src/workers/providers/gemini.ts';
 import { BASE_ENV_ALLOWLIST } from '../../src/workers/providers/process.ts';
 import type { SmokeServerConfig } from './smoke-server.ts';
+import { faultEnv, type FaultPlan } from '../../src/runtime/reliability/faults.ts';
 
 /**
  * The HTTP side of the provider smoke: starts a dedicated Mastra server as a child process (its own port, storage and process
@@ -53,7 +54,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** Environment variable names forwarded to the server: enough for `go test` and a signed-in Codex CLI, and no Mastra platform token or other secret. */
 const FORWARDED_ENV = [...BASE_ENV_ALLOWLIST, 'GOPATH', 'GOCACHE', 'GOMODCACHE', 'GOROOT', 'GOFLAGS', 'GOPROXY', 'CODEX_HOME'];
 
-export function serverEnvironment(options: { port: number; configPath: string; allowProviders: readonly string[]; capacityDb?: string; passEnv?: readonly string[]; parentEnv?: NodeJS.ProcessEnv; sandboxDenyRead?: readonly string[] }): NodeJS.ProcessEnv {
+export function serverEnvironment(options: { port: number; configPath: string; allowProviders: readonly string[]; capacityDb?: string; passEnv?: readonly string[]; parentEnv?: NodeJS.ProcessEnv; sandboxDenyRead?: readonly string[]; faults?: FaultPlan; faultsLog?: string }): NodeJS.ProcessEnv {
   const parent = options.parentEnv ?? process.env;
   const env: NodeJS.ProcessEnv = {};
   // The adapter builds the CLI's environment from ITS process's: everything it would forward (its base list and the configured passEnv) must reach the server.
@@ -68,6 +69,8 @@ export function serverEnvironment(options: { port: number; configPath: string; a
     ...(options.capacityDb ? { AGENTIC_MODEL_LOCK_DB: options.capacityDb } : {}),
     // Paths the verifier sandbox (which runs worker-written code inside this server) must not read; see runtime/sandbox.
     ...(options.sandboxDenyRead?.length ? { AGENTIC_SANDBOX_DENY_READ: options.sandboxDenyRead.join(delimiter) } : {}),
+    // Reliability Lab: a test's fault plan reaches the server explicitly (never inherited from the parent's environment).
+    ...(options.faults ? faultEnv(options.faults, options.faultsLog) : {}),
   });
   return env;
 }
@@ -106,6 +109,9 @@ export interface HttpBackendOptions {
   resume?: boolean;
   /** Listen on this port instead of a free one (a restart on the address the scheduler is already polling). */
   port?: number;
+  /** Reliability Lab fault plan for the server process, and where it logs each firing (src/runtime/reliability/faults.ts). */
+  faults?: FaultPlan;
+  faultsLog?: string;
   log: (line: string) => void;
 }
 
@@ -140,7 +146,7 @@ export async function createHttpBackend(options: HttpBackendOptions): Promise<Sm
     const out = openSync(logPath, 'a');
     child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', SERVER_ENTRY], {
       cwd: serverDir,
-      env: serverEnvironment({ port, configPath, allowProviders: options.serverAllowProviders, capacityDb: options.capacityDb, passEnv: (options.provider === 'gemini' ? options.gemini : options.codex)?.passEnv, sandboxDenyRead: options.sandboxDenyRead }),
+      env: serverEnvironment({ port, configPath, allowProviders: options.serverAllowProviders, capacityDb: options.capacityDb, passEnv: (options.provider === 'gemini' ? options.gemini : options.codex)?.passEnv, sandboxDenyRead: options.sandboxDenyRead, faults: options.faults, faultsLog: options.faultsLog }),
       detached: true, // own process group: a terminal Ctrl-C reaches the harness only, which stops things in a controlled order
       stdio: ['ignore', out, out],
     });

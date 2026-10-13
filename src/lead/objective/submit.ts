@@ -34,7 +34,7 @@ export class PlanNotSubmittableError extends Error {
 /** The part of SchedulerStore that submitting needs. A structural type keeps planning free of any scheduler import. */
 export interface BatchSink {
   createBatch(plan: ReturnType<typeof toBatchPlan>): unknown;
-  promote(actor?: string): { ready: string[]; blocked: string[] };
+  promote(actor?: string, scope?: { batchId?: string }): { ready: string[]; blocked: string[] };
 }
 
 export interface SubmitOutcome {
@@ -67,7 +67,7 @@ export async function submitObjective(workdir: string, objectiveId: string, sink
   // 3. queue it (createBatch re-checks ids, dependencies and cycles; a second submit is a duplicate-batch error)
   const batch = toBatchPlan(objective, plan!, validation);
   sink.createBatch(batch);
-  const promoted = sink.promote('objective-submit');
+  const promoted = sink.promote('objective-submit', { batchId: batch.batchId });
   const outcome: SubmitOutcome = {
     batchId: batch.batchId,
     dir,

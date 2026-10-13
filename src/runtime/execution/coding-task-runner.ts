@@ -9,10 +9,11 @@ import { z } from 'zod';
 import { REPOSITORY_ROOT_CONTEXT_KEY } from '../../workers/tools/repository-tools.ts';
 import { runSandboxedCommand, sandboxStatus } from '../sandbox/sandbox.ts';
 import { scrubForWorker } from './worker-feedback.ts';
-import { CapacityWaitTimeout, capacityFor, modelWaitBudgetMs, type CapacityLease, type ModelCapacity } from '../capacity/model-capacity.ts';
+import { CapacityWaitTimeout, capacityFor, modelWaitBudgetMs, permitHolder, type CapacityLease, type ModelCapacity } from '../capacity/model-capacity.ts';
 import { createRepairLoopTracker } from './repair-loop-tracker.ts';
 import { runtimeMetrics, type RuntimeMetrics } from '../../observability/metrics.ts';
 import { createTraceSink, type TraceEvent, type TraceSink } from './coding-task-trace.ts';
+import { faultPoint } from '../reliability/faults.ts';
 import { normalizeUsage, type ProviderDescriptor, type ProviderRequest, type ProviderTelemetry, type RawUsage } from './worker-provider.ts';
 
 /**
@@ -160,6 +161,12 @@ export interface RunCodingTaskOptions {
   signal?: AbortSignal;
   /** Machine-wide local-model concurrency limit (default: the shared lease database). Held only around each model call. */
   capacity?: ModelCapacity;
+  /**
+   * The id of the execution this runner serves (the Mastra run id). It is written into every permit and queue entry the run
+   * takes, so a cancel can tell THIS run's permit from another run's of the same task id. Without it the entries carry no
+   * owner and block every run's cancel confirmation (fail closed).
+   */
+  runId?: string;
   /**
    * Cumulative time this task run may spend QUEUED for model permits (default AGENTIC_MODEL_WAIT_BUDGET_MS, 30 min).
    * Waiting is not execution: it is bounded separately, and exhausting it is an explicit `capacity_wait_timeout`
@@ -465,7 +472,8 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
           // the budget is cumulative over the whole task run (every attempt and retry), so a task cannot queue forever one call at a time
           const spent = records.reduce((a, r) => a + r.capacityWaitMs, 0);
           const remaining = Math.max(1, waitBudgetMs - spent);
-          permit = await (options.capacity ?? capacityFor(descriptor?.capacity)).acquire(`${modelLabel}:${task.taskId}:pid${process.pid}`, options.signal, { tag: task.taskId, maxWaitMs: remaining });
+          await faultPoint('runner.before-permit', { signal: options.signal });
+          permit = await (options.capacity ?? capacityFor(descriptor?.capacity)).acquire(permitHolder({ label: modelLabel, taskId: task.taskId, runId: options.runId }), options.signal, { tag: task.taskId, maxWaitMs: remaining });
           waitOutcome = 'acquired';
         } catch (err) {
           if (err instanceof CapacityWaitTimeout) {
@@ -478,6 +486,7 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
           record.capacityWaitMs += waitedMs;
           metrics.modelCapacityWait(waitedMs / 1000, waitOutcome);
         }
+        await faultPoint('runner.after-permit', { signal: options.signal }); // the permit is held: the finally below releases it
         inferenceStart = Date.now();
         trace.emit('model_started', { model: modelLabel, ...(descriptor ? { provider: descriptor.identity.id, providerModel: descriptor.identity.model } : {}), attempt: attemptNo, runtimeTry, capacityWaitMs: inferenceStart - waitStart });
         const callSignal = options.signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), options.signal]) : AbortSignal.timeout(timeoutMs);

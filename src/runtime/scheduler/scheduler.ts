@@ -83,7 +83,7 @@ export interface SchedulerDeps {
    * becomes an ACTIVE-execution budget that pauses while the task is queued for a permit, and the queueing itself is
    * bounded by `maxCapacityWaitMs`. Without it the legacy single wall-clock deadline applies.
    */
-  capacity?: { isWaiting(tag: string): boolean; engagedBy?(tag: string): { kind: 'lease' | 'waiter'; holder: string; pid: number }[] };
+  capacity?: { isWaiting(tag: string): boolean; engagedBy?(tag: string, scope?: { runId?: string }): { kind: 'lease' | 'waiter'; holder: string; pid: number; run?: string }[] };
   /** How long a cancelled run gets to release the model before it is reported as still active (default 15 s). */
   cancelGraceMs?: number;
   /** The operator's allow-list for non-default worker providers (`codex` or `codex:<taskId>`). Empty: only the local model runs. */
@@ -147,6 +147,7 @@ export class Scheduler {
    */
   async run(options: { batchId?: string; workerPrefix?: string } = {}): Promise<RunSummary> {
     const summary: RunSummary = { claimed: [], reviewPending: [], failed: [], requeued: [], peakInFlight: 0, stopReason: 'idle', stillActive: [] };
+    if (options.batchId !== undefined && !this.store.getBatch(options.batchId)) throw new Error(`unknown batch ${options.batchId}: nothing to run`);
     const prefix = options.workerPrefix ?? `worker-${process.pid}`;
     const inflight = new Map<string, Promise<void>>();
     const slots = new Set<number>(); // worker slots in use
@@ -156,7 +157,7 @@ export class Scheduler {
       try {
         const reaped = this.store.reapExpired();
         summary.requeued.push(...reaped.requeued);
-        this.store.promote();
+        this.store.promote('scheduler', options.batchId === undefined ? {} : { batchId: options.batchId }); // a run limited to one batch promotes only that batch (and its dependents)
 
         // Shutdown gate: re-checked per claim, so no task is claimed once stop() has been called.
         while (inflight.size < this.config.maxConcurrentWorkers && !this.abort.signal.aborted) {
@@ -341,7 +342,10 @@ export class Scheduler {
           signal: ctl.signal,
           log: this.log,
           onRunStart: ({ runId }) => {
-            if (!store.recordRun(task.id, fence, runId)) unrecordedRunId = runId;
+            if (!store.recordRun(task.id, fence, runId)) {
+              unrecordedRunId = runId;
+              throw new Error(`refusing to start workflow run ${runId}: task ${task.id} lost its execution fence`);
+            }
             const entry = this.live.get(liveKey);
             if (entry) entry.runId = runId;
           },
@@ -386,7 +390,7 @@ export class Scheduler {
     if (!task) return;
     try {
       const result = await cancelTaskRun({ store: this.store, executor: this.executor, capacity: this.capacity, task, runId, actor: 'scheduler', reason, graceMs: this.cancelGraceMs, log: this.log });
-      if (result.outcome === 'still_active' || result.outcome === 'unreachable') this.stillActive.push(result);
+      if (result.outcome !== 'stopped' && result.outcome !== 'no_run') this.stillActive.push(result);
     } catch (err) {
       this.log(`${taskId}: could not cancel run ${task.runId ?? '(none)'}: ${(err as Error).message}`);
     }

@@ -12,6 +12,7 @@ import { parseAllowList } from '../../src/runtime/execution/worker-provider.ts';
 import { Scheduler } from '../../src/runtime/scheduler/scheduler.ts';
 import { SchedulerStore } from '../../src/runtime/scheduler/store.ts';
 import { runSandboxedCommand } from '../../src/runtime/sandbox/sandbox.ts';
+import { executableReadPaths } from '../../src/runtime/sandbox/toolchain.ts';
 import { WorktreeManager } from '../../src/runtime/worktree/worktree.ts';
 import type { CodexConfig } from '../../src/workers/providers/codex.ts';
 import { createHttpBackend, groupAlive, type SmokeBackend } from './http-backend.ts';
@@ -348,7 +349,7 @@ export async function runM85Objective(options: M85Options): Promise<M85Result> {
   // but credentials), so it gets the same credential list as the Codex profile on top of the oracle and runtime state. Anything nobody listed
   // under the home directory stays readable to that code: see docs/reports/m8.7a-credential-isolation.md.
   const verifierDenyRead = isolated ? [...new Set([...denyRead, ...credentialDenyPaths(process.env)])].sort() : [];
-  const readAllow = isolated ? [...new Set([...discoverToolchainReadPaths(), ...(options.isolation ? (options.isolation.extraReadAllow ?? []) : [])])].sort() : undefined;
+  const readAllow = isolated ? [...new Set([...discoverToolchainReadPaths(), ...executableReadPaths(options.codex?.command ?? 'codex'), ...(options.isolation ? (options.isolation.extraReadAllow ?? []) : [])])].sort() : undefined;
   const codexConfig = { ...options.codex, ...(isolated ? { denyReadPaths: denyRead, readAllowPaths: readAllow } : {}) };
   const backendOptions = {
     outDir,

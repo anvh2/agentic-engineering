@@ -32,7 +32,7 @@ export async function cancelTask(
   const task = alreadyCancelled
     ? before
     : store.transition(options.taskId, 'CANCELLED', { actor, reason: options.reason ?? 'cancelled by user', patch: { failureCategory: 'cancelled' } });
-  if (!alreadyCancelled) store.promote('cancel');
+  if (!alreadyCancelled) store.promote('cancel', { batchId: task.batchId });
   const run = await cancelTaskRun({ store, executor: options.executor, capacity: options.capacity, task, actor, reason: options.reason ?? 'cancelled by operator', graceMs: options.graceMs, log: options.log });
   return { task: store.requireTask(options.taskId), alreadyCancelled, run, clean: run.outcome === 'stopped' || run.outcome === 'no_run' };
 }

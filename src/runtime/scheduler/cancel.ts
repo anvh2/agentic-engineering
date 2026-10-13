@@ -7,8 +7,13 @@ import type { Executor } from './scheduler.ts';
  * none of them can leave an inference and a model permit running unsupervised.
  *
  * Asking is not stopping. After the executor's cancel returns, this waits (bounded) until the model is really free: the
- * workflow run reports a terminal status AND no permit is held or queued on behalf of the task. Anything short of that is
+ * workflow run reports a terminal status AND no permit is held or queued on behalf of THIS RUN. Anything short of that is
  * reported as `still_active`, never as success, and recorded in the task's audit trail.
+ *
+ * "This run" matters because a task id is not an execution: another run of the same id (a retry, another provider, another
+ * process on the machine) may hold its own permit and is none of this cancellation's business. Ownership comes from the run
+ * id the runner wrote into its permit (src/runtime/capacity/model-capacity.ts, RUN OWNERSHIP). A permit whose owner cannot be
+ * established still blocks: a false "stopped" is the dangerous direction. Provider and resource are never consulted.
  */
 
 export type CancelOutcome =
@@ -30,15 +35,15 @@ export interface CancelRunResult {
   runId?: string;
   outcome: CancelOutcome;
   /** Model permits/queue entries still engaged for this task after the grace period. */
-  engaged: { kind: 'lease' | 'waiter'; holder: string; pid: number }[];
+  engaged: { kind: 'lease' | 'waiter'; holder: string; pid: number; run?: string }[];
   detail: string;
 }
 
 export interface CancelRunOptions {
   store: SchedulerStore;
   executor: Pick<Executor, 'cancel'>;
-  /** Machine-wide model capacity probe; without it only the run's own status is confirmed. */
-  capacity?: { engagedBy?(tag: string): { kind: 'lease' | 'waiter'; holder: string; pid: number }[] };
+  /** Machine-wide model capacity probe; without it a stopped run cannot be confirmed clean. */
+  capacity?: { engagedBy?(tag: string, scope?: { runId?: string }): { kind: 'lease' | 'waiter'; holder: string; pid: number; run?: string }[] };
   task: TaskRow;
   /** The run to stop when the task row does not carry it (a run started after the task lost its lease was never recorded). */
   runId?: string;
@@ -61,6 +66,8 @@ export async function cancelTaskRun(options: CancelRunOptions): Promise<CancelRu
   const task = store.getTask(options.task.id) ?? options.task;
   const runId = options.runId ?? task.runId ?? undefined;
   const tag = task.spec.request?.contract.taskId ?? task.id; // what the runner names its permit/queue entry after
+  const capacityProbe = capacity?.engagedBy;
+  const engagedNow = () => capacityProbe?.call(capacity, tag, { runId }) ?? []; // this run's entries, plus any whose owner is unknown
   const record = (result: CancelRunResult): CancelRunResult => {
     log(`${task.id}: cancel (${reason}): ${result.outcome}${result.runId ? ` run ${result.runId}` : ''}${result.detail ? ` - ${result.detail}` : ''}`);
     try {
@@ -78,22 +85,22 @@ export async function cancelTaskRun(options: CancelRunOptions): Promise<CancelRu
   try {
     report = await executor.cancel({ task, runId, log });
   } catch (err) {
-    return record({ taskId: task.id, runId, outcome: 'unreachable', engaged: capacity?.engagedBy?.(tag) ?? [], detail: `cancel request failed: ${(err as Error).message}; the run may still be executing` });
+    return record({ taskId: task.id, runId, outcome: 'unreachable', engaged: engagedNow(), detail: `cancel request failed: ${(err as Error).message}; the run may still be executing` });
   }
   const runReport: CancelReport = report ?? { run: 'unconfirmed' };
 
   // The run being terminal does not prove the model is free: the step may still be unwinding. Wait for the permit to go.
   const deadline = Date.now() + (options.graceMs ?? DEFAULT_GRACE_MS);
   const pollMs = options.pollMs ?? 250;
-  let engaged = capacity?.engagedBy?.(tag) ?? [];
+  let engaged = engagedNow();
   while (engaged.length > 0 && Date.now() < deadline) {
     await sleep(pollMs);
-    engaged = capacity?.engagedBy?.(tag) ?? [];
+    engaged = engagedNow();
   }
 
   const stoppedRun = runReport.run === 'terminal';
-  const detail = [runReport.detail, runReport.runStatus ? `run status ${runReport.runStatus}` : undefined, engaged.length ? `model still engaged: ${engaged.map((e) => `${e.kind} pid ${e.pid}`).join(', ')}` : undefined].filter(Boolean).join('; ');
+  const detail = [runReport.detail, runReport.runStatus ? `run status ${runReport.runStatus}` : undefined, engaged.length ? `model still engaged: ${engaged.map((e) => `${e.kind} pid ${e.pid}`).join(', ')}` : undefined, !capacityProbe ? 'model capacity probe unavailable; release cannot be confirmed' : undefined].filter(Boolean).join('; ');
   if (runReport.run === 'unreachable') return record({ taskId: task.id, runId, outcome: 'unreachable', engaged, detail });
   if (runReport.run === 'still_active' || engaged.length > 0) return record({ taskId: task.id, runId, outcome: 'still_active', engaged, detail });
-  return record({ taskId: task.id, runId, outcome: stoppedRun ? 'stopped' : 'unconfirmed', engaged, detail });
+  return record({ taskId: task.id, runId, outcome: stoppedRun && capacityProbe ? 'stopped' : 'unconfirmed', engaged, detail });
 }

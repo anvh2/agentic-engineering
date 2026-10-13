@@ -1,0 +1,29 @@
+{
+  "schema": "agentic.reliability-evidence/1",
+  "scenario": "timeout-before-spawn",
+  "run": 1,
+  "kind": "smoke",
+  "covers": "active-execution timeout while the run is held right before the provider spawn: nothing may ever start (no late spawn)",
+  "startedAt": "2026-10-10T19:50:40.534Z",
+  "durationMs": 3931,
+  "loadavg1": 16.98095703125,
+  "ok": true,
+  "runtime": {
+    "taskState": "RUNTIME_FAILURE",
+    "failureCategory": "task_timeout",
+    "cancelOutcome": "stopped",
+    "processes": [],
+    "engaged": [],
+    "taskResource": "gemini",
+    "claims": 1,
+    "requeued": [],
+    "faultsFired": [
+      "provider.before-spawn"
+    ],
+    "prompts": 0
+  },
+  "classification": {
+    "category": "pass",
+    "reasons": []
+  }
+}

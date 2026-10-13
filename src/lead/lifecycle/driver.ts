@@ -194,6 +194,10 @@ async function driveObjective(deps: LifecycleDeps, objectiveId: string, options:
       stops.push(`partial integration: ${partial.length > 0 ? `${partial.join(', ')} are integrated on lead-integration/${batchId}` : 'nothing was integrated'}; main is untouched`);
       return stop('ESCALATED', 'EXECUTING', 'task_dead_end', stops);
     }
+    // a required task that reached DONE but whose implementation was reverted since is not part of the integrated result:
+    // the objective cannot be accepted on its strength, and nothing in the lifecycle re-does it by itself
+    const reverted = required.filter((t) => t.state === 'DONE' && store.isReverted(t.id));
+    if (reverted.length > 0) return stop('ESCALATED', 'EXECUTING', 'task_reverted', reverted.map((t) => `${t.id} is DONE but its implementation was reverted: ${store.integrationFacts(t.id).at(-1)?.reason ?? 'no reason recorded'}. Reinstate it (lead integration reinstate) or re-plan; the objective is not accepted meanwhile`));
     if (awaiting.length > 0) return stop('AWAITING_OPERATOR', 'EXECUTING', 'repair_needs_operator_authorization', awaiting);
     if (required.every((t) => t.state === 'DONE')) {
       try {

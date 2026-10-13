@@ -1,0 +1,13 @@
+diff --git a/src/runtime/capacity/model-capacity.ts b/src/runtime/capacity/model-capacity.ts
+index e7b3c10..4924d7b 100644
+--- a/src/runtime/capacity/model-capacity.ts
++++ b/src/runtime/capacity/model-capacity.ts
+@@ -243,7 +243,7 @@ export class ModelCapacity {
+     const waiters = (this.db.prepare('SELECT holder, pid, tag FROM waiters WHERE expires_at > ? ORDER BY ticket').all(now) as { holder: string; pid: number; tag: string | null }[]).filter((w) => w.tag === tag || w.holder.includes(marker));
+     const entries: EngagedEntry[] = [...leases.map((l) => entry('lease', l)), ...waiters.map((w) => entry('waiter', w))];
+     if (scope.runId === undefined) return entries;
+-    return entries.filter((e) => e.run === undefined || e.run === scope.runId); // another run's entry is not this run's; unknown ownership stays
++    return entries.filter((e) => e.run === scope.runId); // another run's entry is not this run's; unknown ownership stays
+   }
+ 
+   private tx<T>(fn: () => T): T {

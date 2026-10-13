@@ -52,11 +52,16 @@ if (args[0] === '--version') {
     }
     record({ apiStatuses: statuses });
   }
+  // FAKE_START_DELAY_MS (hang modes): the process exists but reports in (pidfile) only after this delay - a CLI that was
+  // spawned and is still starting up, which is the interleaving a loaded machine produces (M10 Reliability Lab).
+  const startDelay = Number(process.env.FAKE_START_DELAY_MS ?? 0);
   if (mode === 'hang') {
     process.on('SIGTERM', () => {}); // ignores the polite request
+    if (startDelay > 0) await new Promise((r) => setTimeout(r, startDelay));
     if (process.env.FAKE_PIDFILE) writeFileSync(process.env.FAKE_PIDFILE, String(process.pid));
     setInterval(() => {}, 1000);
   } else if (mode === 'term-ok-hang') {
+    if (startDelay > 0) await new Promise((r) => setTimeout(r, startDelay));
     if (process.env.FAKE_PIDFILE) writeFileSync(process.env.FAKE_PIDFILE, String(process.pid));
     setInterval(() => {}, 1000);
   } else if (mode === 'fail') {
@@ -65,6 +70,11 @@ if (args[0] === '--version') {
   } else if (mode === 'auth') {
     console.error('Please set an Auth method');
     process.exit(41);
+  } else if (mode === 'reply') {
+    // FAKE_REPLY: a text-only answer (meeting turns); nothing is edited.
+    event({ type: 'init', timestamp: 't', session_id: 's', model: process.env.FAKE_REPORTED_MODEL ?? 'gemini-fake-pro' });
+    event({ type: 'message', role: 'assistant', content: process.env.FAKE_REPLY ?? '', delta: true });
+    event({ type: 'result', status: 'success', stats: { total_tokens: 154, input_tokens: 120, output_tokens: 34, cached: 0, input: 120, duration_ms: 5, tool_calls: 0, models: {} } });
   } else if (mode === 'garbage') {
     console.log('not json at all');
     console.log('the work is done');

@@ -18,15 +18,17 @@
 //   npm run lead -- recover <task> --reason "..." [--grant N | --escalate]   audited recovery of a RUNTIME_FAILURE whose claim budget is spent
 //   npm run lead -- claude take|start|done <task> ...   Claude-direct work, tracked with reasons
 //   npm run lead -- metrics [--batch B] | reconcile [--batch B]
+//   npm run lead -- integration revert|reinstate <task> --reason "..." [--commit <sha>]   a DONE task's code was reverted (or re-integrated): an append-only fact, no state change
 //   npm run lead -- objective <objective.json> [--draft F] | --show <id> | --submit <id>   M7.5: plan, then explicit submit; never executes
 //   npm run lead -- lifecycle pin|run|status|authorize|resume|cancel <objective-id> ...   M8.5: execute -> verified review -> integrate -> independent acceptance (see src/lead/lifecycle/cli.ts)
+//   npm run lead -- meeting open|run|status|record|cancel <session-id> ...   M10: model-backed engineering meetings (see src/lead/collaboration/meeting-cli.ts)
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { findProjectRoot } from '../src/core/paths.ts';
 import { completeClaudeTask, integrateBatch } from '../src/runtime/integration/integrate.ts';
 import { createMastraExecutor } from '../src/integrations/mastra/executor.ts';
-import { computeMetrics, reconcileState, renderBacklog } from '../src/runtime/scheduler/report.ts';
+import { computeMetrics, integrationNote, reconcileState, renderBacklog } from '../src/runtime/scheduler/report.ts';
 import { pendingReviews, renderReviewPack, reviewDecision, startClaudeTask, takeOverEscalated, writeReviewPack } from '../src/lead/review.ts';
 import { Scheduler } from '../src/runtime/scheduler/scheduler.ts';
 import { SchedulerStore } from '../src/runtime/scheduler/store.ts';
@@ -35,6 +37,7 @@ import { configFromEnv, resolveConfig, type SchedulerConfig } from '../src/runti
 import { WorktreeManager } from '../src/runtime/worktree/worktree.ts';
 import { runObjectiveCommand } from '../src/lead/objective/cli.ts';
 import { runLifecycleCommand } from '../src/lead/lifecycle/cli.ts';
+import { runMeetingCommand } from '../src/lead/collaboration/meeting-cli.ts';
 import { recoverRuntimeFailure } from '../src/lead/recovery.ts';
 import { cancelTask } from '../src/lead/cancel.ts';
 import { allowedProvidersFromEnv, parseAllowList, providerOf } from '../src/runtime/execution/worker-provider.ts';
@@ -78,6 +81,8 @@ function table(batchId?: string, state?: string): void {
     console.log(`${t.state.padEnd(15)} p${String(t.priority).padStart(2)} ${t.id}${t.spec.dependsOn.length ? `  <- ${t.spec.dependsOn.join(',')}` : ''}  [${t.executor}${t.language ? `/${t.language}` : ''}] attempts=${t.attempts} claims=${t.claims}${provider}${lease}${t.runId ? `  run=${t.runId}` : ''}`);
     if (waiting.length > 0) console.log(`${' '.repeat(16)}waiting on ${waiting.map((w) => `${w.id} (${w.state})`).join(', ')}`);
     if (t.stateReason && !['READY', 'BACKLOG'].includes(t.state)) console.log(`${' '.repeat(16)}${t.failureCategory ? `[${t.failureCategory}] ` : ''}${t.stateReason}`);
+    const note = integrationNote(store, t);
+    if (note) console.log(`${' '.repeat(16)}${note}`);
   }
 }
 
@@ -109,7 +114,7 @@ async function main(): Promise<void> {
     }
     case 'plan': {
       const plan = store.createBatch(JSON.parse(await readFile(resolve(positional[0]), 'utf8')));
-      const p = store.promote('plan');
+      const p = store.promote('plan', { batchId: plan.batchId }); // only the plan just created: never another objective's tasks
       console.log(`batch ${plan.batchId}: ${plan.tasks.length} task(s); READY: ${p.ready.join(', ') || '-'}; BLOCKED: ${p.blocked.join(', ') || '-'}`);
       table(plan.batchId);
       break;
@@ -240,14 +245,27 @@ async function main(): Promise<void> {
       else throw new Error('usage: claude take|start|done <task>');
       break;
     }
+    case 'integration': {
+      // Whether a DONE task's code is STILL integrated is an append-only fact beside its (terminal) state: DONE is history.
+      const [sub, taskId] = positional;
+      const reason = flag('--reason');
+      if (!['revert', 'reinstate'].includes(sub) || !taskId || !reason) throw new Error('usage: integration revert|reinstate <task> --reason "..." [--commit <sha>] [--actor <name>]');
+      const input = { actor: flag('--actor') ?? 'human', reason, commit: flag('--commit') };
+      const p = sub === 'revert' ? store.recordRevert(taskId, input) : store.recordReinstatement(taskId, input);
+      console.log(`${taskId}: execution ${p.execution.state}; integration ${p.integration.state}; ${p.accepted ? 'currently accepted' : 'NOT currently accepted'}. Recorded as an event; no state or earlier event was changed.`);
+      break;
+    }
     case 'metrics':
       console.log(JSON.stringify(computeMetrics(store, flag('--batch')), null, 2));
       break;
     case 'reconcile':
       console.log(JSON.stringify(await reconcileState(store, worktrees, flag('--batch')), null, 2));
       break;
+    case 'meeting':
+      process.exitCode = await runMeetingCommand(rest, { store, meetingsDir: process.env.AGENTIC_MEETINGS_DIR ?? join(workdir, 'meetings') });
+      break;
     default:
-      console.error('usage: lead <objective|lifecycle|plan|tasks|run|status|review|integrate|resume|cancel|retry|claude|metrics|reconcile> ...');
+      console.error('usage: lead <objective|lifecycle|meeting|plan|tasks|run|status|review|integrate|integration|resume|cancel|retry|claude|metrics|reconcile> ...');
       process.exit(2);
   }
 }

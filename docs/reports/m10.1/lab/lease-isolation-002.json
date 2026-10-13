@@ -1,0 +1,48 @@
+{
+  "schema": "agentic.reliability-evidence/1",
+  "scenario": "lease-isolation",
+  "run": 2,
+  "kind": "inprocess",
+  "covers": "M10 F2 (run-scoped permits): two REAL runs of one task id on two providers - a cancel is confirmed against its own run, a sibling run never blocks it, a permit nobody can attribute still does",
+  "startedAt": "2026-10-10T19:51:06.430Z",
+  "durationMs": 7083,
+  "loadavg1": 11.080078125,
+  "ok": true,
+  "runtime": {
+    "cancelOutcome": "stopped",
+    "engaged": [
+      {
+        "kind": "lease",
+        "holder": "lab:model:T:pid36499:run=lab-target",
+        "pid": 36499,
+        "run": "lab-target",
+        "resource": "lab"
+      },
+      {
+        "kind": "lease",
+        "holder": "gpt:T:pid4242",
+        "pid": 36499,
+        "resource": "gpt"
+      }
+    ],
+    "taskResource": "gemini"
+  },
+  "detail": {
+    "proves": {
+      "ownPermitBlocksItsOwnCancel": true,
+      "foreignRunDoesNotBlock": true,
+      "unattributablePermitFailsClosed": true
+    },
+    "targetRunId": "lab-target",
+    "foreignRunId": "lab-foreign",
+    "outcomes": {
+      "own": "still_active",
+      "idleSibling": "stopped",
+      "withUnattributablePermit": "still_active"
+    }
+  },
+  "classification": {
+    "category": "pass",
+    "reasons": []
+  }
+}

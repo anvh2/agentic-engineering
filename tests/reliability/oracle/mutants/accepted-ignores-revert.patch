@@ -1,0 +1,13 @@
+diff --git a/src/runtime/scheduler/store.ts b/src/runtime/scheduler/store.ts
+index 0929dc4..3efe1e9 100644
+--- a/src/runtime/scheduler/store.ts
++++ b/src/runtime/scheduler/store.ts
+@@ -467,7 +467,7 @@ export class SchedulerStore {
+       taskId,
+       execution: { state: task.state, finishedAt: task.finishedAt },
+       integration: { state: integration, since: history.at(-1)?.at ?? null, history },
+-      accepted: integration === 'integrated',
++      accepted: task.state === 'DONE',
+     };
+   }
+ 

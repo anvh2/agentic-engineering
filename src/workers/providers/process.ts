@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { faultPoint, type FaultPointName } from '../../runtime/reliability/faults.ts';
 
 /**
  * Runs a provider CLI as a child process the runtime fully accounts for. Every guarantee here exists for one reason: a
@@ -36,6 +37,11 @@ export interface ProviderProcessOptions {
   /** Parent environment to build from (tests inject one). */
   parentEnv?: NodeJS.ProcessEnv;
   /**
+   * Reliability Lab boundary awaited right before the spawn (src/runtime/reliability/faults.ts; inert in production).
+   * Adapters set it on their MODEL-CALL launch only, so probes (sandbox check, --help) never trip a scenario's fault.
+   */
+  faultPoint?: FaultPointName;
+  /**
    * Called once the process exists, with its pid (= its process group id) and a promise that settles when the call is over
    * and the group has been swept. Lets an owner account for exactly the processes it started, and nothing else.
    */
@@ -71,7 +77,19 @@ export function buildChildEnv(parentEnv: NodeJS.ProcessEnv, passEnv: readonly st
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-export function runProviderProcess(options: ProviderProcessOptions): Promise<ProviderProcessResult> {
+export async function runProviderProcess(options: ProviderProcessOptions): Promise<ProviderProcessResult> {
+  if (options.faultPoint) {
+    try {
+      await faultPoint(options.faultPoint, { signal: options.signal });
+    } catch (err) {
+      // cancelled while held at the boundary: nothing was started, exactly like a cancel just before the spawn
+      if (!options.signal?.aborted) throw err;
+    }
+  }
+  return launchProviderProcess(options);
+}
+
+function launchProviderProcess(options: ProviderProcessOptions): Promise<ProviderProcessResult> {
   const started = Date.now();
   const maxBytes = options.maxOutputBytes ?? 2_000_000;
   const empty = (extra: Partial<ProviderProcessResult>): ProviderProcessResult => ({ exitCode: null, signal: null, stdout: '', stderr: '', outputTruncated: false, timedOut: false, aborted: false, terminatedBy: 'exit', stillRunning: false, durationMs: Date.now() - started, ...extra });

@@ -1,0 +1,201 @@
+{
+  "schema": "agentic.m10_1-oracle-verdict/1",
+  "expect": "mutant",
+  "mutant": {
+    "id": "dependents-ignore-revert",
+    "description": "A reverted dependency still satisfies its dependents."
+  },
+  "target": "HEAD",
+  "commit": "b298d411f84f2a64115c925904592485de51e7e1",
+  "oracleVersion": 3,
+  "oracleSha256": "b487d7c9d99e2d50d45042d7f5153edb2588ff4b0cb71314427e84be87091682",
+  "exitCode": 1,
+  "durationMs": 36493,
+  "tests": [
+    {
+      "name": "1. same task id, different runs: each run is confirmed against its own permit only",
+      "ok": true
+    },
+    {
+      "name": "2. same task id, different providers: a codex run does not block a gemini cancel, and the reverse",
+      "ok": true
+    },
+    {
+      "name": "3. same task id, same provider: a sibling run's permit AND queue entry never block, a run's own always do",
+      "ok": true
+    },
+    {
+      "name": "4. missing or default provider: a task with no provider is confirmed on its own permit, not a foreign one",
+      "ok": true
+    },
+    {
+      "name": "5. injected handle / resource mismatch can neither hide the target's permit nor adopt a foreign one",
+      "ok": true
+    },
+    {
+      "name": "6. target permit still active: STOPPED is never reported, however terminal the run looks",
+      "ok": true
+    },
+    {
+      "name": "7. target process still active: a provider call that outlived its abort keeps the permit, and the cancel waits for it",
+      "ok": true
+    },
+    {
+      "name": "8a. cancellation while queued for the permit: nothing is held, and no permit is taken later",
+      "ok": true
+    },
+    {
+      "name": "8b. cancellation landing right after the permit is granted, before the call: the permit is released and the cancel is confirmed",
+      "ok": true
+    },
+    {
+      "name": "9a. lease expiry: a crashed, un-renewed permit blocks while live and stops blocking when it expires",
+      "ok": true
+    },
+    {
+      "name": "9b. recovery: a re-run of the same task is not blocked by the previous run's stale permit, and the previous run still is",
+      "ok": true
+    },
+    {
+      "name": "10. unknown or legacy ownership fails closed for every run, for permits and for queue entries",
+      "ok": true
+    },
+    {
+      "name": "10b. an unreadable ownership marker is unknown ownership, not \"some other run\" (pins the holder syntax, see the header)",
+      "ok": true
+    },
+    {
+      "name": "11. the Mastra workflow carries its own run id into the permit it takes (scheduler -> workflow run -> capacity)",
+      "ok": true
+    },
+    {
+      "name": "12. overlapping run ids never match each other (whole-value comparison, not substring or prefix)",
+      "ok": true
+    },
+    {
+      "name": "13. the runner's own retry takes a second permit for the SAME run, and that permit carries the run id too",
+      "ok": true
+    },
+    {
+      "name": "14. scheduler -> executor -> workflow: the run id the scheduler stores is the one that owns the permit, so a foreign run of the same task never blocks the scheduler's own cancel and an unattributable permit still does",
+      "ok": true
+    },
+    {
+      "name": "a permit nobody can attribute to a run, held on ANOTHER resource than the probe's, still blocks (http-boundary.test.ts:132 in miniature)",
+      "ok": true
+    },
+    {
+      "name": "once that permit is released the same cancellation is confirmed",
+      "ok": true
+    },
+    {
+      "name": "the task-level probe (no run id) still reports every permit and queue entry carrying the task id, on every resource",
+      "ok": true
+    },
+    {
+      "name": "a DONE task whose implementation was reverted keeps its history and is not currently accepted; reinstating it restores acceptance",
+      "ok": true
+    },
+    {
+      "name": "a revert needs a reason and a DONE task; nothing else is accepted",
+      "ok": true
+    },
+    {
+      "name": "a reverted dependency does not satisfy its dependents, nothing can claim them, and reinstating it releases them",
+      "ok": false,
+      "error": "a reverted dependency does not satisfy it"
+    },
+    {
+      "name": "metrics do not count a reverted implementation as done, for either implementer, and report the revert",
+      "ok": true
+    },
+    {
+      "name": "`lead tasks` shows the historical completion without claiming the code is still integrated",
+      "ok": true
+    },
+    {
+      "name": "an objective recorded as ACCEPTED says a required task has since been reverted, keeps its history, and cannot be accepted again",
+      "ok": true
+    },
+    {
+      "name": "promoting one objective mutates nothing in an unrelated objective",
+      "ok": true
+    },
+    {
+      "name": "a BLOCKED task of another objective whose dependency has recovered is not released by someone else's promote either",
+      "ok": true
+    },
+    {
+      "name": "promote() with no scope keeps its global behaviour",
+      "ok": true
+    },
+    {
+      "name": "an empty or unknown objective id is an error, never \"global\"",
+      "ok": true
+    },
+    {
+      "name": "dependencies across objectives are read both ways: a scoped task sees a dead or finished dependency elsewhere",
+      "ok": true
+    },
+    {
+      "name": "after the dependency is done, scoped promotion of its objective releases dependents in other objectives, transitively, and leaves strangers alone",
+      "ok": true
+    },
+    {
+      "name": "history is append-only: earlier events are untouched by a scoped promotion",
+      "ok": true
+    },
+    {
+      "name": "`lead plan` promotes the plan it created and nothing else (the M10 side effect)",
+      "ok": true
+    },
+    {
+      "name": "declares the named boundaries",
+      "ok": true
+    },
+    {
+      "name": "is inert without the explicit test enable, even when a plan is present (production cannot be affected)",
+      "ok": true
+    },
+    {
+      "name": "when enabled: delays, can throw, logs one JSON line per firing, and an abort ends the delay at once",
+      "ok": true
+    },
+    {
+      "name": "a plan naming an unknown boundary is refused, never silently ignored",
+      "ok": true
+    },
+    {
+      "name": "timeout BEFORE the CLI is spawned: no provider process ever exists, no late spawn",
+      "ok": true
+    },
+    {
+      "name": "timeout AFTER spawn but before the CLI is ready: the started group is killed although it never reported in",
+      "ok": true
+    },
+    {
+      "name": "the original scenario, original 2.5 s budget, NO forcing: whichever interleaving the machine produces, the timeout is clean",
+      "ok": true
+    },
+    {
+      "name": "classifies the two known signatures and the environmental and unknown cases",
+      "ok": true
+    },
+    {
+      "name": "runs a scenario N times with bounded concurrency and writes one evidence record per run plus a summary",
+      "ok": true
+    },
+    {
+      "name": "knows the scenarios the mission requires",
+      "ok": true
+    }
+  ],
+  "passed": 43,
+  "failed": 1,
+  "protectedFilesChanged": [],
+  "mustFail": [],
+  "mustPass": [],
+  "missingFailures": [],
+  "missingPasses": [],
+  "holds": true
+}

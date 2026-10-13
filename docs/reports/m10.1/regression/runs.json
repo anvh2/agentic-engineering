@@ -1,0 +1,127 @@
+{
+  "command": "node --disable-warning=ExperimentalWarning --test --test-reporter=tap 'src/**/*.test.ts' 'tests/**/*.test.ts' (+ --test-timeout as noted)",
+  "runs": [
+    {
+      "run": "baseline c77ffdd, run 1",
+      "head": "c77ffdd",
+      "note": "no file-level timeout",
+      "summary": {
+        "tests": 964,
+        "suites": 234,
+        "pass": 964,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 826385.979458
+      },
+      "failures": []
+    },
+    {
+      "run": "baseline c77ffdd, run 2",
+      "head": "c77ffdd",
+      "note": "file timeout 30 min",
+      "summary": {
+        "tests": 964,
+        "suites": 234,
+        "pass": 964,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 810089.927417
+      },
+      "failures": []
+    },
+    {
+      "run": "candidate 0772ae4, run 1",
+      "head": "0772ae4",
+      "note": "file timeout 10 min (too short for m86-recovery, see classification C)",
+      "summary": {
+        "tests": 1056,
+        "suites": 254,
+        "pass": 1052,
+        "fail": 3,
+        "cancelled": 1,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 839262.637792
+      },
+      "failures": [
+        {
+          "name": "cancellation (lead cancel): the CLI process group is killed, the task stays CANCELLED, nothing is integrated",
+          "location": "src/integrations/mastra/codex-scheduler.test.ts:209:3",
+          "error": "the codex permit was released  1 !== 0"
+        },
+        {
+          "name": "scheduler -> codex adapter -> verifier (mock CLI)",
+          "location": "src/integrations/mastra/codex-scheduler.test.ts:99:1",
+          "error": "'1 subtest failed'"
+        },
+        {
+          "name": "even with the writer still running, removal retries until the tree is gone or reports it did not remove it",
+          "location": "tests/provider-smoke/canary-cleanup.test.ts:30:3",
+          "error": "Expected values to be strictly equal:  true !== false"
+        },
+        {
+          "name": "removes owned directories on process exit and on SIGTERM",
+          "location": "tests/provider-smoke/canary-cleanup.test.ts:98:3",
+          "error": "'created'"
+        },
+        {
+          "name": "canary cleanup",
+          "location": "tests/provider-smoke/canary-cleanup.test.ts:13:1",
+          "error": "'2 subtests failed'"
+        },
+        {
+          "name": "tests/provider-smoke/m86-recovery.test.ts",
+          "location": "tests/provider-smoke/m86-recovery.test.ts:1:1",
+          "error": "'test timed out after 600000ms'"
+        }
+      ]
+    },
+    {
+      "run": "candidate 0772ae4, run 2",
+      "head": "0772ae4",
+      "note": "file timeout 30 min",
+      "summary": {
+        "tests": 1056,
+        "suites": 255,
+        "pass": 1056,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 815775.636458
+      },
+      "failures": []
+    },
+    {
+      "run": "candidate 0772ae4, run 3",
+      "head": "0772ae4",
+      "note": "file timeout 30 min",
+      "summary": {
+        "tests": 1056,
+        "suites": 255,
+        "pass": 1055,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 799675.2835
+      },
+      "failures": [
+        {
+          "name": "even with the writer still running, removal retries until the tree is gone or reports it did not remove it",
+          "location": "tests/provider-smoke/canary-cleanup.test.ts:30:3",
+          "error": "Expected values to be strictly equal:  true !== false"
+        },
+        {
+          "name": "canary cleanup",
+          "location": "tests/provider-smoke/canary-cleanup.test.ts:13:1",
+          "error": "'1 subtest failed'"
+        }
+      ]
+    }
+  ]
+}
