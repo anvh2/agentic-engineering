@@ -9,7 +9,7 @@ import { closeSync, openSync } from 'node:fs';
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { advanceMission, createMission, initState, pendingMission, readState, writeState } from '../src/lead/headless/state.ts';
+import { advanceMission, createMission, initState, missionMetrics, pendingMission, readState, writeState } from '../src/lead/headless/state.ts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -44,16 +44,31 @@ const stateFile = join(missionDir, 'mission.json');
 const gate = join(missionDir, 'active-run');
 const ownerFile = join(gate, 'owner.json');
 const stopFile = join(missionDir, 'stop-requested');
+const pauseFile = join(missionDir, 'pause-requested');
 const logFile = join(missionDir, 'run.log');
 const leadFile = join(root, 'scripts', 'lead.ts');
-const stopped = async () => access(stopFile).then(() => true, () => false);
+const hasFlag = async (file: string) => access(file).then(() => true, () => false);
+const stopped = () => hasFlag(stopFile);
+const paused = () => hasFlag(pauseFile);
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const owner = async (): Promise<{ token: string; pid: number | null }> =>
   JSON.parse(await readFile(ownerFile, 'utf8')) as { token: string; pid: number | null };
 const output = (value: unknown) => console.log(JSON.stringify(value, null, 2));
+const assertOwner = async (token: string) => {
+  const held = await owner();
+  if (held.token !== token || held.pid !== process.pid) throw new Error('supervisor ownership lost; preserving gate and execution state');
+};
+/** File presence, not PID liveness, determines ownership: malformed/orphan gate fails closed. */
+async function gateStatus(): Promise<{ status: 'FREE' | 'HELD' | 'ORPHAN_OR_CORRUPT'; owner?: { token: string; pid: number | null } }> {
+  if (!(await hasFlag(gate))) return { status: 'FREE' };
+  const held = await owner().catch(() => null);
+  return held && typeof held.token === 'string' && typeof held.pid === 'number' ?
+    { status: 'HELD', owner: held } : { status: 'ORPHAN_OR_CORRUPT' };
+}
 
 async function start() {
   const state = await readState(stateFile);
-  if (await stopped()) throw new Error('mission paused; use resume after reconciliation');
+  if (await stopped() || await paused()) throw new Error('mission stopped/paused; use resume after reconciliation');
   if (state.jobs.some((j) => j.phase === 'RUNNING' || j.phase === 'UNKNOWN'))
     throw new Error('uncertain prior execution; inspect lifecycle and reconcile first');
   if (!pendingMission(state)) return output({ status: 'NO_PENDING', mission: state.mission });
@@ -87,6 +102,8 @@ async function worker() {
   process.on('SIGTERM', () => { interrupted = true; });
   process.on('SIGINT', () => { interrupted = true; });
   while (!interrupted && !(await stopped())) {
+    await assertOwner(token);
+    if (await paused()) { await sleep(500); continue; }
     const state = await readState(stateFile);
     const job = pendingMission(state);
     if (!job) break;
@@ -94,6 +111,7 @@ async function worker() {
     job.attempts += 1;
     job.startedAt = new Date().toISOString();
     state.updatedAt = new Date().toISOString();
+    await assertOwner(token);
     await writeState(stateFile, state);
     // Pre-existing lifecycle driver decides whether the objective is accepted.
     // No explicit provider allow-list: local Qwen is the only enabled default.
@@ -105,11 +123,11 @@ async function worker() {
       child.once('error', () => done(null));
       child.once('exit', (code) => done(code));
     });
+    await assertOwner(token);
     await writeState(stateFile, advanceMission(await readState(stateFile), job.objectiveId, exitCode));
     if (exitCode !== 0) break; // never retry an uncertain or rejected result
   }
-  const held = await owner();
-  if (held.token !== token || held.pid !== process.pid) throw new Error('cannot release a foreign gate');
+  await assertOwner(token);
   await rm(ownerFile);
   await rm(gate, { recursive: false });
 }
@@ -127,25 +145,43 @@ async function main() {
     case 'worker': await worker(); break;
     case 'status': {
       const state = await readState(stateFile);
-      const current = await owner().catch(() => null);
-      output({ ...state, stopRequested: await stopped(), gate: current ? 'HELD' : 'FREE',
-        owner: current, note: current ? 'Owner may be orphaned; PID does not prove liveness' : undefined });
+      const gateInfo = await gateStatus();
+      output({ mission: state.mission, server: state.baseServer, jobs: state.jobs,
+        metrics: missionMetrics(state), stopRequested: await stopped(), pauseRequested: await paused(),
+        supervisorState: gateInfo.status === 'FREE' ? 'STOPPED' : (await paused() ? 'PAUSE_REQUESTED' : 'RUNNING_OR_ORPHANED'),
+        gate: gateInfo.status, owner: gateInfo.owner ?? null,
+        note: gateInfo.status !== 'FREE' ? 'A PID is not identity proof. After crash reconcile the owner and child runs before manual gate cleanup.' : undefined });
       break;
     }
+    case 'pause':
+      await readState(stateFile);
+      if ((await gateStatus()).status === 'FREE') throw new Error('supervisor not running; use stop/start instead');
+      await writeFile(pauseFile, new Date().toISOString(), { flag: 'w', mode: 0o600 });
+      output({ pauseRequested: true, warning: 'Cooperative pause after current objective; not a cancellation' });
+      break;
     case 'stop':
       await readState(stateFile);
       await writeFile(stopFile, new Date().toISOString(), { flag: 'w', mode: 0o600 });
       output({ stopRequested: true, warning: 'Cooperative pause after current objective; no in-flight run is confirmed stopped' });
       break;
     case 'resume': {
-      if (await owner().catch(() => null)) throw new Error('gate held/orphaned: reconcile old process and descendants manually');
+      const gateInfo = await gateStatus();
+      if (gateInfo.status === 'ORPHAN_OR_CORRUPT') throw new Error('corrupt gate; manual reconcile required');
       const state = await readState(stateFile);
       if (state.jobs.some((j) => j.phase === 'RUNNING' || j.phase === 'UNKNOWN'))
         throw new Error('unknown in-flight objective: reconcile before resuming');
-      await rm(stopFile, { force: true });
-      await start(); break;
+      if (gateInfo.status === 'HELD') {
+        if (!(await paused()) || await stopped()) throw new Error('gate held and not safely paused; manual reconcile required');
+        await rm(pauseFile);
+        output({ resumeRequested: true, warning: 'Pause flag cleared. Process liveness NOT confirmed; check status and logs.' });
+      } else {
+        await rm(stopFile, { force: true });
+        await rm(pauseFile, { force: true });
+        await start();
+      }
+      break;
     }
-    default: throw new Error('usage: lead:headless init --manifest <file> | start | status | stop | resume');
+    default: throw new Error('usage: lead:headless init --manifest <file> | start | status | stop | pause | resume');
   }
 }
 main().catch((error) => { console.error('headless: ' + (error as Error).message); process.exitCode = 1; });
