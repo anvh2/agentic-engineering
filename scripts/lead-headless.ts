@@ -6,7 +6,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { closeSync, openSync } from 'node:fs';
-import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, rm, rmdir, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { advanceMission, createMission, initState, missionMetrics, pendingMission, readState, writeState } from '../src/lead/headless/state.ts';
@@ -129,7 +129,7 @@ async function worker() {
   }
   await assertOwner(token);
   await rm(ownerFile);
-  await rm(gate, { recursive: false });
+  await rmdir(gate); // remove only an empty gate; never recursively destroy an unknown successor
 }
 
 async function main() {
