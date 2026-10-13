@@ -30,6 +30,7 @@ interface OracleSpec {
   baselineMustFail: string[];
   baselineMustPass: string[];
   protectedFiles: Record<string, string>;
+  baselineProtectedFiles: { commit: string; files: Record<string, string> };
   mutants: { id: string; description: string; patch: string; appliesTo: 'baseline' | 'candidate'; mustFail: string[]; mustPass: string[] }[];
 }
 
@@ -58,6 +59,17 @@ if (expect === 'mutant' && !mutant) {
 
 const git = (...a: string[]) => execFileSync('git', a, { cwd: REPO, encoding: 'utf8' }).trim();
 const commit = git('rev-parse', '--verify', `${target}^{commit}`);
+const historical = expect === 'baseline' || mutant?.appliesTo === 'baseline';
+if (historical && (commit !== spec.baselineRef || commit !== spec.baselineProtectedFiles.commit || !/^[0-9a-f]{40}$/.test(spec.baselineRef))) {
+  console.error('historical integrity requires the exact pinned baseline commit');
+  process.exit(3);
+}
+const protectedPins = historical ? spec.baselineProtectedFiles.files : spec.protectedFiles;
+if (JSON.stringify(Object.keys(protectedPins).sort()) !== JSON.stringify(Object.keys(spec.protectedFiles).sort())) {
+  console.error('historical and candidate protected file sets must match');
+  process.exit(3);
+}
+
 mkdirSync(out, { recursive: true });
 const wt = join(out, `target-${commit.slice(0, 10)}`);
 if (existsSync(wt)) execFileSync('git', ['worktree', 'remove', '--force', wt], { cwd: REPO });
@@ -67,6 +79,15 @@ try {
   if (mutant) execFileSync('git', ['apply', '--whitespace=nowarn', join(HERE, 'mutants', mutant.patch)], { cwd: wt });
   mkdirSync(join(wt, dirname(ORACLE_REL)), { recursive: true });
   copyFileSync(join(REPO, ORACLE_REL), join(wt, ORACLE_REL));
+  const integrityChanges = () => Object.entries(protectedPins).filter(([path, hash]) => {
+    const file = join(wt, path);
+    return !existsSync(file) || createHash('sha256').update(readFileSync(file)).digest('hex') !== hash;
+  }).map(([path]) => path);
+  if (integrityChanges().length) {
+    const verdict = { holds: false, commit, protectedFilesChanged: integrityChanges(), reason: 'protected integrity rejected before execution' };
+    writeFileSync(join(out, 'integrity-rejection.json'), JSON.stringify(verdict, null, 2) + '\n');
+    throw new Error(`protected integrity mismatch: ${verdict.protectedFilesChanged.join(', ')}`);
+  }
   const started = Date.now();
   const r = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', '--test', '--test-reporter=tap', '--test-timeout=1500000', ORACLE_REL], { cwd: wt, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 1_500_000 });
   const tap = `${r.stdout ?? ''}`;
@@ -93,7 +114,7 @@ try {
     results.push({ name: m[2].trim(), ok: m[1] === 'ok', error });
   }
   // the pre-existing safety contracts must be byte-identical to what the oracle pinned: an implementation cannot pass by editing them
-  const protectedChanged = Object.entries(spec.protectedFiles).filter(([path, hash]) => {
+  const protectedChanged = Object.entries(protectedPins).filter(([path, hash]) => {
     const file = join(wt, path);
     return !existsSync(file) || createHash('sha256').update(readFileSync(file)).digest('hex') !== hash;
   }).map(([path]) => path);
@@ -110,6 +131,8 @@ try {
     ...(mutant ? { mutant: { id: mutant.id, description: mutant.description } } : {}),
     target,
     commit,
+    protectedScope: historical ? 'historical-baseline' : 'candidate',
+    protectedBaselineCommit: historical ? spec.baselineProtectedFiles.commit : null,
     oracleVersion: spec.version,
     oracleSha256: sha,
     exitCode: r.status,

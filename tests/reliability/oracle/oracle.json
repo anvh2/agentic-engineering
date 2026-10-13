@@ -3,7 +3,7 @@
   "version": 3,
   "sha256": "bda56bc2d051647a408bf6309a9648b564fa16d0b2405e6ad4074b23ad4a7b79",
   "pinnedAt": "2026-10-10",
-  "baselineRef": "c77ffdd",
+  "baselineRef": "c77ffdd04c0740cac2053e01a5a2ab151b24e5cb",
   "owner": "Claude (Engineering Lead session of M10.1, Sonnet 5.5): wrote the oracle AND will write the implementation. Disclosed; independence comes from the reviewer, the pinned-before-implementation order, the protected files and the mutants below.",
   "reviewer": "A separate fresh-context Claude subagent (general-purpose, read-only, no test runs, no repository writes). It saw the draft oracle, the baseline code and the history of the two earlier oracles; no implementation existed. Full report: docs/reports/m10.1-oracle-review.md. It returned ORACLE_REJECTED for the first draft; the amendments below are the response.",
   "authorization": "The M10.1 mission prompt, Phase 4: 'Create a corrected acceptance specification for F2' and 'Use a separate reviewer or independently prepared deterministic oracle'. The same prompt authorises the Phase 2 and 3 cases and the not-ready budget amendment ('Review the historical M10 oracle versions').",
@@ -39,6 +39,11 @@
       "from": "b487d7c9d99e2d50d45042d7f5153edb2588ff4b0cb71314427e84be87091682",
       "sha256": "bda56bc2d051647a408bf6309a9648b564fa16d0b2405e6ad4074b23ad4a7b79",
       "note": "Operator-authorized PR #44 synchronization repair (2026-10-12). O-SM forced cases acknowledge the child fault/spawn ledger before advancing only ExecutionClock samples via a test-scoped mock; the real tick and all timeout/cancellation/permit assertions remain. The unforced 2.5 s wall-clock case is unchanged. Missing boundary evidence still fails, with the existing model budget bounding the wait. No production code changes. Targeted verification only; baseline/mutant and full regression are not claimed and remain operator review work. The before-spawn case injects a 3.5 s upstream delay, longer than the unchanged 2.5 s task budget, to deterministically reject the old startup race."
+    },
+    {
+      "version": "3.4",
+      "sha256": "bda56bc2d051647a408bf6309a9648b564fa16d0b2405e6ad4074b23ad4a7b79",
+      "note": "PR #44 final safety closure (2026-10-13): protected contract integrity now has separate candidate and historical baseline pins. Historical hashes were derived from exactly c77ffdd04c0740cac2053e01a5a2ab151b24e5cb and apply only to that commit and its declared baseline mutant. Candidate protected hashes, oracle bytes, assertions and mutation expectations are unchanged. This is a runner/manifest amendment, not a new oracle test version; verification evidence is recorded separately."
     }
   ],
   "reviewFindings": {
@@ -321,5 +326,17 @@
     "The model double stands in for a provider process in cases 7 and 13; process-group safety is covered by the carried O-SM cases and the existing process.test.ts.",
     "The control-center UI contract is not extended (M13 is out of scope); the revert is visible there as a task.audit event.",
     "The pinned 'unforced' O-SM case is informational on the baseline: it asserts invariants that hold whichever interleaving the machine produces."
-  ]
+  ],
+  "baselineProtectedFiles": {
+    "commit": "c77ffdd04c0740cac2053e01a5a2ab151b24e5cb",
+    "files": {
+      "src/integrations/mastra/http-boundary.test.ts": "3f14e0840f3c8fdd45de41fedcf437148c34e709f228ea5e52b54dd71a08044a",
+      "src/runtime/scheduler/cancellation.test.ts": "5bdedcb27ce3ac6b290135b4df3957716fa03a8b0cc728e3cd0d199011a3d263",
+      "src/runtime/execution/worker-provider.test.ts": "f02e6175821cc35df275f0a0a77a791c03d5872f2871244c4962dd07eecb8e79",
+      "src/integrations/mastra/gemini-scheduler.test.ts": "3e5b74b44f3f47ab05c833df8f632bd46af3dae479710058d1827e8aff54d90a",
+      "src/integrations/mastra/codex-scheduler.test.ts": "24a22e131b35d9d35354bd2df9966e2423db29dce6d19f6c60e5c7a7154dd1e6",
+      "src/runtime/capacity/model-capacity.test.ts": "ab16e8d6505fdc90f025692e5bc6a466e6bdb68483f1684f247b238102d9c664",
+      "src/runtime/capacity/model-capacity-fifo.test.ts": "bb3e85c959aff94df5cdc25d56c62a8d6dcf886be99333ccd6a90f8b298c7287"
+    }
+  }
 }
