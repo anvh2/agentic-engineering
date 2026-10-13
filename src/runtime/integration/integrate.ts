@@ -1,5 +1,6 @@
+import { integrationOwnership } from './ownership.ts';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { validateJsVerification } from '../execution/delegation.ts';
 import { runSandboxedCommand } from '../sandbox/sandbox.ts';
@@ -92,14 +93,15 @@ export interface IntegrateOptions {
 export async function integrateBatch(store: SchedulerStore, worktrees: WorktreeManager, options: IntegrateOptions): Promise<{ reports: IntegrationReport[]; locked: boolean }> {
   const batch = store.getBatch(options.batchId);
   if (!batch) throw new StoreError('not_found', `batch ${options.batchId} not found`);
-  const owner = `${options.actor ?? 'integrator'}:${process.pid}`;
-  const lockName = `integrate:${batch.repository}`;
-  if (!store.acquireLock(lockName, owner, options.lockTtlMs ?? 20 * 60_000)) return { reports: [], locked: true };
+  const ownership = await integrationOwnership(store, worktrees, batch.repository, options.actor ?? 'integrator', options.lockTtlMs ?? 20 * 60_000);
+  if (!ownership) return { reports: [], locked: true };
+  const owner = ownership.owner;
   const log = options.log ?? (() => {});
   const run = options.run ?? defaultRunner;
   try {
-    const iw = await worktrees.integrationWorktree(batch);
-    const ctx = { store, worktrees, batch, iw, run, log, actor: owner };
+    ownership.assert();
+    const iw = await worktrees.integrationWorktree(batch, () => ownership.assert());
+    const ctx = { store, worktrees, batch, iw, run, log, actor: owner, assertOwner: () => ownership.assert() };
     await recoverInterrupted(ctx);
     await assertCleanIntegrationTree(ctx);
 
@@ -117,11 +119,13 @@ export async function integrateBatch(store: SchedulerStore, worktrees: WorktreeM
         continue;
       }
       reports.push(await integrateOne(ctx, task));
+      ctx.assertOwner();
       store.promote('integrator', { batchId: batch.id });
     }
+    ownership.assert();
     return { reports, locked: false };
   } finally {
-    store.releaseLock(lockName, owner);
+    await ownership.release();
   }
 }
 
@@ -155,9 +159,16 @@ interface Ctx {
   run: CommandRunner;
   log: (line: string) => void;
   actor: string;
+  assertOwner: () => void;
+  expectedTip?: string;
 }
 
-const gitIn = (ctx: Ctx, args: string[]) => ctx.worktrees.git(ctx.iw.path, args);
+const gitIn = async (ctx: Ctx, args: string[]) => {
+  ctx.assertOwner();
+  const result = await ctx.worktrees.git(ctx.iw.path, args);
+  ctx.assertOwner();
+  return result;
+};
 
 async function head(ctx: Ctx): Promise<string> {
   const r = await gitIn(ctx, ['rev-parse', 'HEAD']);
@@ -171,45 +182,86 @@ async function assertCleanIntegrationTree(ctx: Ctx): Promise<void> {
 }
 
 /**
- * A crashed integrator can leave a task INTEGRATING with the integration worktree in ANY intermediate state: a conflicted
- * merge still in progress (tip == preSha, MERGE_HEAD set), a merge commit whose verification never finished, or an
- * oracle file written but not yet committed. Holding the integration lock proves no live integrator exists, so the
- * worktree is rolled back to the recorded pre-merge SHA (only if that SHA is an ancestor of the tip, i.e. nothing
- * foreign is discarded), including untracked leftovers, and the task goes back to APPROVED.
+ * Recover only a journaled tip (or the unchanged pre-merge tip). A crash between a Git
+ * commit and journaling it is deliberately blocked: ancestry is not ownership evidence.
+ * The non-expiring process gate must first be reconciled after an actual process death.
  */
 async function recoverInterrupted(ctx: Ctx): Promise<void> {
   for (const task of ctx.store.listTasks({ batchId: ctx.batch.id, states: ['INTEGRATING'] })) {
     const preSha = (task.artifacts.integration as { preSha?: string } | undefined)?.preSha;
+    ctx.expectedTip = (task.artifacts.integration as { expectedTip?: string } | undefined)?.expectedTip ?? preSha;
     if (preSha) await rollback(ctx, preSha).catch((err: Error) => Promise.reject(new Error(`cannot recover ${task.id}: ${err.message}`)));
+    ctx.assertOwner();
     ctx.store.transition(task.id, 'APPROVED', { actor: ctx.actor, reason: 'integration interrupted; integration branch restored, will retry', expectFrom: 'INTEGRATING' });
     ctx.log(`recovered interrupted integration of ${task.id}`);
   }
 }
 
-/** Restores the integration worktree to `preSha` exactly: no merge in progress, no commits after it, no untracked files. */
+/** Restore only the recorded owned tip; preserve all unknown untracked files. */
 async function rollback(ctx: Ctx, preSha: string): Promise<void> {
-  await gitIn(ctx, ['merge', '--abort']); // fails harmlessly when no merge is in progress
   const tip = await head(ctx);
-  if (tip !== preSha) {
-    // only discard commits this integration created: preSha must be an ancestor of the tip
-    const ancestor = await gitIn(ctx, ['merge-base', '--is-ancestor', preSha, tip]);
-    if (!ancestor.success) throw new Error(`refusing rollback: ${preSha} is not an ancestor of ${tip}`);
+  if (tip !== (ctx.expectedTip ?? preSha)) throw new Error(`refusing rollback: unexpected integration tip ${tip}; preserving external commits`);
+  // reset --hard can overwrite even untracked/ignored files that obstruct checkout.
+  // Refuse unknown files BEFORE resetting, not merely by omitting `git clean`.
+  const untracked = await gitIn(ctx, ['ls-files', '--others', '-z']);
+  if (!untracked.success || untracked.truncated) throw new Error('cannot inspect untracked rollback paths completely');
+  const ownedOracles = new Map(ctx.store.listTasks({ batchId: ctx.batch.id, states: ['INTEGRATING'] })
+    .flatMap((t) => Object.entries(t.spec.request?.contract.hiddenFiles ?? {}).map(([hidden, content]) => [permanentOraclePath(hidden), content] as const)));
+  for (const path of untracked.stdout.split('\0').filter(Boolean)) {
+    if (ctx.batch.linkPaths.some((link) => path === link || path.startsWith(`${link}/`))) continue;
+    if (!ownedOracles.has(path) || await readFile(join(ctx.iw.path, path), 'utf8').catch(() => null) !== ownedOracles.get(path)) {
+      throw new Error(`refusing rollback over unknown untracked path ${path}`);
+    }
+  }
+  const merging = await gitIn(ctx, ['rev-parse', '--verify', '-q', 'MERGE_HEAD']);
+  if (merging.success) {
+    const ownedMerge = ctx.store.listTasks({ batchId: ctx.batch.id, states: ['INTEGRATING'] }).some((t) => t.headCommit === merging.stdout.trim());
+    if (!ownedMerge) throw new Error('refusing rollback of an unknown merge');
+    const abort = await gitIn(ctx, ['merge', '--abort']);
+    if (!abort.success) throw new Error('cannot abort interrupted integration merge; preserving worktree');
+  } else {
+    const changes = await gitIn(ctx, ['diff', 'HEAD', '--name-only', '-z']);
+    if (!changes.success || changes.truncated) throw new Error('cannot inspect tracked rollback paths completely');
+    for (const path of changes.stdout.split('\0').filter(Boolean)) {
+      // A rejected oracle commit leaves our new file staged. Prove both index and
+      // working bytes, and that HEAD never contained it, before discarding it.
+      const content = ownedOracles.get(path);
+      const inHead = await gitIn(ctx, ['ls-tree', 'HEAD', '--', path]);
+      const staged = await gitIn(ctx, ['rev-parse', '--verify', `:${path}`]);
+      const working = await gitIn(ctx, ['hash-object', '--', path]);
+      if (content === undefined || !inHead.success || inHead.truncated || inHead.stdout || !staged.success || staged.truncated ||
+          !working.success || working.truncated || staged.stdout.trim() !== working.stdout.trim() || await readFile(join(ctx.iw.path, path), 'utf8').catch(() => null) !== content) {
+        throw new Error('refusing rollback over uncommitted tracked changes');
+      }
+    }
   }
   const reset = await gitIn(ctx, ['reset', '--hard', preSha]);
   if (!reset.success) throw new Error(`git reset --hard ${preSha} failed: ${(reset.stderr || reset.stdout).trim().slice(0, 300)}`);
-  const clean = await gitIn(ctx, ['clean', '-fd', ...ctx.batch.linkPaths.flatMap((p) => ['-e', p])]);
-  if (!clean.success) throw new Error(`git clean failed: ${(clean.stderr || clean.stdout).trim().slice(0, 300)}`);
+  // Never clean unknown untracked files. Only remove our exact, uncommitted oracle bytes.
+  for (const task of ctx.store.listTasks({ batchId: ctx.batch.id, states: ['INTEGRATING'] })) {
+    for (const [hidden, content] of Object.entries(task.spec.request?.contract.hiddenFiles ?? {})) {
+      const path = join(ctx.iw.path, permanentOraclePath(hidden));
+      const tracked = await gitIn(ctx, ['ls-files', '--error-unmatch', '--', permanentOraclePath(hidden)]);
+      if (!tracked.success && await readFile(path, 'utf8').catch(() => null) === content) {
+        ctx.assertOwner();
+        await unlink(path);
+      }
+    }
+  }
 }
 
 async function integrateOne(ctx: Ctx, task: TaskRow): Promise<IntegrationReport> {
   const { store } = ctx;
   const preSha = await head(ctx);
+  ctx.expectedTip = preSha;
+  ctx.assertOwner();
   store.transition(task.id, 'INTEGRATING', { actor: ctx.actor, reason: 'integration started', expectFrom: 'APPROVED', patch: { artifacts: { integration: { preSha, startedAt: store.now() } } } });
 
   const escalate = async (category: FailureCategory, detail: string, commands?: IntegrationReport['commands'], rollbackTo?: string, conflict?: ConflictEvidence): Promise<IntegrationReport> => {
     if (rollbackTo) await rollback(ctx, rollbackTo);
     // what was already on the branch when this failed: the other half of "these two changes do not work together"
     const integratedBefore = store.listTasks({ batchId: ctx.batch.id, states: ['DONE'] }).map((t) => t.id);
+    ctx.assertOwner();
     store.transition(task.id, 'ESCALATED', {
       actor: ctx.actor,
       reason: detail,
@@ -256,13 +308,19 @@ async function integrateOne(ctx: Ctx, task: TaskRow): Promise<IntegrationReport>
     );
   }
 
+  ctx.expectedTip = await head(ctx);
+  ctx.assertOwner();
+  store.setArtifacts(task.id, { integration: { preSha, expectedTip: ctx.expectedTip } });
+
   // 4. materialize this task's runtime-owned oracles as permanent tests (Lead-authored content, committed separately)
   const contract = task.spec.request?.contract;
   const remapped = new Map<string, string>();
   for (const hidden of Object.keys(contract?.hiddenFiles ?? {})) remapped.set(hidden, permanentOraclePath(hidden));
   for (const [hidden, permanent] of remapped) {
     if (existsSync(join(ctx.iw.path, permanent))) return escalate('integration_conflict', `oracle destination ${permanent} already exists in the integration branch`, undefined, preSha);
+    ctx.assertOwner();
     await mkdir(dirname(join(ctx.iw.path, permanent)), { recursive: true });
+    ctx.assertOwner();
     await writeFile(join(ctx.iw.path, permanent), contract!.hiddenFiles![hidden]);
   }
   if (remapped.size > 0) {
@@ -271,6 +329,10 @@ async function integrateOne(ctx: Ctx, task: TaskRow): Promise<IntegrationReport>
     // An uncommitted oracle would be verified, then left behind as a dirty tree that blocks every later integration.
     if (!commit.success) return escalate('integration_verification_failed', `committing the oracle failed: ${(commit.stderr || commit.stdout).trim().slice(0, 300)}`, undefined, preSha);
   }
+
+  ctx.expectedTip = await head(ctx);
+  ctx.assertOwner();
+  store.setArtifacts(task.id, { integration: { preSha, expectedTip: ctx.expectedTip } });
 
   // 5. integration verification: this task's own checks, every earlier integrated task's checks, then the batch commands
   const commands: string[][] = [];
@@ -290,13 +352,17 @@ async function integrateOne(ctx: Ctx, task: TaskRow): Promise<IntegrationReport>
     seen.add(key);
     const problems = await validateCommand(command, ctx.iw.path, {});
     if (problems.length > 0) return escalate('integration_verification_failed', `integration command rejected: ${problems.join('; ')}`, results, preSha);
+    ctx.assertOwner();
     const r = await ctx.run(command, ctx.iw.path);
+    ctx.assertOwner();
     const tail = redact(r.output.trim().slice(-1200));
     results.push({ command, exitCode: r.exitCode, tail });
     if (r.exitCode !== 0) return escalate('integration_verification_failed', `${command.join(' ')} -> exit ${r.exitCode}${r.timedOut ? ' (timed out)' : ''}`, results, preSha);
   }
 
   const integratedCommit = await head(ctx);
+  ctx.assertOwner();
+  if (integratedCommit !== ctx.expectedTip) throw new Error('integration tip changed during verification');
   store.transition(task.id, 'DONE', { actor: ctx.actor, reason: 'integrated and verified', expectFrom: 'INTEGRATING', patch: { implementedBy: task.executor === 'claude' ? 'claude' : 'worker', artifacts: { integration: { preSha, integratedCommit, commands: results } } } });
   ctx.log(`integrated ${task.id} -> ${integratedCommit.slice(0, 10)}`);
   return { taskId: task.id, outcome: 'DONE', integratedCommit, commands: results };
@@ -327,18 +393,25 @@ export async function completeClaudeTask(
   const task = store.requireTask(input.taskId);
   if (task.executor !== 'claude') throw new StoreError('invalid', `task ${task.id} is not a Claude-kept task`);
   const batch = store.getBatch(task.batchId)!;
-  const iw = await worktrees.integrationWorktree(batch);
-  const ctx: Ctx = { store, worktrees, batch, iw, run: input.run ?? defaultRunner, log: () => {}, actor: 'claude-engineering-lead' };
-  const ancestor = await gitIn(ctx, ['merge-base', '--is-ancestor', input.commit, 'HEAD']);
-  if (!ancestor.success) throw new StoreError('invalid', `commit ${input.commit} is not on the integration branch ${iw.branch}`);
-  const results: NonNullable<IntegrationReport['commands']> = [];
-  for (const command of batch.integrationCommands) {
-    const problems = await validateCommand(command, iw.path, {});
-    if (problems.length > 0) throw new StoreError('invalid', problems.join('; '));
-    const r = await ctx.run(command, iw.path);
-    results.push({ command, exitCode: r.exitCode, tail: redact(r.output.trim().slice(-1200)) });
-    if (r.exitCode !== 0) throw new StoreError('invalid', `integration verification failed: ${command.join(' ')} -> exit ${r.exitCode}`);
-  }
-  store.transition(task.id, 'DONE', { actor: ctx.actor, reason: input.note, expectFrom: 'CODING', patch: { implementedBy: 'claude', artifacts: { claudeDirect: { commit: input.commit, note: input.note, reason: task.spec.keptReason ?? task.artifacts.claudeReason ?? null, commands: results } } } });
-  return { taskId: task.id, outcome: 'DONE', integratedCommit: input.commit, commands: results };
+  const ownership = await integrationOwnership(store, worktrees, batch.repository, 'claude-engineering-lead', 20 * 60_000);
+  if (!ownership) throw new Error('integration locked');
+  try {
+    const iw = await worktrees.integrationWorktree(batch, () => ownership.assert());
+    const ctx: Ctx = { store, worktrees, batch, iw, run: input.run ?? defaultRunner, log: () => {}, actor: 'claude-engineering-lead', assertOwner: () => ownership.assert() };
+    const ancestor = await gitIn(ctx, ['merge-base', '--is-ancestor', input.commit, 'HEAD']);
+    if (!ancestor.success) throw new StoreError('invalid', `commit ${input.commit} is not on the integration branch ${iw.branch}`);
+    const results: NonNullable<IntegrationReport['commands']> = [];
+    for (const command of batch.integrationCommands) {
+      const problems = await validateCommand(command, iw.path, {});
+      if (problems.length > 0) throw new StoreError('invalid', problems.join('; '));
+      ctx.assertOwner();
+      const r = await ctx.run(command, iw.path);
+      ctx.assertOwner();
+      results.push({ command, exitCode: r.exitCode, tail: redact(r.output.trim().slice(-1200)) });
+      if (r.exitCode !== 0) throw new StoreError('invalid', `integration verification failed: ${command.join(' ')} -> exit ${r.exitCode}`);
+    }
+    ctx.assertOwner();
+    store.transition(task.id, 'DONE', { actor: ctx.actor, reason: input.note, expectFrom: 'CODING', patch: { implementedBy: 'claude', artifacts: { claudeDirect: { commit: input.commit, note: input.note, reason: task.spec.keptReason ?? task.artifacts.claudeReason ?? null, commands: results } } } });
+    return { taskId: task.id, outcome: 'DONE', integratedCommit: input.commit, commands: results };
+  } finally { await ownership.release(); }
 }

@@ -83,14 +83,16 @@ export class WorktreeManager implements Workspace {
     return runControlledCommand('git', args, { cwd, timeoutMs });
   }
 
-  private async mustGit(cwd: string, args: string[]): Promise<string> {
+  private async mustGit(cwd: string, args: string[], assertOwner: () => void = () => {}): Promise<string> {
+    assertOwner();
     const r = await this.git(cwd, args);
     if (!r.success) throw new WorkspaceError('git_failed', `git ${args.join(' ')} failed in ${cwd}: ${(r.stderr || r.stdout).trim().slice(0, 400)}`);
     return r.stdout.trim();
   }
 
   /** Runs git with extra environment (the stock runner has none); used only for the temporary-index snapshot. */
-  private gitEnv(cwd: string, args: string[], env: Record<string, string>): Promise<string> {
+  private gitEnv(cwd: string, args: string[], env: Record<string, string>, assertOwner: () => void = () => {}): Promise<string> {
+    assertOwner();
     return new Promise((resolve, reject) => {
       execFile('git', args, { cwd, env: { ...process.env, ...env }, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) =>
         err ? reject(new WorkspaceError('git_failed', `git ${args.join(' ')} failed: ${(stderr || err.message).trim().slice(0, 400)}`)) : resolve(stdout.trim()),
@@ -102,16 +104,16 @@ export class WorktreeManager implements Workspace {
    * HEAD + exactly `paths` (modified or untracked), as a commit object built in a TEMPORARY index. The user's index,
    * branches and working tree are untouched; the commit is unreferenced until the integration branch points at it.
    */
-  private async snapshotCommit(repository: string, baseCommit: string, paths: string[]): Promise<string> {
+  private async snapshotCommit(repository: string, baseCommit: string, paths: string[], assertOwner: () => void = () => {}): Promise<string> {
     for (const p of paths) if (isAbsolute(p) || p.split('/').includes('..')) throw new WorkspaceError('unsafe_path', `snapshot path ${p} must be repo-relative without ..`);
     const dir = await mkdtemp(join(tmpdir(), 'lead-snapshot-'));
     try {
       const env = { GIT_INDEX_FILE: join(dir, 'index') };
-      await this.gitEnv(repository, ['read-tree', baseCommit], env);
+      await this.gitEnv(repository, ['read-tree', baseCommit], env, assertOwner);
       const present = paths.filter((p) => existsSync(join(repository, p)));
-      if (present.length > 0) await this.gitEnv(repository, ['add', '--', ...present], env);
-      const tree = await this.gitEnv(repository, ['write-tree'], env);
-      return await this.gitEnv(repository, [...IDENTITY, 'commit-tree', tree, '-p', baseCommit, '-m', `snapshot of ${paths.length} uncommitted file(s) for batch base`], env);
+      if (present.length > 0) await this.gitEnv(repository, ['add', '--', ...present], env, assertOwner);
+      const tree = await this.gitEnv(repository, ['write-tree'], env, assertOwner);
+      return await this.gitEnv(repository, [...IDENTITY, 'commit-tree', tree, '-p', baseCommit, '-m', `snapshot of ${paths.length} uncommitted file(s) for batch base`], env, assertOwner);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -122,7 +124,7 @@ export class WorktreeManager implements Workspace {
    * user's checkout. With `snapshotPaths` the base is HEAD + those uncommitted files, so workers see the code the
    * batch builds on.
    */
-  async ensureIntegrationBranch(batch: BatchRow): Promise<{ branch: string; baseCommit: string }> {
+  async ensureIntegrationBranch(batch: BatchRow, assertOwner: () => void = () => {}): Promise<{ branch: string; baseCommit: string }> {
     const branch = integrationBranch(batch.id);
     const existing = await this.git(batch.repository, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]);
     if (existing.success) {
@@ -130,9 +132,9 @@ export class WorktreeManager implements Workspace {
       return { branch, baseCommit: base.success ? base.stdout.trim() : existing.stdout.trim() };
     }
     let baseCommit = await this.mustGit(batch.repository, ['rev-parse', '--verify', `${batch.baseRef ?? 'HEAD'}^{commit}`]);
-    if (batch.snapshotPaths.length > 0) baseCommit = await this.snapshotCommit(batch.repository, baseCommit, batch.snapshotPaths);
-    await this.mustGit(batch.repository, ['update-ref', baseRefName(batch.id), baseCommit]);
-    await this.mustGit(batch.repository, ['branch', branch, baseCommit]);
+    if (batch.snapshotPaths.length > 0) baseCommit = await this.snapshotCommit(batch.repository, baseCommit, batch.snapshotPaths, assertOwner);
+    await this.mustGit(batch.repository, ['update-ref', baseRefName(batch.id), baseCommit], assertOwner);
+    await this.mustGit(batch.repository, ['branch', branch, baseCommit], assertOwner);
     return { branch, baseCommit };
   }
 
@@ -223,9 +225,10 @@ export class WorktreeManager implements Workspace {
   }
 
   /** The batch's integration worktree (created on first use). All merges and integration tests happen here, never in the user's checkout. */
-  integrationWorktree(batch: BatchRow): Promise<{ path: string; branch: string }> {
+  integrationWorktree(batch: BatchRow, assertOwner: () => void = () => {}): Promise<{ path: string; branch: string }> {
     return this.withRepoLock(batch.repository, async () => {
-      const { branch } = await this.ensureIntegrationBranch(batch);
+      assertOwner();
+      const { branch } = await this.ensureIntegrationBranch(batch, assertOwner);
       const path = this.integrationPath(batch.id);
       if (existsSync(path)) {
         await this.assertManaged(path, batch.repository);
@@ -233,7 +236,7 @@ export class WorktreeManager implements Workspace {
         if (head !== branch) throw new WorkspaceError('not_a_task_worktree', `${path} is on ${head}, expected ${branch}`);
       } else {
         await mkdir(dirname(path), { recursive: true });
-        await this.mustGit(batch.repository, ['worktree', 'add', path, branch]);
+        await this.mustGit(batch.repository, ['worktree', 'add', path, branch], assertOwner);
       }
       await this.linkPaths(batch.repository, path, batch.linkPaths);
       return { path, branch };

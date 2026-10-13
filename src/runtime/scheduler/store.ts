@@ -1038,6 +1038,17 @@ export class SchedulerStore {
     });
   }
 
+  /** Renewal cannot resurrect an expired or replaced generation. Owners must be unique per invocation. */
+  renewLock(name: string, owner: string, ttlMs: number): boolean {
+    const now = this.now();
+    return this.db.prepare('UPDATE locks SET expires_at = ? WHERE name = ? AND owner = ? AND expires_at > ?')
+      .run(now + ttlMs, name, owner, now).changes === 1;
+  }
+
+  ownsLock(name: string, owner: string): boolean {
+    return !!this.db.prepare('SELECT 1 FROM locks WHERE name = ? AND owner = ? AND expires_at > ?').get(name, owner, this.now());
+  }
+
   releaseLock(name: string, owner: string): void {
     this.db.prepare('DELETE FROM locks WHERE name = ? AND owner = ?').run(name, owner);
   }

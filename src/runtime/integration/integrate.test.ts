@@ -228,6 +228,8 @@ describe('M5.3 integration', () => {
     // simulate the integrator dying after the merge but before verification finished
     store.transition('a', 'INTEGRATING', { actor: 'dead', expectFrom: 'APPROVED', patch: { artifacts: { integration: { preSha } } } });
     git(iw.path, '-c', 'user.name=x', '-c', 'user.email=x@x', 'merge', '--no-ff', '-m', 'half merge', store.requireTask('a').headCommit!);
+    // The new journal records the exact owned tip; ancestry alone cannot authorize discarding commits.
+    store.setArtifacts('a', { integration: { preSha, expectedTip: git(iw.path, 'rev-parse', 'HEAD') } });
     assert.notEqual(git(iw.path, 'rev-parse', 'HEAD'), preSha);
     const { reports } = await integrateBatch(store, worktrees, { batchId: 'B1', run: passRunner });
     assert.deepEqual(reports.map((r) => r.outcome), ['DONE']);

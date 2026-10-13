@@ -64,7 +64,9 @@ describe('integration crash recovery', () => {
     store.transition('a', 'INTEGRATING', { actor: 'dead', expectFrom: 'APPROVED', patch: { artifacts: { integration: { preSha } } } });
     git(iw.path, 'merge', '--no-ff', '-m', 'half merge', store.requireTask('a').headCommit!);
     mkdirSync(join(iw.path, 'tests'), { recursive: true });
-    writeFileSync(join(iw.path, 'tests/a.test.js'), 'test("x",()=>{})\n'); // oracle written, process killed before `git commit`
+    // Reproduce the current journal and exact runtime-owned bytes, not an unrelated untracked file.
+    store.setArtifacts('a', { integration: { preSha, expectedTip: git(iw.path, 'rev-parse', 'HEAD') } });
+    writeFileSync(join(iw.path, 'tests/a.test.js'), Object.values(store.requireTask('a').spec.request!.contract.hiddenFiles!)[0]); // killed before commit
 
     const { reports } = await integrateBatch(store, worktrees, { batchId: 'B1', run: passRunner });
     assert.deepEqual(reports.map((r) => r.outcome), ['DONE']);
