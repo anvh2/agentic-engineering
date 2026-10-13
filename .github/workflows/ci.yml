@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      full-regression:
+        description: "Run full macOS regression (disable to typecheck only)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: project-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Project checks
+    uses: ./.github/workflows/reusable-node-checks.yml
+    with:
+      full-regression: ${{ github.event_name != 'workflow_dispatch' || inputs.full-regression }}
