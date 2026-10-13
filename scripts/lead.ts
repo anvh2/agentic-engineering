@@ -38,6 +38,7 @@ import { WorktreeManager } from '../src/runtime/worktree/worktree.ts';
 import { runObjectiveCommand } from '../src/lead/objective/cli.ts';
 import { runLifecycleCommand } from '../src/lead/lifecycle/cli.ts';
 import { runMeetingCommand } from '../src/lead/collaboration/meeting-cli.ts';
+import { runSupervisorCommand } from '../src/lead/supervisor/cli.ts';
 import { recoverRuntimeFailure } from '../src/lead/recovery.ts';
 import { cancelTask } from '../src/lead/cancel.ts';
 import { allowedProvidersFromEnv, parseAllowList, providerOf } from '../src/runtime/execution/worker-provider.ts';
@@ -50,6 +51,17 @@ const positional = rest.filter((a, i) => !a.startsWith('--') && !(rest[i - 1] ??
 
 const root = findProjectRoot() ?? process.cwd();
 const workdir = process.env.AGENTIC_SCHED_ROOT ?? join(root, '.workdir');
+if (command === 'supervisor') {
+  if (!process.env.AGENTIC_SCHED_ROOT || resolve(workdir) === resolve(root, '.workdir'))
+    throw new Error('supervisor needs explicit isolated AGENTIC_SCHED_ROOT; never use live default');
+  const wd = resolve(workdir);
+  for (const key of ['AGENTIC_SCHED_DB', 'AGENTIC_MODEL_LOCK_DB', 'AGENTIC_ARTIFACT_ROOT']) {
+    const val = process.env[key];
+    if (!val || (!resolve(val).startsWith(wd + '/'))) throw new Error(key + ' must be set inside isolated AGENTIC_SCHED_ROOT');
+  }
+  if (process.env.AGENTIC_ALLOW_PROVIDERS?.trim()) throw new Error('supervisor preview prohibits non-default provider opt-in');
+}
+
 // Planning (`objective` without --submit) must not create or open the scheduler database: it gets a throwaway in-memory store.
 const store = new SchedulerStore(command === 'objective' && !has('--submit') ? ':memory:' : (process.env.AGENTIC_SCHED_DB ?? join(workdir, 'scheduler', 'scheduler.db')));
 const worktrees = new WorktreeManager(join(workdir, 'worktrees'));
@@ -88,6 +100,31 @@ function table(batchId?: string, state?: string): void {
 
 async function main(): Promise<void> {
   switch (command) {
+    case 'supervisor': {
+      const config = await loadConfig();
+      const urlText = flag('--server');
+      const sub = rest[0];
+      if (sub === 'start') {
+        if (!urlText) throw new Error('supervisor start requires --server <isolated loopback URL>');
+        const url = new URL(urlText);
+        if (url.protocol !== 'http:' || !['localhost','127.0.0.1','[::1]'].includes(url.hostname) || !url.port || url.port === '4111' || url.username || url.password || url.pathname !== '/' || url.search || url.hash)
+          throw new Error('supervisor must use an isolated loopback HTTP Mastra server, not :4111');
+      }
+      process.exitCode = await runSupervisorCommand(rest, {
+        store, workdir,
+        out: (t) => console.log(t), err: (t) => console.error(t),
+        runLifecycle: async (id) => runLifecycleCommand(['run', id], {
+          store, worktrees, workdir, cwd: process.cwd(),
+          out: (t) => console.log(t), err: (t) => console.error(t), config,
+          makeRuntime: () => {
+            const executor = createMastraExecutor({ server: urlText, taskTimeoutMs: config.taskTimeoutMs + config.maxCapacityWaitMs });
+            const scheduler = new Scheduler({ store, executor, workspace: worktrees, config, capacity: sharedModelCapacity(), allowProviders: [], log: (line) => console.log('  ' + line) });
+            return { scheduler, executor, capacity: sharedModelCapacity() };
+          },
+        }),
+      });
+      break;
+    }
     case 'objective':
       process.exitCode = await runObjectiveCommand(rest, { out: (t) => console.log(t), err: (t) => console.error(t), cwd: process.cwd(), workdir, sink: store });
       break;
@@ -265,7 +302,7 @@ async function main(): Promise<void> {
       process.exitCode = await runMeetingCommand(rest, { store, meetingsDir: process.env.AGENTIC_MEETINGS_DIR ?? join(workdir, 'meetings') });
       break;
     default:
-      console.error('usage: lead <objective|lifecycle|meeting|plan|tasks|run|status|review|integrate|integration|resume|cancel|retry|claude|metrics|reconcile> ...');
+      console.error('usage: lead <supervisor|objective|lifecycle|meeting|plan|tasks|run|status|review|integrate|integration|resume|cancel|retry|claude|metrics|reconcile> ...');
       process.exit(2);
   }
 }
