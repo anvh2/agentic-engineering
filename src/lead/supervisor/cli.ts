@@ -77,8 +77,15 @@ export async function runSupervisorCommand(args: string[], ctx: SupervisorContex
     return 0;
   }
   if (cmd === 'resume') {
-    if (!(await exists(holderDir(ctx.workdir))) || await exists(intent(ctx.workdir, stopName))) {
-      ctx.err('Not safely pausable; start a new session only after reconciliation. Never steal an orphan lock.');
+    if (!(await exists(holderDir(ctx.workdir)))) {
+      // No live gate remains: remove only control intents and require an explicit NEW start.
+      await unlink(intent(ctx.workdir, stopName)).catch((e: NodeJS.ErrnoException) => { if (e.code !== 'ENOENT') throw e; });
+      await unlink(intent(ctx.workdir, pauseName)).catch((e: NodeJS.ErrnoException) => { if (e.code !== 'ENOENT') throw e; });
+      ctx.out('No holder; control intents cleared. Use start explicitly after checking the lifecycle.');
+      return 0;
+    }
+    if (await exists(intent(ctx.workdir, stopName))) {
+      ctx.err('Stop was requested while holder is still present. Wait for completion or reconcile; no takeover.');
       return 1;
     }
     if (!(await exists(intent(ctx.workdir, pauseName)))) {
@@ -140,6 +147,7 @@ export async function runSupervisorCommand(args: string[], ctx: SupervisorContex
         throw new Error('supervisor ownership lost; fail closed, retaining gate');
     };
     let rounds = 0;
+    let resultCode = 0;
     while (!stopping) {
       await assertOwner();
       if (await exists(intent(ctx.workdir, stopName))) break;
@@ -154,12 +162,13 @@ export async function runSupervisorCommand(args: string[], ctx: SupervisorContex
       const verified = lifecycle.require(current.objectiveId);
       rounds++;
       ctx.out(JSON.stringify({ batch, objectiveId: current.objectiveId, phase: verified.phase, exit, rounds }));
-      if (exit !== 0 || verified.phase !== 'ACCEPTED' || args.includes('--once')) break;
+      if (exit !== 0 || verified.phase !== 'ACCEPTED') { resultCode = 1; break; }
+      if (args.includes('--once')) break;
       // One pinned objective per batch; no alternate backlog iteration.
       break;
     }
     await assertOwner();
-    return 0;
+    return resultCode;
   } catch (e) {
     ctx.err('supervisor failed CLOSED: ' + (e as Error).message);
     // A failed/unknown child, lock loss, or failed startup must not result in an unsafe automatic takeover.
