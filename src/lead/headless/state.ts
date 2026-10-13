@@ -23,9 +23,10 @@ export function createMission(input: { mission: string; server: string; objectiv
   return { schema: 1, mission: input.mission, baseServer: validateServer(input.server),
     createdAt: now, updatedAt: now, jobs: input.objectives.map((objectiveId) => ({ objectiveId, phase: 'PENDING', attempts: 0 })) };
 }
+/** CLI exit code 1 is ambiguous (NOT_ACCEPTED or ordinary exception): never infer a verdict from it. */
 export function classifyExit(code: number | null): JobPhase {
   switch (code) {
-    case 0: return 'ACCEPTED'; case 1: return 'NOT_ACCEPTED'; case 3: return 'ESCALATED';
+    case 0: return 'ACCEPTED'; case 1: return 'UNKNOWN'; case 3: return 'ESCALATED';
     case 4: return 'AWAITING_OPERATOR'; case 5: return 'CANCELLED'; default: return 'UNKNOWN';
   }
 }
@@ -34,13 +35,23 @@ export function advanceMission(state: MissionState, id: string, exitCode: number
     exitCode: exitCode ?? undefined, finishedAt: new Date().toISOString() } : j);
   return { ...state, jobs, updatedAt: new Date().toISOString() };
 }
+/** Gemini supervisor status concept: derive metrics from persisted facts, not a second database. */
+export function missionMetrics(state: MissionState): { total: number; activeTasks: string[]; processedTasks: string[]; pendingTasks: string[]; blockedTasks: string[] } {
+  return {
+    total: state.jobs.length,
+    activeTasks: state.jobs.filter((j) => j.phase === 'RUNNING').map((j) => j.objectiveId),
+    processedTasks: state.jobs.filter((j) => j.phase === 'ACCEPTED').map((j) => j.objectiveId),
+    pendingTasks: state.jobs.filter((j) => j.phase === 'PENDING').map((j) => j.objectiveId),
+    blockedTasks: state.jobs.filter((j) => !['PENDING','RUNNING','ACCEPTED'].includes(j.phase)).map((j) => j.objectiveId),
+  };
+}
 export function pendingMission(state: MissionState): Job | undefined {
   return state.jobs.find((j) => j.phase === 'PENDING');
 }
 export async function readState(file: string): Promise<MissionState> {
   const state = JSON.parse(await readFile(file, 'utf8')) as MissionState;
-  if (state.schema !== 1 || !Array.isArray(state.jobs) ||
-      state.jobs.some((j) => !ID.test(j.objectiveId) || !['PENDING','RUNNING','ACCEPTED','NOT_ACCEPTED','ESCALATED','AWAITING_OPERATOR','CANCELLED','UNKNOWN'].includes(j.phase)))
+  if (state.schema !== 1 || !ID.test(state.mission) || !Array.isArray(state.jobs) || state.jobs.length < 1 || state.jobs.length > 50 || new Set(state.jobs.map(j => j.objectiveId)).size !== state.jobs.length ||
+      state.jobs.some((j) => !ID.test(j.objectiveId) || !Number.isInteger(j.attempts) || j.attempts < 0 || !['PENDING','RUNNING','ACCEPTED','NOT_ACCEPTED','ESCALATED','AWAITING_OPERATOR','CANCELLED','UNKNOWN'].includes(j.phase)))
     throw new Error('invalid mission state; fail closed');
   validateServer(state.baseServer);
   return state;
