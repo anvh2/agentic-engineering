@@ -56,3 +56,13 @@ test('existing holder with mismatched ownership remains locked, never silently r
     assert.equal(await runSupervisorCommand(['resume'], ctx), 1);
   });
 });
+
+test('operator can clear stop intent only after holder gate has been removed', async () => {
+  await harness(async (ctx) => {
+    const folder = join(ctx.workdir, 'supervisor');
+    await mkdir(folder, { recursive: true });
+    await writeFile(join(folder, 'stop-requested'), 'stopped');
+    assert.equal(await runSupervisorCommand(['resume'], ctx), 0);
+    await assert.rejects(readFile(join(folder, 'stop-requested'), 'utf8'), /ENOENT/);
+  });
+});
