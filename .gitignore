@@ -20,3 +20,7 @@ __pycache__/
 .venv-phase3b/
 
 docs/audits/**/pre-restructure-backup.tgz
+
+# Local verification and isolated night-run evidence (never commit)
+.local-test-results/
+.local-night-run/
