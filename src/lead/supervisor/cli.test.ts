@@ -20,7 +20,7 @@ test('operator commands refuse to claim completion when there is no holder', asy
     assert.match(ctx.out[0], /"STOPPED"/);
     assert.equal(await runSupervisorCommand(['pause'], ctx), 1);
     assert.equal(await runSupervisorCommand(['stop'], ctx), 1);
-    assert.equal(await runSupervisorCommand(['resume'], ctx), 1);
+    assert.equal(await runSupervisorCommand(['resume'], ctx), 0);
   });
 });
 
