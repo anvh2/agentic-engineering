@@ -3,11 +3,10 @@ name: Validation
 on:
   workflow_call:
     inputs:
-      full-regression:
-        description: "Run full Node regression on macOS"
-        required: false
-        type: boolean
-        default: true
+      test-lane:
+        description: "fast = 4-shard PR tests; full = post-merge all tests including smoke/E2E"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -30,11 +29,41 @@ jobs:
       - name: Typecheck all project TypeScript
         run: npm run typecheck
 
-  regression:
-    name: Full project tests (macOS, shard ${{ matrix.shard }}/10)
-    if: inputs.full-regression
+  fast-tests:
+    name: PR tests (macOS, shard ${{ matrix.shard }}/4)
+    if: inputs.test-lane == 'fast'
     runs-on: macos-15
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Node and Go outside HOME for sandbox parity
+        run: |
+          brew install node@22 go@1.25
+          echo "$(brew --prefix node@22)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix go@1.25)/bin" >> "$GITHUB_PATH"
+      - name: Verify sandbox-safe toolchain paths
+        run: |
+          node --version
+          go version
+          case "$(command -v node):$(command -v go):$(command -v npx)" in *"$HOME"*) echo "toolchain under HOME"; exit 1;; esac
+      - run: npm ci
+      - name: PR fast suite (src + apps, smoke/E2E in tests/smoke-e2e excluded)
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          node --disable-warning=ExperimentalWarning --test --test-shard="${SHARD}/4" 'src/**/*.test.ts' 'apps/**/*.test.ts'
+
+  full-regression:
+    name: Post-merge full regression (macOS, shard ${{ matrix.shard }}/10)
+    if: inputs.test-lane == 'full'
+    runs-on: macos-15
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       max-parallel: 10
@@ -44,30 +73,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      # The project's fail-closed macOS sandbox deliberately refuses to read
-      # executables living under the user's HOME. setup-node/setup-go place
-      # their binaries under /Users/runner/hostedtoolcache and cannot be used
-      # for this job without weakening isolation. Install narrowly via brew.
-      - name: Install native Node and Go outside HOME
+      - name: Install Node and Go outside HOME for sandbox parity
         run: |
           brew install node@22 go@1.25
           echo "$(brew --prefix node@22)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix go@1.25)/bin" >> "$GITHUB_PATH"
-      - name: Verify native toolchains and paths
+      - name: Verify sandbox-safe toolchain paths
         run: |
           node --version
-          npm --version
           go version
-          command -v node
-          command -v npx
-          command -v go
-          case "$(command -v node):$(command -v go):$(command -v npx)" in *"$HOME"*) echo "toolchain unexpectedly under HOME"; exit 1;; esac
-      - name: Install pinned dependencies
-        run: npm ci
-      - name: Full project test suite (native Node test sharding)
+          case "$(command -v node):$(command -v go):$(command -v npx)" in *"$HOME"*) echo "toolchain under HOME"; exit 1;; esac
+      - run: npm ci
+      - name: Complete regression including tests/smoke-e2e and Oracle
         env:
           SHARD: ${{ matrix.shard }}
         run: |
-          # Node 22 distributes test files deterministically across 10 shards.
-          # All 10 jobs are required: the matrix fails if any shard fails.
-          node --disable-warning=ExperimentalWarning --test --test-shard="${SHARD}/10" 'src/**/*.test.ts' 'tests/**/*.test.ts'
+          node --disable-warning=ExperimentalWarning --test --test-shard="${SHARD}/10" 'src/**/*.test.ts' 'apps/**/*.test.ts' 'tests/**/*.test.ts'

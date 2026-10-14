@@ -8,8 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { capacityFor } from '../../src/runtime/capacity/model-capacity.ts';
 import { tempDir } from '../../src/runtime/scheduler/test-helpers.ts';
-import { HTTP_SMOKE_LIMITS, HTTP_SMOKE_OPT_IN_ENV, checkHttpSmokeAuthorization } from './http-smoke-guards.ts';
-import { SmokeCancellationUnconfirmed, TASK_ID, runSchedulerSmoke, type SmokeOptions } from './scheduler-smoke.ts';
+import { HTTP_SMOKE_LIMITS, HTTP_SMOKE_OPT_IN_ENV, checkHttpSmokeAuthorization } from '../provider-smoke/http-smoke-guards.ts';
+import { SmokeCancellationUnconfirmed, TASK_ID, runSchedulerSmoke, type SmokeOptions } from '../provider-smoke/scheduler-smoke.ts';
 
 /**
  * The full HTTP execution path with a FAKE Codex CLI (no network, no account, no model):

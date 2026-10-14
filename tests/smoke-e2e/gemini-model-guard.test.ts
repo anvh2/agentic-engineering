@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { describe, it } from 'node:test';
-import { guardVerdict, startModelGuard, type ModelGuard } from './gemini-model-guard.ts';
+import { guardVerdict, startModelGuard, type ModelGuard } from '../provider-smoke/gemini-model-guard.ts';
 
 /** The guard against a LOCAL stand-in for the Gemini API. Nothing here reaches Google. */
 

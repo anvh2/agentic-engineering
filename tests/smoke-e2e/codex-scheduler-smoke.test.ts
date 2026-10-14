@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { tempDir } from '../../src/runtime/scheduler/test-helpers.ts';
-import { SmokeCancellationUnconfirmed, runSchedulerSmoke } from './scheduler-smoke.ts';
+import { SmokeCancellationUnconfirmed, runSchedulerSmoke } from '../provider-smoke/scheduler-smoke.ts';
 
 const FAKE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'workers', 'providers', '__testing__', 'fake-codex.mjs');
 const RIGHT = 'package smoke\n\n// Double returns n multiplied by two.\nfunc Double(n int) int {\n\treturn n * 2\n}\n';
