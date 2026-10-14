@@ -207,6 +207,33 @@ describe('runCodingTask (runtime-owned control loop, model boundary stubbed)', (
     assert.equal(result.attempts, 0);
   });
 
+  it('preserves legacy nondelegated .txt runtime fixtures without inventing language conventions', async () => {
+    await writeFile(join(root, 'calc', 'legacy.txt'), 'initial\n');
+    let seenPrompt = '';
+    const result = await runCodingTask(
+      { ...task, allowedFiles: ['calc/legacy.txt'], verificationCommands: [['go', 'test', '-count=1', './calc']] },
+      { repoRoot: root, maxAttempts: 1, worker: { async generate(prompt) {
+        seenPrompt = prompt;
+        await writeFile(join(root, 'calc', 'legacy.txt'), 'updated\n');
+        return { text: 'done', finishReason: 'stop', steps: [{}] };
+      } } },
+    );
+    assert.equal(result.modelCalls, 1, 'a legacy fixture still reaches its model boundary');
+    assert.doesNotMatch(seenPrompt, /Engineering context SHA-256/);
+  });
+
+  it('refuses silently omitting approved architecture on unknown language files', async () => {
+    await writeFile(join(root, 'calc', 'legacy.txt'), 'initial\n');
+    await assert.rejects(
+      runCodingTask(
+        { ...task, allowedFiles: ['calc/legacy.txt'],
+          approvedDesign: { approvalRef: 'ADR-01', hld: 'Design', lld: 'Implementation details' } },
+        { repoRoot: root, worker: workerFrom(() => {}) },
+      ),
+      /approvedDesign requires one registered implementation language/,
+    );
+  });
+
   it('rejects contracts whose allowedFiles escape the repository', async () => {
     await assert.rejects(runCodingTask({ ...task, allowedFiles: ['../x.go'] }, { repoRoot: root, worker: workerFrom(() => {}) }));
   });
