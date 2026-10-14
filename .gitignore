@@ -28,3 +28,5 @@ docs/audits/**/pre-restructure-backup.tgz
 docs/audits/*
 
 .turbo
+
+.worktrees/
