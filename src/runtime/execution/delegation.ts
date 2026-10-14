@@ -61,7 +61,7 @@ export interface DelegationPolicy {
 }
 
 export const DEFAULT_POLICY: DelegationPolicy = LANGUAGE_ADAPTERS.go.policy;
-export const TEST_FILE = /(_test\\.go$|\\.test\\.[cm]?[jt]sx?$|\\.spec\\.[cm]?[jt]sx?$|(^|\\/)(tests?|__tests__)\\/)/;
+export const TEST_FILE = /(_test\.go$|\.test\.[cm]?[jt]sx?$|\.spec\.[cm]?[jt]sx?$|(^|\/)(tests?|__tests__)\/)/;
 export type Language = 'go' | 'js';
 
 /** JS keeps the same bounded Jest policy; TypeScript remains disabled until it has a verified adapter. */
