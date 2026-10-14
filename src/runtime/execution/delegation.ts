@@ -60,12 +60,12 @@ export interface DelegationPolicy {
   maxAttempts: number;
 }
 
-export const DEFAULT_POLICY: DelegationPolicy = LANGUAGE_ADAPTERS.go.policy;
+export const DEFAULT_POLICY: DelegationPolicy = { ...LANGUAGE_ADAPTERS.go.policy, allowedExtensions: [...LANGUAGE_ADAPTERS.go.policy.allowedExtensions], allowedVerificationBinaries: [...LANGUAGE_ADAPTERS.go.policy.allowedVerificationBinaries] };
 export const TEST_FILE = /(_test\.go$|\.test\.[cm]?[jt]sx?$|\.spec\.[cm]?[jt]sx?$|(^|\/)(tests?|__tests__)\/)/;
 export type Language = 'go' | 'js';
 
 /** JS keeps the same bounded Jest policy; TypeScript remains disabled until it has a verified adapter. */
-export const JS_POLICY: DelegationPolicy = LANGUAGE_ADAPTERS.js.policy;
+export const JS_POLICY: DelegationPolicy = { ...LANGUAGE_ADAPTERS.js.policy, allowedExtensions: [...LANGUAGE_ADAPTERS.js.policy.allowedExtensions], allowedVerificationBinaries: [...LANGUAGE_ADAPTERS.js.policy.allowedVerificationBinaries] };
 
 export function languageOf(files: string[]): Language | undefined {
   return delegatableLanguage(files.map((file) => extname(file)));
