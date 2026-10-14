@@ -344,6 +344,11 @@ async function awaitWithAbortGrace<T>(call: Promise<T>, signal: AbortSignal, gra
 export async function runCodingTask(taskInput: CodingTask, options: RunCodingTaskOptions): Promise<CodingTaskResult> {
   const task = codingTaskSchema.parse(taskInput);
   const { repoRoot, worker } = options;
+  // Legacy runtime tests may use .txt fixtures, but an approved architecture
+  // contract must never silently lose its language conventions.
+  if (task.approvedDesign && !detectLanguage(task.allowedFiles.map((file) => extname(file)))) {
+    throw new Error('approvedDesign requires one registered implementation language');
+  }
   const maxAttempts = Math.min(options.maxAttempts ?? 3, worker.provider?.limits?.maxCodingAttempts ?? Number.POSITIVE_INFINITY);
   const maxRuntimeRetries = worker.provider?.limits?.maxRuntimeRetries ?? MAX_RUNTIME_RETRIES;
   const timeoutMs = options.modelTimeoutMs ?? 300_000;
