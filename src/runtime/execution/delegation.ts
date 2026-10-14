@@ -131,7 +131,9 @@ export async function routeTask(
   const reasons: string[] = [];
   const language = languageOf(contract.allowedFiles);
   const policy = explicitPolicy ?? policyFor(language);
-  if (!explicitPolicy && contract.allowedFiles.length > 0 && !language) {
+  // An injected policy may reduce permissions for a test or trusted caller, but must
+  // never enable an unbenchmarked language or bypass the registered worker boundary.
+  if (contract.allowedFiles.length > 0 && !language) {
     reasons.push('allowed files must all be .go, or all be .js/.mjs/.cjs (mixed or other file types are not delegated)');
   }
 
