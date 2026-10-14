@@ -14,6 +14,7 @@ import {
 } from './coding-task-runner.ts';
 import { persistRun } from './coding-task-artifacts.ts';
 import { createTraceSink, redact, type TraceSink } from './coding-task-trace.ts';
+import { LANGUAGE_ADAPTERS, delegatableLanguage } from './language-adapters.ts';
 
 /**
  * Engineering Lead -> local coding worker delegation.
@@ -59,48 +60,23 @@ export interface DelegationPolicy {
   maxAttempts: number;
 }
 
-export const DEFAULT_POLICY: DelegationPolicy = {
-  maxAllowedFiles: 1,
-  allowedExtensions: ['.go'],
-  allowedVerificationBinaries: ['go', 'gofmt'],
-  maxAttempts: 3,
-};
-
-export const TEST_FILE = /(_test\.go$|\.test\.[cm]?[jt]sx?$|\.spec\.[cm]?[jt]sx?$|(^|\/)(tests?|__tests__)\/)/;
-
+export const DEFAULT_POLICY: DelegationPolicy = LANGUAGE_ADAPTERS.go.policy;
+export const TEST_FILE = /(_test\\.go$|\\.test\\.[cm]?[jt]sx?$|\\.spec\\.[cm]?[jt]sx?$|(^|\\/)(tests?|__tests__)\\/)/;
 export type Language = 'go' | 'js';
 
-/**
- * Policy for JavaScript tasks (plain .js/.mjs/.cjs only). TypeScript is deliberately NOT enabled: it needs its own
- * type-check verifier allow-list and benchmark evidence first. The binary allow-list is just `npx`; the exact argv shape
- * is enforced by validateJsVerification, because `npx <anything>` would otherwise be arbitrary code execution.
- */
-export const JS_POLICY: DelegationPolicy = {
-  maxAllowedFiles: 1,
-  allowedExtensions: ['.js', '.mjs', '.cjs'],
-  allowedVerificationBinaries: ['npx'],
-  maxAttempts: 3,
-};
+/** JS keeps the same bounded Jest policy; TypeScript remains disabled until it has a verified adapter. */
+export const JS_POLICY: DelegationPolicy = LANGUAGE_ADAPTERS.js.policy;
 
-/** The one language all allowed files belong to, or undefined for mixed / unsupported files. */
 export function languageOf(files: string[]): Language | undefined {
-  const languages = new Set(
-    files.map((f) => (DEFAULT_POLICY.allowedExtensions.includes(extname(f)) ? 'go' : JS_POLICY.allowedExtensions.includes(extname(f)) ? 'js' : 'other')),
-  );
-  if (languages.size === 1) {
-    const [only] = [...languages];
-    if (only === 'go' || only === 'js') return only;
-  }
-  return undefined;
+  return delegatableLanguage(files.map((file) => extname(file)));
 }
 
 export function policyFor(language: Language | undefined): DelegationPolicy {
   return language === 'js' ? JS_POLICY : DEFAULT_POLICY;
 }
 
-/** Name of the registered Mastra agent that does the editing for a language. */
 export function workerAgentIdFor(language: Language | undefined): 'codingWorkerGo' | 'codingWorkerJs' {
-  return language === 'js' ? 'codingWorkerJs' : 'codingWorkerGo';
+  return language === 'js' ? LANGUAGE_ADAPTERS.js.workerAgentId : LANGUAGE_ADAPTERS.go.workerAgentId;
 }
 
 const JS_VERIFY_FLAGS = new Set(['--runInBand', '--ci']);
