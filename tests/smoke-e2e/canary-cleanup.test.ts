@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { createOwnedDir, findRealCredentialCopies, killGroup, removeOwnedSync, sweepStaleOwnedDirs } from './canary-fs.ts';
+import { createOwnedDir, findRealCredentialCopies, killGroup, removeOwnedSync, sweepStaleOwnedDirs } from '../provider-smoke/canary-fs.ts';
 
 /** Regression tests for the canary cleanup (M8 final, gate 1): ownership-safe, reliable under background writers, and no real credential copies. */
 
@@ -178,7 +178,7 @@ describe('canary cleanup', () => {
   });
 
   it('after the real-CLI canaries have run, nothing of theirs is left under the home directory or the temp dirs, and no real login copy exists', { timeout: 400_000 }, async () => {
-    const { readIsolationCanary, launcherAuthCheck, verifierSandboxProblems } = await import('./read-isolation-canary.ts');
+    const { readIsolationCanary, launcherAuthCheck, verifierSandboxProblems } = await import('../provider-smoke/read-isolation-canary.ts');
     const home = realpathSync(homedir());
     const before = new Set(readdirLeftovers(home));
     await verifierSandboxProblems();

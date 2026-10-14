@@ -6,16 +6,16 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { tempDir } from '../../src/runtime/scheduler/test-helpers.ts';
-import { runM85Objective } from './m85-objective.ts';
+import { runM85Objective } from '../provider-smoke/m85-objective.ts';
 import { sha256 } from '../../src/lead/lifecycle/exec.ts';
-import { ECONOMICS, FIXTURE_DIR, M8F_LIMITS, M8F_OPT_IN_ENV, M8F_TASK_A, M8F_TASK_B, ORACLE_FILES, checkM8FAuthorization, judge, m8fStaticProblems } from './m8final-objective.ts';
+import { ECONOMICS, FIXTURE_DIR, M8F_LIMITS, M8F_OPT_IN_ENV, M8F_TASK_A, M8F_TASK_B, ORACLE_FILES, checkM8FAuthorization, judge, m8fStaticProblems } from '../provider-smoke/m8final-objective.ts';
 
 /**
  * The M8-final objective with a FAKE Codex CLI: the same scheduler, dedicated Mastra HTTP server, workflow, adapter, verified review,
  * integrateBatch and pinned oracle as the real run, with no network, account or model.
  */
 
-const FAKE = join(dirname(fileURLToPath(import.meta.url)), 'fake-codex-m8final.mjs');
+const FAKE = join(dirname(fileURLToPath(import.meta.url)), '..', 'provider-smoke', 'fake-codex-m8final.mjs');
 const ALLOW = [`codex:${M8F_TASK_A}`, `codex:${M8F_TASK_B}`];
 
 function run(mode: string, extra: Partial<Parameters<typeof runM85Objective>[0]> = {}) {
