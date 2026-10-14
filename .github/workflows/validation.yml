@@ -53,7 +53,7 @@ jobs:
           go version
           case "$(command -v node):$(command -v go):$(command -v npx)" in *"$HOME"*) echo "toolchain under HOME"; exit 1;; esac
       - run: npm ci
-      - name: PR fast suite (src + apps, no provider-smoke E2E)
+      - name: PR fast suite (src + apps, smoke/E2E in tests/smoke-e2e excluded)
         env:
           SHARD: ${{ matrix.shard }}
         run: |
@@ -84,7 +84,7 @@ jobs:
           go version
           case "$(command -v node):$(command -v go):$(command -v npx)" in *"$HOME"*) echo "toolchain under HOME"; exit 1;; esac
       - run: npm ci
-      - name: Complete regression including provider-smoke and Oracle
+      - name: Complete regression including tests/smoke-e2e and Oracle
         env:
           SHARD: ${{ matrix.shard }}
         run: |
