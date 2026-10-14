@@ -1,7 +1,7 @@
 import { preserveEofNewline } from './eof-newline.ts';
 import { createHash } from 'node:crypto';
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, normalize, relative } from 'node:path';
+import { dirname, extname, isAbsolute, join, normalize, relative } from 'node:path';
 import type { IterationCompleteContext, IterationCompleteResult } from '@mastra/core/agent';
 import { createPatch } from 'diff';
 import { RequestContext } from '@mastra/core/request-context';
@@ -10,6 +10,7 @@ import { REPOSITORY_ROOT_CONTEXT_KEY } from '../../workers/tools/repository-tool
 import { runSandboxedCommand, sandboxStatus } from '../sandbox/sandbox.ts';
 import { scrubForWorker } from './worker-feedback.ts';
 import { buildEngineeringContext } from './engineering-context.ts';
+import { detectLanguage } from './language-adapters.ts';
 import { CapacityWaitTimeout, capacityFor, modelWaitBudgetMs, permitHolder, type CapacityLease, type ModelCapacity } from '../capacity/model-capacity.ts';
 import { createRepairLoopTracker } from './repair-loop-tracker.ts';
 import { runtimeMetrics, type RuntimeMetrics } from '../../observability/metrics.ts';
@@ -267,7 +268,9 @@ async function buildPrompt(
   const sections = [
     `Task ${task.taskId}: ${task.objective}`,
     `You may modify ONLY: ${task.allowedFiles.join(', ')}. Every other file (including tests) is immutable; changing one fails the task.`,
-    buildEngineeringContext(task.allowedFiles, task.approvedDesign).text,
+    ...(detectLanguage(task.allowedFiles.map((file) => extname(file)))
+      ? [buildEngineeringContext(task.allowedFiles, task.approvedDesign).text]
+      : []),
   ];
   if (task.acceptanceCriteria.length) sections.push(`Acceptance criteria:\n${task.acceptanceCriteria.map((c) => `- ${c}`).join('\n')}`);
   if (task.constraints.length) sections.push(`Constraints:\n${task.constraints.map((c) => `- ${c}`).join('\n')}`);
