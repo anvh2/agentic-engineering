@@ -4,15 +4,15 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { tempDir } from '../../src/runtime/scheduler/test-helpers.ts';
-import { M85_LIMITS, M85_OPT_IN_ENV, TASK_A, TASK_B, checkM85Authorization, judge, runM85Objective } from './m85-objective.ts';
-import { SharedInvocationBudget } from './smoke-server.ts';
+import { M85_LIMITS, M85_OPT_IN_ENV, TASK_A, TASK_B, checkM85Authorization, judge, runM85Objective } from '../provider-smoke/m85-objective.ts';
+import { SharedInvocationBudget } from '../provider-smoke/smoke-server.ts';
 
 /**
  * The M8.5 objective with a FAKE Codex CLI: the same scheduler, dedicated Mastra HTTP server, workflow, adapter, verified review,
  * integrateBatch and pinned oracle as the real run, with no network, account or model.
  */
 
-const FAKE = join(dirname(fileURLToPath(import.meta.url)), 'fake-codex-m85.mjs');
+const FAKE = join(dirname(fileURLToPath(import.meta.url)), '..', 'provider-smoke', 'fake-codex-m85.mjs');
 const ALLOW = [`codex:${TASK_A}`, `codex:${TASK_B}`];
 
 function run(mode: string, extra: Partial<Parameters<typeof runM85Objective>[0]> = {}) {

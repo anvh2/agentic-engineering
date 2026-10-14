@@ -8,9 +8,9 @@ import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { capacityFor } from '../../src/runtime/capacity/model-capacity.ts';
 import { tempDir } from '../../src/runtime/scheduler/test-helpers.ts';
-import { GEMINI_FREE_TIER_MODEL, GEMINI_HTTP_SMOKE_OPT_IN_VALUE, GEMINI_RETIRED_FOR_NEW_USERS, GEMINI_SMOKE_BUDGET, GEMINI_SMOKE_MAX_FORWARDED_REQUESTS, HTTP_SMOKE_LIMITS, checkGeminiSmokeModel, HTTP_SMOKE_OPT_IN_ENV, HTTP_SMOKE_OPT_IN_VALUE, checkHttpSmokeAuthorization } from './http-smoke-guards.ts';
-import { guardVerdict, startModelGuard } from './gemini-model-guard.ts';
-import { SmokeCancellationUnconfirmed, TASK_ID, runSchedulerSmoke, type SmokeOptions } from './scheduler-smoke.ts';
+import { GEMINI_FREE_TIER_MODEL, GEMINI_HTTP_SMOKE_OPT_IN_VALUE, GEMINI_RETIRED_FOR_NEW_USERS, GEMINI_SMOKE_BUDGET, GEMINI_SMOKE_MAX_FORWARDED_REQUESTS, HTTP_SMOKE_LIMITS, checkGeminiSmokeModel, HTTP_SMOKE_OPT_IN_ENV, HTTP_SMOKE_OPT_IN_VALUE, checkHttpSmokeAuthorization } from '../provider-smoke/http-smoke-guards.ts';
+import { guardVerdict, startModelGuard } from '../provider-smoke/gemini-model-guard.ts';
+import { SmokeCancellationUnconfirmed, TASK_ID, runSchedulerSmoke, type SmokeOptions } from '../provider-smoke/scheduler-smoke.ts';
 
 /**
  * The full HTTP execution path with a FAKE Gemini CLI (no network, no account, no model):

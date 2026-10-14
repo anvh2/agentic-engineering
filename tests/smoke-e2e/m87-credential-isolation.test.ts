@@ -7,9 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { CODEX_AUDITED_TOOLS, CODEX_TOOL_SURFACE_ARGS, credentialDenyPaths, discoverToolchainReadPaths } from '../../src/workers/providers/codex-isolation.ts';
 import { tempDir } from '../../src/runtime/scheduler/test-helpers.ts';
-import { TASK_A, TASK_B, runM85Objective } from './m85-objective.ts';
-import { CANARY_CREDENTIAL_NAMES, canaryProblems, launcherAuthCheck, readIsolationCanary, verifierSandboxProblems, type CanaryResult } from './read-isolation-canary.ts';
-import { buildSmokeMastra } from './smoke-server.ts';
+import { TASK_A, TASK_B, runM85Objective } from '../provider-smoke/m85-objective.ts';
+import { CANARY_CREDENTIAL_NAMES, canaryProblems, launcherAuthCheck, readIsolationCanary, verifierSandboxProblems, type CanaryResult } from '../provider-smoke/read-isolation-canary.ts';
+import { buildSmokeMastra } from '../provider-smoke/smoke-server.ts';
 
 /**
  * M8.7A: credential isolation. The model's commands run on the host as the user; this proves, against the REAL codex binary driven by a
@@ -17,7 +17,7 @@ import { buildSmokeMastra } from './smoke-server.ts';
  * No real credential is read: real host locations are only tested for readability with `test -r`.
  */
 
-const FAKE = join(dirname(fileURLToPath(import.meta.url)), 'fake-codex-m85.mjs');
+const FAKE = join(dirname(fileURLToPath(import.meta.url)), '..', 'provider-smoke', 'fake-codex-m85.mjs');
 const codexInstalled = (() => {
   try {
     execFileSync('codex', ['--version'], { stdio: 'ignore' });
