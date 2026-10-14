@@ -63,6 +63,33 @@ describe('runCodingTask (runtime-owned control loop, model boundary stubbed)', (
     assert.ok(result.verifiedStateHash);
   });
 
+  it('injects approved HLD/LLD and Go conventions into the actual worker prompt on each attempt', async () => {
+    const approvedDesign = {
+      approvalRef: 'ADR-12@sha-123',
+      hld: 'The scheduler exclusively owns capacity assignment.',
+      lld: 'Never exceed two permits and preserve oldest-ticket fairness.',
+      adr: ['Do not expose the hidden Oracle to the worker.'],
+    };
+    const result = await runCodingTask(
+      { ...task, approvedDesign },
+      { repoRoot: root, worker: workerFrom(({ call }) => writeImpl(call === 1 ? WRONG : RIGHT)) },
+    );
+    assert.equal(result.verdict, 'PASS');
+    assert.equal(prompts.length, 2);
+    const hashes: string[] = [];
+    for (const prompt of prompts) {
+      assert.match(prompt, /The scheduler exclusively owns capacity assignment/);
+      assert.match(prompt, /Never exceed two permits/);
+      assert.match(prompt, /ADR-12@sha-123/);
+      assert.match(prompt, /idiomatic Go naming/);
+      assert.match(prompt, /runtime verifier and independent reviewer/);
+      const hash = prompt.match(/Engineering context SHA-256: ([a-f0-9]{64})/);
+      assert.ok(hash, 'the injected context must be fingerprinted');
+      hashes.push(hash[1]);
+    }
+    assert.equal(hashes[0], hashes[1], 'repair attempts keep the same approved design');
+  });
+
   it("model prose claiming success cannot produce PASS; attempts are bounded and categorized", async () => {
     const result = await runCodingTask(task, { repoRoot: root, worker: workerFrom(() => {}) });
     assert.equal(result.verdict, 'FAIL');
