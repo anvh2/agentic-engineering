@@ -31,10 +31,15 @@ jobs:
         run: npm run typecheck
 
   regression:
-    name: Full project tests (macOS, native toolchains)
+    name: Full project tests (macOS, shard ${{ matrix.shard }}/10)
     if: inputs.full-regression
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -59,5 +64,10 @@ jobs:
           case "$(command -v node):$(command -v go):$(command -v npx)" in *"$HOME"*) echo "toolchain unexpectedly under HOME"; exit 1;; esac
       - name: Install pinned dependencies
         run: npm ci
-      - name: Full project test suite
-        run: npm test
+      - name: Full project test suite (native Node test sharding)
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          # Node 22 distributes test files deterministically across 10 shards.
+          # All 10 jobs are required: the matrix fails if any shard fails.
+          node --disable-warning=ExperimentalWarning --test --test-shard="${SHARD}/10" 'src/**/*.test.ts' 'tests/**/*.test.ts'
