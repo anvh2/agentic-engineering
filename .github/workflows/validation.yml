@@ -31,7 +31,7 @@ jobs:
         run: npm run typecheck
 
   regression:
-    name: Full project tests (macOS, Node 22)
+    name: Full project tests (macOS, native toolchains)
     if: inputs.full-regression
     runs-on: macos-15
     timeout-minutes: 45
@@ -39,17 +39,24 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22.23.2"
-          cache: npm
-      - name: Install Go toolchain for verifier and sandbox tests
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.25.2"
-          cache: false
-      - name: Check Go toolchain
-        run: go version
+      # The project's fail-closed macOS sandbox deliberately refuses to read
+      # executables living under the user's HOME. setup-node/setup-go place
+      # their binaries under /Users/runner/hostedtoolcache and cannot be used
+      # for this job without weakening isolation. Install narrowly via brew.
+      - name: Install native Node and Go outside HOME
+        run: |
+          brew install node@22 go@1.25
+          echo "$(brew --prefix node@22)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix go@1.25)/bin" >> "$GITHUB_PATH"
+      - name: Verify native toolchains and paths
+        run: |
+          node --version
+          npm --version
+          go version
+          command -v node
+          command -v npx
+          command -v go
+          case "$(command -v node):$(command -v go):$(command -v npx)" in *"$HOME"*) echo "toolchain unexpectedly under HOME"; exit 1;; esac
       - name: Install pinned dependencies
         run: npm ci
       - name: Full project test suite
