@@ -21,6 +21,8 @@ export interface LanguageAdapter {
   workerAgentId?: 'codingWorkerGo' | 'codingWorkerJs';
   /** Human-readable convention reference, loaded as task context by the Lead. */
   conventionPath: string;
+  /** Concise worker-facing rules (also versioned and fingerprinted in task context). */
+  conventions: readonly string[];
   /** Execution ceiling; verifier argv is still validated by the runtime. */
   policy: LanguageDelegationPolicy;
 }
@@ -29,16 +31,19 @@ export const LANGUAGE_ADAPTERS = {
   go: {
     id: 'go', extensions: ['.go'], enabled: true, workerAgentId: 'codingWorkerGo',
     conventionPath: 'docs/engineering/languages/go.md',
+    conventions: ['Preserve approved HLD/LLD and acceptance invariants.', 'Follow package boundaries and explicit error handling; propagate context cancellation.', 'Use idiomatic Go naming; run gofmt and approved targeted go test verifier.'],
     policy: { maxAllowedFiles: 1, allowedExtensions: ['.go'], allowedVerificationBinaries: ['go', 'gofmt'], maxAttempts: 3 },
   },
   js: {
     id: 'js', extensions: ['.js', '.mjs', '.cjs'], enabled: true, workerAgentId: 'codingWorkerJs',
     conventionPath: 'docs/engineering/languages/javascript.md',
+    conventions: ['Preserve approved HLD/LLD and acceptance invariants.', 'Respect module format (CommonJS/ESM), async error handling and module boundaries.', 'Do not add dependencies; run approved offline, scoped Jest verifier.'],
     policy: { maxAllowedFiles: 1, allowedExtensions: ['.js', '.mjs', '.cjs'], allowedVerificationBinaries: ['npx'], maxAttempts: 3 },
   },
   ts: {
     id: 'ts', extensions: ['.ts', '.mts', '.cts'], enabled: false,
     conventionPath: 'docs/engineering/languages/typescript.md',
+    conventions: ['Preserve approved HLD/LLD and acceptance invariants.', 'Preserve tsconfig, strict typing and ESM conventions; validate untrusted data at runtime.', 'Do not add dependencies; TypeScript delegation is disabled until its verifier is approved.'],
     policy: { maxAllowedFiles: 1, allowedExtensions: ['.ts', '.mts', '.cts'], allowedVerificationBinaries: [], maxAttempts: 3 },
   },
 } as const satisfies Record<string, LanguageAdapter>;
