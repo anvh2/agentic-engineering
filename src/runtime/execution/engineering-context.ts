@@ -13,24 +13,6 @@ export interface ApprovedDesign {
   adr?: string[];
 }
 
-const CONVENTIONS = {
-  go: [
-    'Preserve the approved HLD/LLD and acceptance invariants.',
-    'Follow package boundaries and explicit error handling; propagate context cancellation.',
-    'Use idiomatic Go naming; run gofmt and the approved targeted go test verifier.',
-  ],
-  js: [
-    'Preserve the approved HLD/LLD and acceptance invariants.',
-    'Respect module format (CommonJS/ESM), async error handling and module boundaries.',
-    'Do not add dependencies; run the approved offline, scoped Jest verifier.',
-  ],
-  ts: [
-    'Preserve the approved HLD/LLD and acceptance invariants.',
-    'Preserve tsconfig, strict typing and ESM conventions; validate untrusted data at runtime.',
-    'Do not add dependencies; TypeScript delegation is disabled until its verifier is approved.',
-  ],
-} as const;
-
 export interface EngineeringContext {
   language: keyof typeof LANGUAGE_ADAPTERS;
   manifestHash: string;
@@ -48,7 +30,7 @@ export function buildEngineeringContext(files: string[], design?: ApprovedDesign
     'Shared engineering rules: HLD and LLD govern implementation; language style never overrides approved invariants.',
     'Only the runtime verifier and independent reviewer may approve a change. Do not edit tests, Oracle, protected files or task scope.',
     `Implementation language: ${language}. Convention reference: ${adapter.conventionPath}.`,
-    `Language conventions:\n${CONVENTIONS[language].map((line) => `- ${line}`).join('\n')}`,
+    `Language conventions:\n${adapter.conventions.map((line) => `- ${line}`).join('\n')}`,
   ];
   if (design) {
     sections.push(`Approved design reference: ${design.approvalRef}`);
