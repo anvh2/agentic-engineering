@@ -97,8 +97,11 @@ const claimsOf = (store: SchedulerStore) => Object.fromEntries(store.listTasks({
 
 describe('M8.6 repeatability and idempotency', () => {
   it('three runs on three fresh disposable repositories give the same result, the same trees and independent evidence', { timeout: 600_000 }, async () => {
-    const runs: { outDir: string; report: Report }[] = [];
-    for (let i = 0; i < 3; i += 1) runs.push(await run('good'));
+    // Each invocation owns its disposable repo, server, port, DB and oracle.
+    // Keep all three E2E runs, but overlap independent executions.
+    const runs: { outDir: string; report: Report }[] = await Promise.all(
+      Array.from({ length: 3 }, () => run('good')),
+    );
     const signature = (r: Report) => ({
       phase: r.lifecycle.phase,
       reason: r.lifecycle.reason,
@@ -320,11 +323,13 @@ describe('M8.6 oracle read isolation', () => {
     const probe = (isolated: boolean) => (outDir: string) => ({ FAKE_ORACLE_FILE: join(isolated ? `${sandboxPath(outDir)}.oracle` : join(sandboxPath(outDir), 'oracle'), 'acceptance_test.go') });
     // Before M8.7B the verifier let this code read the oracle when the harness did not deny it (the probe panicked and the task could not pass).
     // The control that the probe CAN read is now the sandbox-level test with an explicit readAllow (sandbox.test.ts); here both runs must be clean.
-    const open = await run('read-oracle', { isolation: false, env: probe(false) });
+    const [open, isolated] = await Promise.all([
+      run('read-oracle', { isolation: false, env: probe(false) }),
+      run('read-oracle', { env: probe(true) }),
+    ]);
     assert.equal(open.report.isolation.enabled, false);
     assert.equal(task(open.report, TASK_A).state, 'DONE', 'even with no harness deny list, the allow-list verifier does not let the code read the oracle');
 
-    const isolated = await run('read-oracle', { env: probe(true) });
     assert.equal(isolated.report.lifecycle.phase, 'ACCEPTED', JSON.stringify(isolated.report.lifecycle));
     assert.equal(task(isolated.report, TASK_A).state, 'DONE', 'the same code finds nothing, so the verifier, the review and the acceptance all pass');
     assertBoundedAndClean(isolated.report, 'isolated probe');
