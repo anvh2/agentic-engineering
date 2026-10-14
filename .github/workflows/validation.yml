@@ -43,6 +43,13 @@ jobs:
         with:
           node-version: "22.23.2"
           cache: npm
+      - name: Install Go toolchain for verifier and sandbox tests
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.2"
+          cache: false
+      - name: Check Go toolchain
+        run: go version
       - name: Install pinned dependencies
         run: npm ci
       - name: Full project test suite
