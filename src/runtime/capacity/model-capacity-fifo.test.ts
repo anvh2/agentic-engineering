@@ -107,6 +107,35 @@ describe('FIFO admission (in one process, separate connections)', () => {
     await Promise.all(waiters);
   });
 
+  it('with 2 permits, releasing just one allows the next queued ticket without waiting for the other holder', async () => {
+    const path = dbPath();
+    const cap = new ModelCapacity(path, { permits: 2, pollMs: 5 });
+    const first = cap.tryAcquire('initial-1')!;
+    const second = cap.tryAcquire('initial-2')!;
+    const a = new ModelCapacity(path, { pollMs: 5 }).acquire('a');
+    const b = new ModelCapacity(path, { pollMs: 5 }).acquire('b');
+    const c = new ModelCapacity(path, { pollMs: 5 }).acquire('c');
+    await until(() => cap.queue().length === 3, 'a, b, c queued');
+    assert.deepEqual(cap.queue().map((w) => w.holder), ['a', 'b', 'c']);
+
+    first.release();
+    const leaseA = await a;
+    assert.deepEqual(cap.holders().map((h) => h.holder).sort(), ['a', 'initial-2']);
+    assert.deepEqual(cap.queue().map((w) => w.holder), ['b', 'c']);
+    // One earlier permit is still occupied. Releasing a (not initial-2)
+    // must allow b to proceed immediately; there is no group barrier.
+    leaseA.release();
+    const leaseB = await b;
+    assert.deepEqual(cap.holders().map((h) => h.holder).sort(), ['b', 'initial-2']);
+    assert.deepEqual(cap.queue().map((w) => w.holder), ['c']);
+    second.release();
+    const leaseC = await c;
+    leaseB.release();
+    leaseC.release();
+    assert.equal(cap.holders().length, 0);
+    assert.equal(cap.queue().length, 0);
+  });
+
   it('capacity never exceeds the limit under churn: 12 acquirers, 3 permits', async () => {
     const path = dbPath();
     const caps = Array.from({ length: 12 }, () => new ModelCapacity(path, { permits: 3, pollMs: 2 }));
@@ -298,12 +327,13 @@ describe('FIFO across processes', () => {
       for (const h of holds) h.release();
       await Promise.all(children.map((c) => c.exited));
       const acquired = children.map((c) => at(c, 'acquired'));
-      // groups of `permits` are admitted together; every group is admitted no earlier than the one before it
-      for (let g = 0; g + permits < 6; g += permits) {
-        const here = acquired.slice(g, g + permits);
-        const next = acquired.slice(g + permits, g + 2 * permits);
-        assert.ok(Math.max(...here) <= Math.min(...next), `group ${g / permits} (${here.join(',')}) admitted before group ${g / permits + 1} (${next.join(',')})`);
-      }
+      // With multiple permits, admissions are NOT serialized into rigid groups:
+      // as soon as the first holder releases, a later ticket may acquire while
+      // an earlier holder still runs. Child stdout timestamps are also not an
+      // atomic record of SQLite admission order. Strict FIFO is proven by the
+      // ticket-order and deterministic in-process tests above; here we validate
+      // cross-process capacity and successful completion, not group barriers.
+      assert.equal(acquired.length, 6);
       // and never more than `permits` inside at once
       // (child timestamps lie inside the true holds, so a peak above `permits` here would be real over-allocation)
       const points = children.flatMap((c) => [[at(c, 'acquired'), 1], [at(c, 'released'), -1]] as const).sort((x, y) => x[0] - y[0] || x[1] - y[1]);

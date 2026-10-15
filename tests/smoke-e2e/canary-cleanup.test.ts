@@ -142,19 +142,35 @@ describe('canary cleanup', () => {
   it('removes owned directories on process exit and on SIGTERM', { timeout: 60_000 }, async () => {
     const parent = scratch();
     try {
-      const lib = join(import.meta.dirname, 'canary-fs.ts');
+      const lib = join(import.meta.dirname, '..', 'provider-smoke', 'canary-fs.ts');
+      assert.ok(existsSync(lib), `the module under test exists at ${lib}`);
       for (const how of ['exit', 'sigterm']) {
         const script = `import { createOwnedDir } from ${JSON.stringify(lib)}; const d = createOwnedDir(${JSON.stringify(parent)}, '.agentic-canary-${how}-'); console.log(d); ${how === 'exit' ? '' : 'setInterval(() => {}, 1000);'}`;
-        const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', '--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'inherit'] });
-        const dir = await new Promise<string>((resolve) => child.stdout.once('data', (b) => resolve(String(b).trim())));
-        assert.ok(existsSync(dir), 'created');
-        if (how === 'sigterm') child.kill('SIGTERM');
-        await new Promise((r) => child.once('exit', r));
-        assert.equal(existsSync(dir), false, `${how}: removed`);
+        const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', '--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
+        try {
+          const dir = (await firstStdoutLine(child)).trim();
+          assert.ok(existsSync(dir), `${how}: created`);
+          if (how === 'sigterm') child.kill('SIGTERM');
+          await exited(child);
+          assert.equal(existsSync(dir), false, `${how}: removed`);
+        } finally {
+          // never leak the long-lived child if an assertion above failed
+          if (child.exitCode === null && child.signalCode === null) {
+            child.kill('SIGKILL');
+            await exited(child);
+          }
+        }
       }
     } finally {
       rmSync(parent, { recursive: true, force: true });
     }
+  });
+
+  it('a child that fails to start or exits before producing output fails fast instead of hanging', { timeout: 20_000 }, async () => {
+    const dead = spawn(process.execPath, ['-e', 'console.error("boom"); process.exit(3)'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    await assert.rejects(firstStdoutLine(dead), /exited before producing output \(code 3.*boom/);
+    const missing = spawn(join(tmpdir(), 'no-such-binary-for-canary-test'), [], { stdio: ['ignore', 'pipe', 'pipe'] });
+    await assert.rejects(firstStdoutLine(missing), /failed to start|exited before producing output/);
   });
 
   it('detects a byte-identical copy of the Codex login without exposing it, and ignores synthetic and symlinked files', () => {
@@ -191,6 +207,23 @@ describe('canary cleanup', () => {
 });
 
 import { readdirSync } from 'node:fs';
+import type { ChildProcess } from 'node:child_process';
+
+/** Resolves with the child's first stdout chunk; rejects (with its exit status and stderr) if it fails to start or exits first, so a broken child fails the test instead of hanging it. */
+function firstStdoutLine(child: ChildProcess): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let stderr = '';
+    child.stderr?.on('data', (b) => { stderr += String(b); });
+    child.once('error', (err) => reject(new Error(`child failed to start: ${err.message}`)));
+    child.once('close', (code, signal) => reject(new Error(`child exited before producing output (code ${code}, signal ${signal}): ${stderr.trim().slice(-600)}`)));
+    child.stdout?.once('data', (b) => resolve(String(b)));
+  });
+}
+
+function exited(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return new Promise((resolve) => child.once('exit', () => resolve()));
+}
 function readdirLeftovers(dir: string): string[] {
   return readdirSync(dir).filter((n) => n.startsWith('.agentic-canary-') || n.startsWith('.agentic-vcanary-'));
 }

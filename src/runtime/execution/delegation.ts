@@ -14,6 +14,8 @@ import {
 } from './coding-task-runner.ts';
 import { persistRun } from './coding-task-artifacts.ts';
 import { createTraceSink, redact, type TraceSink } from './coding-task-trace.ts';
+import { denyAllApprovals, type ApprovalVerifier } from './design-approval.ts';
+import { LANGUAGE_ADAPTERS, delegatableLanguage } from './language-adapters.ts';
 
 /**
  * Engineering Lead -> local coding worker delegation.
@@ -59,48 +61,45 @@ export interface DelegationPolicy {
   maxAttempts: number;
 }
 
-export const DEFAULT_POLICY: DelegationPolicy = {
-  maxAllowedFiles: 1,
-  allowedExtensions: ['.go'],
-  allowedVerificationBinaries: ['go', 'gofmt'],
-  maxAttempts: 3,
-};
+/** Frozen copy of a registry policy: the ceiling cannot be widened by mutating an exported policy object. */
+const frozenPolicy = (p: DelegationPolicy): DelegationPolicy =>
+  Object.freeze({ ...p, allowedExtensions: Object.freeze([...p.allowedExtensions]) as string[], allowedVerificationBinaries: Object.freeze([...p.allowedVerificationBinaries]) as string[] });
 
+export const DEFAULT_POLICY: DelegationPolicy = frozenPolicy(LANGUAGE_ADAPTERS.go.policy);
 export const TEST_FILE = /(_test\.go$|\.test\.[cm]?[jt]sx?$|\.spec\.[cm]?[jt]sx?$|(^|\/)(tests?|__tests__)\/)/;
-
 export type Language = 'go' | 'js';
 
-/**
- * Policy for JavaScript tasks (plain .js/.mjs/.cjs only). TypeScript is deliberately NOT enabled: it needs its own
- * type-check verifier allow-list and benchmark evidence first. The binary allow-list is just `npx`; the exact argv shape
- * is enforced by validateJsVerification, because `npx <anything>` would otherwise be arbitrary code execution.
- */
-export const JS_POLICY: DelegationPolicy = {
-  maxAllowedFiles: 1,
-  allowedExtensions: ['.js', '.mjs', '.cjs'],
-  allowedVerificationBinaries: ['npx'],
-  maxAttempts: 3,
-};
+/** JS keeps the same bounded Jest policy; TypeScript remains disabled until it has a verified adapter. */
+export const JS_POLICY: DelegationPolicy = frozenPolicy(LANGUAGE_ADAPTERS.js.policy);
 
-/** The one language all allowed files belong to, or undefined for mixed / unsupported files. */
 export function languageOf(files: string[]): Language | undefined {
-  const languages = new Set(
-    files.map((f) => (DEFAULT_POLICY.allowedExtensions.includes(extname(f)) ? 'go' : JS_POLICY.allowedExtensions.includes(extname(f)) ? 'js' : 'other')),
-  );
-  if (languages.size === 1) {
-    const [only] = [...languages];
-    if (only === 'go' || only === 'js') return only;
-  }
-  return undefined;
+  return delegatableLanguage(files.map((file) => extname(file)));
 }
 
 export function policyFor(language: Language | undefined): DelegationPolicy {
   return language === 'js' ? JS_POLICY : DEFAULT_POLICY;
 }
 
-/** Name of the registered Mastra agent that does the editing for a language. */
+/**
+ * The permissions a run may actually use: the registry ceiling for the detected language, narrowed (never widened) by a
+ * caller-supplied policy. A copied, hand-built or permissive policy therefore cannot add an extension, a verifier binary,
+ * more files or more attempts than the language adapter allows, and it cannot change which argv validator runs - that follows
+ * the language, never the identity of the policy object.
+ */
+export function effectivePolicy(language: Language | undefined, requested?: DelegationPolicy): DelegationPolicy {
+  const ceiling = policyFor(language);
+  if (!requested) return ceiling;
+  const within = (values: readonly string[], allowed: readonly string[]) => values.filter((v) => allowed.includes(v));
+  return Object.freeze({
+    maxAllowedFiles: Math.min(ceiling.maxAllowedFiles, requested.maxAllowedFiles),
+    maxAttempts: Math.min(ceiling.maxAttempts, requested.maxAttempts),
+    allowedExtensions: within(requested.allowedExtensions, ceiling.allowedExtensions),
+    allowedVerificationBinaries: within(requested.allowedVerificationBinaries, ceiling.allowedVerificationBinaries),
+  });
+}
+
 export function workerAgentIdFor(language: Language | undefined): 'codingWorkerGo' | 'codingWorkerJs' {
-  return language === 'js' ? 'codingWorkerJs' : 'codingWorkerGo';
+  return language === 'js' ? LANGUAGE_ADAPTERS.js.workerAgentId : LANGUAGE_ADAPTERS.go.workerAgentId;
 }
 
 const JS_VERIFY_FLAGS = new Set(['--runInBand', '--ci']);
@@ -146,6 +145,7 @@ export async function routeTask(
   request: DelegationRequest,
   repoRoot: string,
   explicitPolicy?: DelegationPolicy,
+  options: { approvals?: ApprovalVerifier } = {},
 ): Promise<Route> {
   const parsed = delegationRequestSchema.safeParse(request);
   if (!parsed.success) {
@@ -154,8 +154,11 @@ export async function routeTask(
   const { contract, assessment } = parsed.data;
   const reasons: string[] = [];
   const language = languageOf(contract.allowedFiles);
-  const policy = explicitPolicy ?? policyFor(language);
-  if (!explicitPolicy && contract.allowedFiles.length > 0 && !language) {
+  // An injected policy may reduce permissions for a test or trusted caller, but is intersected with the
+  // language's registry ceiling: it can never enable an unbenchmarked language, widen a verifier allow-list or
+  // select a weaker argv validator.
+  const policy = effectivePolicy(language, explicitPolicy);
+  if (contract.allowedFiles.length > 0 && !language) {
     reasons.push('allowed files must all be .go, or all be .js/.mjs/.cjs (mixed or other file types are not delegated)');
   }
 
@@ -165,6 +168,11 @@ export async function routeTask(
 
   if (contract.allowedFiles.length > policy.maxAllowedFiles) {
     reasons.push(`${contract.allowedFiles.length} allowed files exceeds the limit of ${policy.maxAllowedFiles}`);
+  }
+  // An attached design must verify against the runtime's approval records (default: deny); an arbitrary approvalRef never routes to a worker.
+  if (contract.approvedDesign) {
+    const verdict = (options.approvals ?? denyAllApprovals)({ approvalRef: contract.approvedDesign.approvalRef, design: contract.approvedDesign, taskId: contract.taskId, allowedFiles: contract.allowedFiles });
+    if (!verdict.ok) reasons.push(`approved design rejected (${verdict.code}): ${verdict.reason}`);
   }
   if (contract.acceptanceCriteria.length === 0) reasons.push('no acceptance criteria');
   if (contract.constraints.length === 0) reasons.push('no constraints');
@@ -187,7 +195,7 @@ export async function routeTask(
   }
   for (const command of contract.verificationCommands) {
     if (!policy.allowedVerificationBinaries.includes(command[0])) reasons.push(`verification binary "${command[0]}" is not allow-listed`);
-    else if (policy === JS_POLICY) reasons.push(...(await validateJsVerification(command, contract, repoRoot)));
+    else if (language === 'js') reasons.push(...(await validateJsVerification(command, contract, repoRoot)));
   }
 
   // Model-written code is only ever executed inside the OS sandbox; without it nothing is delegated (fail closed).
@@ -274,6 +282,8 @@ export interface DelegateOptions {
   trace?: TraceSink;
   modelLabel?: string;
   runOptions?: Pick<RunCodingTaskOptions, 'modelTimeoutMs' | 'runtimeRetryDelayMs' | 'signal' | 'runId'>;
+  /** Verifies an attached approvedDesign (default: deny all, i.e. fail closed). Used by routing and again by the runner. */
+  approvals?: ApprovalVerifier;
 }
 
 /**
@@ -282,9 +292,10 @@ export interface DelegateOptions {
  * callers route first (routeTask). Used by delegateCodingTask and by the Mastra coding-task-workflow.
  */
 export async function executeDelegation(requestInput: DelegationRequest, options: DelegateOptions): Promise<EngineeringResult> {
-  const policy = options.policy ?? DEFAULT_POLICY; // only maxAttempts is read here; both language policies share it
   const { repoRoot } = options;
   const request = delegationRequestSchema.parse(requestInput);
+  // Only maxAttempts is read here, but it is clamped to the language ceiling like every other permission.
+  const policy = effectivePolicy(languageOf(request.contract.allowedFiles), options.policy);
   const taskId = request.contract.taskId;
   const trace =
     options.trace ??
@@ -295,6 +306,7 @@ export async function executeDelegation(requestInput: DelegationRequest, options
     worker: options.worker,
     modelLabel: options.modelLabel,
     maxAttempts: policy.maxAttempts,
+    approvals: options.approvals,
     trace,
     ...options.runOptions,
   });
@@ -330,7 +342,7 @@ export async function executeDelegation(requestInput: DelegationRequest, options
     if (escalation) await writeFile(join(options.artifactDir, 'escalation.json'), redact(JSON.stringify(escalation, null, 2)));
     await writeFile(
       join(options.artifactDir, 'result.json'),
-      redact(JSON.stringify({ taskId, status, reasons, restored, attempts: run.attempts, runtimeRetries: run.runtimeRetries, failureCategory: run.failureCategory, assessment: request.assessment }, null, 2)),
+      redact(JSON.stringify({ taskId, status, reasons, restored, attempts: run.attempts, runtimeRetries: run.runtimeRetries, failureCategory: run.failureCategory, assessment: request.assessment, ...(run.engineeringContext ? { engineeringContextFingerprint: run.engineeringContext.fingerprint, designApproval: run.engineeringContext.approval.status } : {}) }, null, 2)),
     );
   }
   return result;
@@ -338,7 +350,7 @@ export async function executeDelegation(requestInput: DelegationRequest, options
 
 export async function delegateCodingTask(requestInput: DelegationRequest, options: DelegateOptions): Promise<EngineeringResult> {
   const taskId = (requestInput as { contract?: { taskId?: string } })?.contract?.taskId ?? 'unknown';
-  const route = await routeTask(requestInput, options.repoRoot, options.policy);
+  const route = await routeTask(requestInput, options.repoRoot, options.policy, { approvals: options.approvals });
   if (route.route === 'claude') {
     return { taskId, status: 'KEPT_BY_CLAUDE', reasons: route.reasons, diff: '', restored: false };
   }
