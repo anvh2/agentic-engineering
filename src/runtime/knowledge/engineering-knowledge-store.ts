@@ -47,7 +47,7 @@ export class DurableEngineeringKnowledge implements SessionObservationStore {
   async promote(input: CandidateLesson, authority: PromotionAuthority): Promise<void> {
     if (input.status !== 'candidate' || !input.evidenceHashes.length) throw new Error('knowledge: invalid promotion');
     const entry: KnowledgeEntry = {
-      id: input.id, revision: sha(input.evidenceHashes.join(':')).slice(0,16),
+      id: input.id, revision: 'v'+sha(input.evidenceHashes.join(':')).slice(0,16),
       kind:'lesson',language:'common',body:input.proposedBody,source:`project:${input.projectId};evidence:${input.evidenceHashes.join(',')}`,approved:true,
     };
     // Reuse exactly the same validation as worker-bound manifest resolution.
