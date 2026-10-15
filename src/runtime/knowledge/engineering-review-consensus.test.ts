@@ -17,3 +17,13 @@ test('refuses unsafe paths and self-verification of a sole reviewer',()=>{
  const f=consolidateReviewFindings([{reviewerId:'x',role:'code',path:'src/a.go',evidence:'bug',severity:'HIGH',description:'bug'}]);
  assert.equal(decideReview(f,[{key:f[0]!.key,verifierId:'x',verdict:'refuted',evidence:'no'}]).canApprove,false);
 });
+
+test('a member of a multi-reviewer finding cannot self-refute',()=>{
+ const findings=consolidateReviewFindings([
+  {reviewerId:'a',role:'security',path:'src/auth.go',evidence:'bypass',severity:'HIGH',description:'risk'},
+  {reviewerId:'b',role:'code',path:'src/auth.go',evidence:'bypass',severity:'CRITICAL',description:'risk'},
+ ]);
+ const attempt=decideReview(findings,[{key:findings[0]!.key,verifierId:'b',verdict:'refuted',evidence:'I disagree'}]);
+ assert.equal(attempt.canApprove,false);
+ assert.equal(attempt.unresolved.length,1);
+});
