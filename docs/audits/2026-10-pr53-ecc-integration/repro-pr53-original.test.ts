@@ -1,8 +1,13 @@
 /**
- * Reproductions of defects found in the ORIGINAL PR #53 head (103aa914). Each test asserts the INSECURE behaviour that
- * existed, so it passes on 103aa914 and is expected to FAIL once the defect is fixed. Kept only as audit evidence; it is not
- * part of `npm test` (the glob does not include docs/). Run: node --test docs/engineering/audit/repro-pr53-original.test.ts
- * against a checkout of 103aa914.
+ * ARCHIVAL EVIDENCE for PR #53 head 103aa914. Each test asserts the INSECURE behaviour that existed there, so it passes only
+ * when run against a checkout of 103aa914:
+ *
+ *   git worktree add /tmp/pr53-original 103aa914 && node --test docs/audits/2026-10-pr53-ecc-integration/repro-pr53-original.test.ts
+ *
+ * It cannot run on the current tree: the vulnerable APIs it calls (for example the caller-asserted `decideReview` verifier list
+ * and `proposeLesson`) were replaced by the fixes, so it does not even load. It is not part of `npm test` (the glob excludes
+ * docs/). The same attack inputs are exercised against the CURRENT modules, and refused, by `tests/bench/engineering-pack.ts`
+ * (attacks A01-A20, asserted by `tests/bench/engineering-pack.test.ts`) and by the tests named in the findings register.
  */
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
