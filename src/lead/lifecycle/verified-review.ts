@@ -4,6 +4,9 @@ import { dirname, join } from 'node:path';
 import { redact } from '../../runtime/execution/coding-task-trace.ts';
 import { scrubForWorker } from '../../runtime/execution/worker-feedback.ts';
 import type { CommandRunner } from '../../runtime/integration/integrate.ts';
+import { ENGINEERING_CONTEXT_ARTIFACT } from '../../runtime/execution/coding-task-artifacts.ts';
+import { denyAllApprovals, type ApprovalVerifier, type VerifiedApproval } from '../../runtime/execution/design-approval.ts';
+import { expectedEngineeringContext, verifyEngineeringContext } from '../../runtime/execution/engineering-context.ts';
 import { capacityFindings, resolveCapacity, type ResolvedCapacity } from '../../runtime/execution/delegation-capacity.ts';
 import { EvidenceError, addedLineSecurityFindings, parseNumstatZ, readGitEvidence } from '../../runtime/review/change-review.ts';
 import type { SchedulerStore } from '../../runtime/scheduler/store.ts';
@@ -86,6 +89,8 @@ export interface VerifiedReviewDeps {
   run: CommandRunner;
   /** Warn-level findings the reviewer accepts without a correction. Default: whitespace_reindent. */
   acknowledgeWarnings?: readonly string[];
+  /** Re-verifies an attached approvedDesign against the runtime's approval records (default: deny all, so such a task escalates). */
+  approvals?: ApprovalVerifier;
 }
 
 const REPAIRABLE_WARNINGS = new Set(['comment_removed', 'too_large']);
@@ -93,6 +98,33 @@ const MAX_FEEDBACK_CHARS = 2000;
 
 /** Text that becomes the correction task's prompt: redacted, control-stripped and scrubbed of host identity (worker-feedback.ts). */
 const clean = (text: string): string => scrubForWorker(text);
+
+async function declaredContextFingerprint(dir: string): Promise<string | undefined> {
+  try {
+    const result = JSON.parse(await readFile(join(dir, 'result.json'), 'utf8')) as { engineeringContextFingerprint?: unknown };
+    return typeof result.engineeringContextFingerprint === 'string' ? result.engineeringContextFingerprint : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** [ok, class, detail] for the recorded snapshot: it must verify against its own text, match result.json, and be what every attempt consumed. */
+function contextIntegrity(raw: string, declared: string | undefined, expected: string | undefined): [boolean, ReviewCheck['class'], string] {
+  let snapshot: { fingerprint?: string; manifestHash?: string; text?: string; attemptFingerprints?: { attempt: number; fingerprint: string | null }[] };
+  try {
+    snapshot = JSON.parse(raw);
+  } catch {
+    return [false, 'evidence', `${ENGINEERING_CONTEXT_ARTIFACT} is not valid JSON`];
+  }
+  const verified = verifyEngineeringContext({ fingerprint: String(snapshot.fingerprint), manifestHash: String(snapshot.manifestHash), text: String(snapshot.text) });
+  if (!verified.ok) return [false, 'evidence', verified.reason];
+  if (declared !== snapshot.fingerprint) return [false, 'evidence', `result.json declares ${String(declared)} but the snapshot is ${snapshot.fingerprint}`];
+  if (expected === undefined) return [false, 'evidence', 'the worker recorded an engineering context but the task contract has none to compare it with'];
+  if (expected !== snapshot.fingerprint) return [false, 'evidence', `the worker consumed context ${snapshot.fingerprint}, not the one the task contract pins (${expected})`];
+  const stray = (snapshot.attemptFingerprints ?? []).filter((a) => a.fingerprint !== snapshot.fingerprint);
+  if (stray.length > 0) return [false, 'evidence', `attempt(s) ${stray.map((a) => a.attempt).join(', ')} did not consume the pinned context`];
+  return [true, 'info', `engineering context ${snapshot.fingerprint} matches the task contract and was consumed by ${(snapshot.attemptFingerprints ?? []).length} attempt(s)`];
+}
 
 export async function verifyReview(deps: VerifiedReviewDeps, taskId: string): Promise<ReviewVerdict> {
   const { store, worktrees } = deps;
@@ -155,12 +187,22 @@ export async function verifyReview(deps: VerifiedReviewDeps, taskId: string): Pr
   const runIdOk = Boolean(evidence.runId) && task.runIds.includes(evidence.runId!);
   add('run_identity', runIdOk, 'evidence', runIdOk ? `workflow run ${evidence.runId} is recorded on the task` : `the review names run ${String(evidence.runId)}, which is not among the task's recorded runs (${task.runIds.join(', ') || 'none'})`);
 
+  // The reviewer verifies the design approval itself, independently of whatever the worker run recorded. A design that was
+  // revoked, superseded, altered or never approved since the run is evidence the review cannot rest on.
+  const designContract = task.spec.request?.contract;
+  let verifiedApproval: VerifiedApproval | undefined;
+  if (designContract?.approvedDesign) {
+    const verdict = (deps.approvals ?? denyAllApprovals)({ approvalRef: designContract.approvedDesign.approvalRef, design: designContract.approvedDesign, taskId: designContract.taskId, allowedFiles: designContract.allowedFiles });
+    if (verdict.ok) verifiedApproval = verdict.approval;
+    add('design_approval', verdict.ok, 'evidence', verdict.ok ? `design approval ${verdict.approval.approvalId} (revision ${verdict.approval.revision}) verified: approved by ${verdict.approval.role} ${verdict.approval.approverId} under grant ${verdict.approval.grantId}` : `the attached design is not verifiably approved (${verdict.code}): ${verdict.reason}`);
+  }
+
   if (evidence.artifactDir) {
     const dir = evidence.artifactDir;
     if (!existsSync(dir)) {
       add('worker_artifacts', false, 'evidence', `artifact directory ${dir} is recorded but missing`);
     } else {
-      for (const name of ['contract.json', 'attempts.json', 'result.json', 'final.diff']) {
+      for (const name of ['contract.json', 'attempts.json', 'result.json', 'final.diff', ENGINEERING_CONTEXT_ARTIFACT]) {
         const buf = await readFile(join(dir, name)).catch(() => undefined);
         if (buf) evidence.artifactHashes[name] = sha256(buf);
       }
@@ -174,6 +216,18 @@ export async function verifyReview(deps: VerifiedReviewDeps, taskId: string): Pr
         }
       }
       add('worker_artifacts', contradicts === '', 'evidence', contradicts || `${Object.keys(evidence.artifactHashes).length} artifact file(s) hashed in ${dir}`);
+
+      // The pinned engineering context the worker consumed: self-consistent, and the same one result.json and every attempt name.
+      // The expected fingerprint is recomputed from the task contract the scheduler persisted, never from the worker's own artifacts.
+      const expected = expectedEngineeringContext(task.spec.request?.contract, verifiedApproval);
+      const declared = await declaredContextFingerprint(dir);
+      const snapshotRaw = await readFile(join(dir, ENGINEERING_CONTEXT_ARTIFACT), 'utf8').catch(() => undefined);
+      if (snapshotRaw === undefined) {
+        const required = declared !== undefined || Boolean(task.spec.request?.contract.approvedDesign);
+        add('engineering_context', !required, 'evidence', !required ? 'no engineering context was recorded for this run (legacy task with no attached design)' : `the run was given a design (result.json declares ${declared ?? 'none'}) but ${ENGINEERING_CONTEXT_ARTIFACT} is missing`);
+      } else {
+        add('engineering_context', ...contextIntegrity(snapshotRaw, declared, expected?.fingerprint));
+      }
     }
   } else {
     add('worker_artifacts', true, 'info', 'no artifact directory recorded for this run (the review request and the audit trail are the provenance)');

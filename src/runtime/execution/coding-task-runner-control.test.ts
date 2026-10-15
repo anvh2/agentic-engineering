@@ -194,7 +194,7 @@ describe('trace + artifact persistence', () => {
       });
       await persistRun(dir, { level: 'L1', verdict: result.verdict }, fx.task, result);
       const files = (await rd(dir)).sort();
-      assert.deepEqual(files, ['attempts.json', 'contract.json', 'final.diff', 'summary.json', 'trace.jsonl']);
+      assert.deepEqual(files, ['attempts.json', 'contract.json', 'engineering-context.json', 'final.diff', 'summary.json', 'trace.jsonl']);
       for (const f of files) assert.ok(!(await rf(join(dir, f), 'utf8')).includes('leak-me-please-12345'), `${f} leaked a secret`);
       const lines = (await rf(join(dir, 'trace.jsonl'), 'utf8')).trim().split('\n').map((l) => JSON.parse(l));
       assert.equal(lines[0].type, 'task_started');

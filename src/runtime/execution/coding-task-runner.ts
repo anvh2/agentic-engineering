@@ -9,7 +9,8 @@ import { z } from 'zod';
 import { REPOSITORY_ROOT_CONTEXT_KEY } from '../../workers/tools/repository-tools.ts';
 import { runSandboxedCommand, sandboxStatus } from '../sandbox/sandbox.ts';
 import { scrubForWorker } from './worker-feedback.ts';
-import { buildEngineeringContext } from './engineering-context.ts';
+import { denyAllApprovals, type ApprovalVerifier } from './design-approval.ts';
+import { buildEngineeringContext, type EngineeringContext } from './engineering-context.ts';
 import { detectLanguage } from './language-adapters.ts';
 import { CapacityWaitTimeout, capacityFor, modelWaitBudgetMs, permitHolder, type CapacityLease, type ModelCapacity } from '../capacity/model-capacity.ts';
 import { createRepairLoopTracker } from './repair-loop-tracker.ts';
@@ -96,6 +97,8 @@ export interface AttemptRecord {
   capacityWaitMs: number;
   /** Set only when the runtime retry was exhausted; the attempt did not count as a coding attempt. */
   runtimeError?: string;
+  /** Fingerprint of the pinned engineering context contained verbatim in this attempt's prompt (absent when none applied). */
+  engineeringContextFingerprint?: string;
   /** First chars of the model's final visible text - diagnostic only, never evidence. */
   workerText?: string;
   modelStats?: { inputTokens?: number; outputTokens?: number };
@@ -128,6 +131,8 @@ export interface CodingTaskResult {
   verifiedStateHash: string | null;
   durationMs: number;
   finalDiff: string;
+  /** The immutable context snapshot pinned for this run and put in every coding attempt's prompt (absent when no registered language applied). */
+  engineeringContext?: EngineeringContext;
   records: AttemptRecord[];
   events: TraceEvent[];
 }
@@ -153,6 +158,11 @@ export interface WorkerLike {
 export interface RunCodingTaskOptions {
   repoRoot: string;
   worker: WorkerLike;
+  /**
+   * Verifies an attached `approvedDesign` against the runtime's durable approval records. Default: deny everything, so a
+   * task carrying a design that nothing can verify is refused rather than run on an unauthenticated `approvalRef`.
+   */
+  approvals?: ApprovalVerifier;
   /** Coding attempts (verification failures), default 3. */
   maxAttempts?: number;
   /** Per model-call wall-clock cap. */
@@ -263,14 +273,13 @@ async function buildPrompt(
   root: string,
   task: z.output<typeof codingTaskSchema>,
   previousFailure: string | undefined,
+  context: EngineeringContext | undefined,
 ): Promise<string> {
   const files = [...new Set([...task.allowedFiles, ...task.contextFiles])];
   const sections = [
     `Task ${task.taskId}: ${task.objective}`,
     `You may modify ONLY: ${task.allowedFiles.join(', ')}. Every other file (including tests) is immutable; changing one fails the task.`,
-    ...(detectLanguage(task.allowedFiles.map((file) => extname(file)))
-      ? [buildEngineeringContext(task.allowedFiles, task.approvedDesign).text]
-      : []),
+    ...(context ? [context.text] : []),
   ];
   if (task.acceptanceCriteria.length) sections.push(`Acceptance criteria:\n${task.acceptanceCriteria.map((c) => `- ${c}`).join('\n')}`);
   if (task.constraints.length) sections.push(`Constraints:\n${task.constraints.map((c) => `- ${c}`).join('\n')}`);
@@ -349,6 +358,15 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
   if (task.approvedDesign && !detectLanguage(task.allowedFiles.map((file) => extname(file)))) {
     throw new Error('approvedDesign requires one registered implementation language');
   }
+  // An attached design is only used if the runtime verifies it; anything else fails closed BEFORE a worker is invoked.
+  let verifiedApproval: Parameters<typeof buildEngineeringContext>[2];
+  if (task.approvedDesign) {
+    const verdict = (options.approvals ?? denyAllApprovals)({ approvalRef: task.approvedDesign.approvalRef, design: task.approvedDesign, taskId: task.taskId, allowedFiles: task.allowedFiles });
+    if (!verdict.ok) throw new Error(`approved_design_rejected: ${verdict.code}: ${verdict.reason}`);
+    verifiedApproval = verdict.approval;
+  }
+  // Pinned ONCE per run: every attempt (and retry) is given this exact snapshot, and its fingerprint is the evidence.
+  const engineeringContext = detectLanguage(task.allowedFiles.map((file) => extname(file))) ? buildEngineeringContext(task.allowedFiles, task.approvedDesign, verifiedApproval) : undefined;
   const maxAttempts = Math.min(options.maxAttempts ?? 3, worker.provider?.limits?.maxCodingAttempts ?? Number.POSITIVE_INFINITY);
   const maxRuntimeRetries = worker.provider?.limits?.maxRuntimeRetries ?? MAX_RUNTIME_RETRIES;
   const timeoutMs = options.modelTimeoutMs ?? 300_000;
@@ -408,6 +426,7 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
     model: modelLabel,
     maxAttempts,
     maxRuntimeRetriesPerAttempt: maxRuntimeRetries,
+    ...(engineeringContext ? { engineeringContext: { schemaVersion: engineeringContext.schemaVersion, fingerprint: engineeringContext.fingerprint, language: engineeringContext.language, approval: engineeringContext.approval } } : {}),
   });
 
   const records: AttemptRecord[] = [];
@@ -507,7 +526,13 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
         inferenceStart = Date.now();
         trace.emit('model_started', { model: modelLabel, ...(descriptor ? { provider: descriptor.identity.id, providerModel: descriptor.identity.model } : {}), attempt: attemptNo, runtimeTry, capacityWaitMs: inferenceStart - waitStart });
         const callSignal = options.signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), options.signal]) : AbortSignal.timeout(timeoutMs);
-        const call = worker.generate(await buildPrompt(repoRoot, task, previousFailure), { requestContext, onIterationComplete, abortSignal: callSignal, providerRequest: providerRequestBase });
+        const prompt = await buildPrompt(repoRoot, task, previousFailure, engineeringContext);
+        if (engineeringContext) {
+          // The evidence claims this exact text reached the worker: refuse to run an attempt whose prompt does not carry it.
+          if (!prompt.includes(engineeringContext.text)) throw new Error('engineering_context: the pinned context is missing from the worker prompt');
+          record.engineeringContextFingerprint = engineeringContext.fingerprint;
+        }
+        const call = worker.generate(prompt, { requestContext, onIterationComplete, abortSignal: callSignal, providerRequest: providerRequestBase });
         const settled = await awaitWithAbortGrace(call, callSignal, options.abortGraceMs ?? DEFAULT_ABORT_GRACE_MS);
         if ('unresponsive' in settled) {
           call.catch(() => {}); // the late rejection must not become an unhandled one
@@ -736,6 +761,7 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
     verifiedStateHash,
     durationMs: Date.now() - taskStart,
     finalDiff,
+    ...(engineeringContext ? { engineeringContext } : {}),
     records,
     events: trace.events,
   };
