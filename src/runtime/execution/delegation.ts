@@ -103,7 +103,7 @@ export function workerAgentIdFor(language: Language | undefined): 'codingWorkerG
   return language === 'js' ? LANGUAGE_ADAPTERS.js.workerAgentId : LANGUAGE_ADAPTERS.go.workerAgentId;
 }
 
-const JS_VERIFY_FLAGS = new Set(['--runInBand', '--ci']);
+export const JS_VERIFY_FLAGS = new Set(['--runInBand', '--ci']);
 
 /**
  * JS verification must be exactly `npx --no-install jest [--runInBand|--ci] <test file>...`.
