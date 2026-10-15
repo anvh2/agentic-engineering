@@ -187,6 +187,37 @@ function isProtectedPath(repoRelative: string): boolean {
   return segments.some((s) => s === '.git' || s === 'node_modules') || (segments.at(-1) ?? '').startsWith('.applypatch-');
 }
 
+/**
+ * Files that hold credentials. Tools that READ the repository refuse them, so a secret can never enter model context, a trace
+ * or a report through a tool call (audit F-13). Matching is on the basename and on directory segments, case-insensitively, and
+ * is applied to both the literal path and its symlink-resolved path. `.env.example` style templates stay readable.
+ */
+const SECRET_DIRECTORIES = new Set(['.ssh', '.aws', '.gnupg', '.kube']);
+const SECRET_BASENAMES = new Set(['.npmrc', '.netrc', '.pypirc', '.git-credentials', 'credentials', 'credentials.json', 'secrets.json', 'secrets.yaml', 'secrets.yml', 'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519']);
+const SECRET_EXTENSIONS = ['.pem', '.key', '.p12', '.pfx', '.jks', '.keystore'];
+const TEMPLATE_SUFFIXES = ['.example', '.sample', '.template', '.dist'];
+export function isSecretPath(repoRelative: string): boolean {
+  const segments = repoRelative.split(/[\\/]/).filter(Boolean).map((s) => s.toLowerCase());
+  if (segments.some((s) => SECRET_DIRECTORIES.has(s))) return true;
+  const base = segments.at(-1) ?? '';
+  if (SECRET_BASENAMES.has(base) || SECRET_EXTENSIONS.some((ext) => base.endsWith(ext))) return true;
+  return (base === '.env' || base.startsWith('.env.')) && !TEMPLATE_SUFFIXES.some((suffix) => base.endsWith(suffix));
+}
+
+async function assertReadable(root: string, target: string, displayPath: string | undefined): Promise<void> {
+  let realRoot: string;
+  let realTarget: string;
+  try {
+    realRoot = await realpathTolerant(root);
+    realTarget = await realpathTolerant(target);
+  } catch {
+    throw new Error(`Unable to resolve path "${displayPath ?? '.'}".`);
+  }
+  if (isSecretPath(relative(root, target)) || isSecretPath(relative(realRoot, realTarget))) {
+    throw new Error(`Path "${displayPath}" holds credentials and cannot be read by agent tools.`);
+  }
+}
+
 async function statOrThrow(path: string, displayPath: string) {
   try {
     return await stat(path);
@@ -267,6 +298,7 @@ export const readFile = createTool({
   execute: async ({ path }, { requestContext }) => {
     const root = getRepositoryRoot(requestContext);
     const target = await resolveWithinRepository(root, path);
+    await assertReadable(root, target, path);
     const targetStat = await statOrThrow(target, path);
 
     if (targetStat.isDirectory()) {
@@ -330,6 +362,7 @@ export const searchFiles = createTool({
     const root = getRepositoryRoot(requestContext);
     const startPath = await resolveWithinRepository(root, path);
     const startStat = await statOrThrow(startPath, path ?? '.');
+    if (!startStat.isDirectory()) await assertReadable(root, startPath, path);
 
     const matchesLine = makeLineMatcher(query);
     const matches: { path: string; line: number; text: string }[] = [];
@@ -369,6 +402,7 @@ export const searchFiles = createTool({
         if (truncated) return;
         if (SKIPPED_DIRECTORIES.has(entry.name)) continue;
         const entryPath = join(dir, entry.name);
+        if (isSecretPath(relative(root, entryPath))) continue; // credentials are never scanned, so never echoed in a match
 
         if (entry.isDirectory()) {
           await walk(entryPath);

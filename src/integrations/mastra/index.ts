@@ -11,16 +11,22 @@ import {
 import { createControlCenterRoutes } from '../control-center/mastra-routes.ts';
 import { createMetricsRoute } from './metrics-route';
 import { codingWorkerGo, codingWorkerJs } from '../../workers/coding-worker';
-import { mastraSpecialistAgents } from './specialist-agents.ts';
+import { registerSpecialists } from './specialist-agents.ts';
+import { specialistReviewWorkflow } from './workflows/specialist-review-workflow.ts';
 import { codingTaskWorkflow } from './workflows/coding-task-workflow';
+
+// Registration only constructs agents; it makes no model call and touches no repository. A pack that cannot load registers no
+// specialists and records why, instead of preventing the coding workers from registering.
+export const specialists = registerSpecialists();
+if (specialists.error) console.warn(`[specialists] not registered: ${specialists.error}`);
 
 export const mastra = new Mastra({
   bundler: {
     externals: ['@duckdb/node-bindings'],
   },
   server: { apiRoutes: [createMetricsRoute(), ...createControlCenterRoutes()] },
-  agents: { codingWorkerGo, codingWorkerJs, ...mastraSpecialistAgents },
-  workflows: { codingTaskWorkflow },
+  agents: { codingWorkerGo, codingWorkerJs, ...specialists.agents },
+  workflows: { codingTaskWorkflow, specialistReviewWorkflow },
   storage: new MastraCompositeStore({
     id: 'composite-storage',
     default: new LibSQLStore({
