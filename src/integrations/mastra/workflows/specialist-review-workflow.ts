@@ -10,6 +10,8 @@ import { PACK_ID, specialistReportSchema, TASK_LANGUAGES, TASK_TYPES, type Agent
 import { REPOSITORY_ROOT_CONTEXT_KEY } from '../../../workers/tools/repository-tools.ts';
 import { createMastraSpecialist, declaredContextTokens, locatePackRoot, specialistRegistryKey } from '../specialist-agents.ts';
 import { findProjectRoot } from '../../../core/paths.ts';
+import { defaultActiveSkills, knowledgeDbPath } from '../../../runtime/knowledge/engineering-control.ts';
+import { join } from 'node:path';
 
 /**
  * specialist-review-workflow: the supported way to run a read-only specialist from Mastra Studio, the API or another workflow.
@@ -107,7 +109,7 @@ export interface SpecialistReviewDeps {
   registry?: PackRegistry;
   /** Repositories a specialist may read must lie inside one of these. Default: AGENTIC_SPECIALIST_ROOTS, else the project root. */
   allowedRoots?: () => readonly string[];
-  /** id -> digest of ACTIVE promoted skills (from the durable store). Default: none, so runs proceed without skills. */
+  /** id -> digest of ACTIVE promoted skills. Default: read from the project's durable store; unreadable or empty means no skills. */
   activeSkills?: () => ReadonlyMap<string, string>;
   /** Runtime-held reviewer key per specialist, used to sign findings for consensus. Default: none (no statements). */
   findingSigner?: (manifest: AgentManifest) => FindingSigner | undefined;
@@ -183,7 +185,7 @@ export function createSpecialistReviewWorkflow(deps: SpecialistReviewDeps = {}) 
       try {
         const pool = [...manifest.skills, ...manifest.optionalSkills].map((id) => pack.skillById.get(id)!);
         const composed = composeReviewPrompt(manifest, { specialistId: manifest.id, taskId: inputData.taskId, language: inputData.language, taskType: inputData.taskType, objective: inputData.objective, focusPaths: inputData.focusPaths },
-          pool, deps.activeSkills?.() ?? new Map());
+          pool, (deps.activeSkills ?? (() => defaultActiveSkills(knowledgeDbPath(join(findProjectRoot() ?? process.cwd(), '.workdir')))))());
         return { ...identified, ok: true, reasons: [], root: repo.root, prompt: composed.prompt,
           skills: { selected: [...composed.skills.selected], omitted: composed.skills.omitted.map((o) => ({ id: o.id, reason: o.reason })), digest: composed.skills.digest } };
       } catch (err) {

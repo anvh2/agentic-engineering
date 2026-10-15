@@ -16,6 +16,7 @@ import type { RunCodingTaskOptions, WorkerLike } from '../../../runtime/executio
 import { phaseOf, type CodingPhase, type PhaseUpdate } from '../../../runtime/execution/coding-task-status.ts';
 import { runtimeMetrics } from '../../../observability/metrics.ts';
 import { createTraceSink } from '../../../runtime/execution/coding-task-trace.ts';
+import { knowledgeDbPath, loadActiveCatalog } from '../../../runtime/knowledge/engineering-control.ts';
 
 /**
  * coding-task-workflow: the Engineering Lead's door to the local coding worker, and the orchestration /
@@ -100,8 +101,12 @@ export interface CodingTaskWorkflowDeps {
    * is reachable by any local caller of the Mastra API, so a design in it is never trusted on its own `approvalRef`.
    */
   approvals?: ApprovalVerifier;
-  /** Trusted runtime catalog for tasks that pin curated knowledge. Default: none, so such a task is refused (fail closed). */
-  knowledgeCatalog?: EngineeringKnowledgeCatalog;
+  /**
+   * Trusted runtime catalog for tasks that pin curated knowledge. Default: none, so such a task is refused (fail closed).
+   * A function is evaluated per run and ONLY for a task that pins knowledge, so promotions and revocations take effect on the
+   * next run and a damaged store cannot affect tasks that pin nothing.
+   */
+  knowledgeCatalog?: EngineeringKnowledgeCatalog | (() => EngineeringKnowledgeCatalog | undefined);
 }
 
 const NEXT_ACTION: Record<EngineeringResult['status'], string> = {
@@ -169,6 +174,8 @@ function defaultArtifactRoot(): string {
 }
 
 export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
+  const catalogFor = (pinsKnowledge: boolean): EngineeringKnowledgeCatalog | undefined =>
+    !pinsKnowledge ? undefined : typeof deps.knowledgeCatalog === 'function' ? deps.knowledgeCatalog() : deps.knowledgeCatalog;
   const publish = async (
     ctx: { setState: (s: WorkflowState) => Promise<void>; writer: { write: (d: unknown) => Promise<void> } },
     taskId: string,
@@ -194,7 +201,7 @@ export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
     execute: async ({ inputData, state, setState, writer }) => {
       const taskId = inputData.contract?.taskId ?? 'unknown';
       await publish({ setState, writer }, taskId, { phase: 'preparing', detail: 'validating contract and routing' }, state);
-      const route = await routeTask(inputData, inputData.repository, undefined, { approvals: deps.approvals, knowledgeCatalog: deps.knowledgeCatalog });
+      const route = await routeTask(inputData, inputData.repository, undefined, { approvals: deps.approvals, knowledgeCatalog: catalogFor(!!inputData.contract?.knowledge) });
       return {
         taskId,
         repository: inputData.repository,
@@ -277,7 +284,7 @@ export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
         artifactDir,
         trace,
         approvals: deps.approvals,
-        knowledgeCatalog: deps.knowledgeCatalog,
+        knowledgeCatalog: catalogFor(!!request.contract.knowledge),
         modelLabel: providerWorker ? undefined : (process.env.OLLAMA_MODEL ?? 'qwen3:8b'), // a provider labels itself (provider:model)
         runOptions: { modelTimeoutMs: 900_000, ...deps.runOptions, signal: abortSignal, runId }, // the run's own id owns its model permits
       });
@@ -325,4 +332,7 @@ export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
     .commit();
 }
 
-export const codingTaskWorkflow = createCodingTaskWorkflow();
+/** The registered workflow reads promoted knowledge from the project's durable store on every run that pins any. */
+export const codingTaskWorkflow = createCodingTaskWorkflow({
+  knowledgeCatalog: () => loadActiveCatalog(knowledgeDbPath(join(findProjectRoot() ?? process.cwd(), '.workdir'))),
+});

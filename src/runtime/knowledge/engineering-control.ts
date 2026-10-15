@@ -7,9 +7,10 @@
  */
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { hashValue } from './canonical.ts';
 import { diagnoseEngineeringSetup, type DoctorFinding } from './engineering-doctor.ts';
-import { entryDigest, type KnowledgeEntry } from './engineering-knowledge.ts';
+import { entryDigest, EngineeringKnowledgeCatalog, type KnowledgeEntry } from './engineering-knowledge.ts';
 import { recommendActions, type Recommendation } from './engineering-learning.ts';
 import { skillHealth, type SkillHealth, type SkillRun } from './engineering-skill-health.ts';
 import type { Trial } from './engineering-eval.ts';
@@ -103,6 +104,24 @@ export function readActiveKnowledge(dbPath: string): readonly KnowledgeEntry[] {
   } finally {
     db.close();
   }
+}
+
+/** Where the durable knowledge store lives: `<workdir>/engineering/knowledge.db` (runtime state, gitignored). */
+export const knowledgeDbPath = (workdir: string): string => join(workdir, 'engineering', 'knowledge.db');
+
+/**
+ * The runtime's trusted catalog of GLOBAL promoted entries, read fresh from the store through a read-only connection, or
+ * `undefined` when nothing has ever been promoted. A corrupted store throws: a damaged trust root must stop the work that depends
+ * on it, not silently degrade into "no guidance". Project-scoped lessons are excluded here; they need a project context.
+ */
+export function loadActiveCatalog(dbPath: string): EngineeringKnowledgeCatalog | undefined {
+  const entries = readActiveKnowledge(dbPath).filter((e) => e.projectId === undefined);
+  return entries.length ? new EngineeringKnowledgeCatalog(entries) : undefined;
+}
+
+/** id -> digest of active promoted skills, for optional guidance. Any failure yields no skills (guidance is optional). */
+export function defaultActiveSkills(dbPath: string): ReadonlyMap<string, string> {
+  try { return activeSkillDigests(readActiveKnowledge(dbPath)); } catch { return new Map(); }
 }
 
 export function buildEngineeringReport(input: ReportInput): EngineeringReport {

@@ -5,6 +5,7 @@
  *   agents [--json] | skills [--json]  catalogue listings
  *   validate                           exit 1 unless the pack loads and every declared scenario passes
  *   drift [--strict]                   promoted-vs-manifest drift; --strict exits 1 on any stale or orphaned skill
+ *   pin --language go|js|ts --type <task-type> --text "..."   print the `knowledge` pin for a task contract (read-only)
  *   render claude-code <agent-id>      print a Claude Code subagent definition to stdout (writes and installs nothing)
  *   promote|revoke <skill-id> --grant <file>   apply a PRE-SIGNED grant from a trusted promoter key
  *
@@ -20,7 +21,9 @@ import { buildEngineeringReport, probeOllama, providerReadiness, readActiveKnowl
 import { DurableEngineeringKnowledge, keyringPromotionAuthority, type PromotionGrant } from './engineering-knowledge-store.ts';
 import { loadPackRegistry, type PackRegistry } from './packs/loader.ts';
 import { renderClaudeCodeAgent } from './packs/agents.ts';
-import { activeSkillDigests, promotedDigestOf, renderSkill, skillToCandidate } from './packs/skills.ts';
+import { activeSkillDigests, pinSkillsForTask, promotedDigestOf, renderSkill, skillToCandidate } from './packs/skills.ts';
+import { EngineeringKnowledgeCatalog } from './engineering-knowledge.ts';
+import { TASK_TYPES, type TaskType } from './packs/schema.ts';
 import { TrustedKeyring, type SignedStatement, type TrustedKeyInput } from './trust.ts';
 
 export interface CliIo { out(text: string): void; err(text: string): void }
@@ -86,6 +89,20 @@ export async function runEngineeringCli(argv: readonly string[], io: CliIo, env:
         emit(report.drift, () => `stale: ${report.drift.stale.join(', ') || '-'}\norphaned: ${report.drift.orphaned.join(', ') || '-'}\nnot promoted: ${report.drift.unpromoted.length}`);
         return argv.includes('--strict') && (report.drift.stale.length || report.drift.orphaned.length) ? 1 : 0;
       }
+      case 'pin': {
+        const language = flagValue(argv, '--language'), type = flagValue(argv, '--type'), text = flagValue(argv, '--text');
+        if (!registry) { io.err(`pack not loaded: ${error}`); return 1; }
+        if (!language || !['go', 'js', 'ts'].includes(language) || !type || !(TASK_TYPES as readonly string[]).includes(type) || !text) {
+          io.err('usage: pin --language go|js|ts --type <task-type> --text "<task text>"'); return 2;
+        }
+        const global = active.filter((e) => e.projectId === undefined);
+        const catalog = new EngineeringKnowledgeCatalog(global);
+        const pin = pinSkillsForTask(registry.skills, catalog, { language: language as 'go' | 'js' | 'ts', taskType: type as TaskType, text });
+        emit({ knowledge: pin.knowledge ?? null, selected: pin.selection.selected, omitted: pin.selection.omitted }, () => pin.knowledge
+          ? `knowledge: ${JSON.stringify(pin.knowledge)}\nselected: ${pin.selection.selected.join(', ')}`
+          : `no skills selected (${pin.selection.omitted.length} considered and omitted)`);
+        return 0;
+      }
       case 'render': {
         const [target, agentId] = positional;
         if (target !== 'claude-code' || !agentId) { io.err('usage: render claude-code <agent-id>'); return 2; }
@@ -124,7 +141,7 @@ export async function runEngineeringCli(argv: readonly string[], io: CliIo, env:
         return 0;
       }
       default:
-        io.err('usage: engineering status|agents|skills|validate|drift|render|promote|revoke [--json] [--root dir] [--db file] [--keyring file]');
+        io.err('usage: engineering status|agents|skills|validate|drift|pin|render|promote|revoke [--json] [--root dir] [--db file] [--keyring file]');
         return 2;
     }
   } catch (e) {
