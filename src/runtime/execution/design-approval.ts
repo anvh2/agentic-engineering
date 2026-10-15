@@ -126,7 +126,8 @@ export type ApprovalErrorCode =
   | 'approval_revoked'
   | 'approval_superseded'
   | 'approval_expired'
-  | 'design_mismatch';
+  | 'design_mismatch'
+  | 'approval_conflict';
 
 export class ApprovalError extends Error {
   readonly code: ApprovalErrorCode;
@@ -264,10 +265,13 @@ export class DesignApprovalStore {
     return approvalId;
   }
 
-  revoke(approvalId: string, actor: string, reason: string): void {
-    this.scheduler.transact(() => {
-      this.scheduler.db.prepare('UPDATE design_approvals SET revoked_at = ?, revoked_by = ?, revoke_reason = ? WHERE approval_id = ? AND revoked_at IS NULL').run(this.scheduler.now(), actor, reason, approvalId);
+  /** Returns true only if THIS call revoked it; an already-revoked approval changes nothing and writes no audit event. */
+  revoke(approvalId: string, actor: string, reason: string): boolean {
+    return this.scheduler.transact(() => {
+      const res = this.scheduler.db.prepare('UPDATE design_approvals SET revoked_at = ?, revoked_by = ?, revoke_reason = ? WHERE approval_id = ? AND revoked_at IS NULL').run(this.scheduler.now(), actor, reason, approvalId);
+      if (Number(res.changes) !== 1) return false;
       this.event(approvalId, 'revoked', actor, reason);
+      return true;
     });
   }
 
@@ -321,6 +325,27 @@ export interface ApprovalDeps {
   authority: ApprovalAuthority;
 }
 
+/**
+ * Runs `fn` as ONE write transaction (BEGIN IMMEDIATE via the scheduler's own `transact`, so it takes the same write lock a
+ * worker claim needs). Everything `fn` reads - the task's state and claim count, its persisted files and risk, the latest
+ * revision - therefore cannot change before `fn`'s writes commit: a claim by another scheduler connection waits for the lock
+ * instead of slipping in between "the task has not started" and "the approval is recorded". Any throw rolls back every write
+ * `fn` made (the approval row, the supersession and the audit event commit together or not at all). Lock contention that
+ * outlasts the busy timeout, and a lost race on the revision, surface as `approval_conflict`: nothing is written, retry.
+ */
+function atomically<T>(store: SchedulerStore, fn: () => T): T {
+  try {
+    return store.transact(fn);
+  } catch (err) {
+    if (err instanceof ApprovalError) throw err;
+    const message = (err as Error).message ?? '';
+    if (/database is locked|database table is locked|SQLITE_BUSY|UNIQUE constraint failed: design_approvals/i.test(message)) {
+      throw new ApprovalError('approval_conflict', `another writer holds the scheduler database or just recorded a conflicting approval; nothing was written, retry (${message})`);
+    }
+    throw err;
+  }
+}
+
 const STARTED_STATES = new Set(['BACKLOG', 'READY', 'BLOCKED']);
 const MAX_PART = 12_000;
 
@@ -346,66 +371,71 @@ export function issueApproval(deps: ApprovalDeps, input: { objectiveId: string; 
   if (!design.hld?.trim() || !design.lld?.trim() || parts.some((p) => typeof p !== 'string' || p.length > MAX_PART) || (design.adr ?? []).some((a) => !a.trim())) {
     throw new ApprovalError('invalid_design', 'HLD and LLD are required, every part must be non-empty text of at most 12000 characters');
   }
-  const task = store.getTask(input.taskId);
-  if (!task) throw new ApprovalError('task_unknown', `no task ${input.taskId}`);
-  if (task.batchId !== input.objectiveId) throw new ApprovalError('task_mismatch', `task ${task.id} belongs to objective ${task.batchId}, not ${input.objectiveId}`);
-  // A design approved after a worker already ran would be the worker's own work being approved after the fact.
-  if (task.claims > 0 || !STARTED_STATES.has(task.state)) throw new ApprovalError('task_started', `task ${task.id} is ${task.state} (claimed ${task.claims}x); a design can only be approved before a worker starts`);
-  const facts = taskFacts(task);
+  // From here on every read and write is one write transaction (see atomically): the task cannot be claimed in between.
+  return atomically(store, () => {
+    const task = store.getTask(input.taskId);
+    if (!task) throw new ApprovalError('task_unknown', `no task ${input.taskId}`);
+    if (task.batchId !== input.objectiveId) throw new ApprovalError('task_mismatch', `task ${task.id} belongs to objective ${task.batchId}, not ${input.objectiveId}`);
+    // A design approved after a worker already ran would be the worker's own work being approved after the fact.
+    if (task.claims > 0 || !STARTED_STATES.has(task.state)) throw new ApprovalError('task_started', `task ${task.id} is ${task.state} (claimed ${task.claims}x); a design can only be approved before a worker starts`);
+    const facts = taskFacts(task);
 
-  const fingerprint = designFingerprint(design);
-  const revision = approvals.nextRevision(input.objectiveId, input.taskId);
-  const principal = authority.authenticate(input.credential, approveDigest({ objectiveId: input.objectiveId, taskId: input.taskId, designFingerprint: fingerprint, revision }));
-  if (!principal) throw new ApprovalError('not_authenticated', 'the credential does not authenticate this exact approval request');
-  const grant = authority.grant(principal.grantId);
-  const problem = authorityProblem(grant, 'approve', { objectiveId: input.objectiveId, language: facts.language, allowedFiles: facts.files, risk: facts.risk }, store.now());
-  if (problem) throw new ApprovalError(problem.code, problem.reason);
-  if (task.assignedWorker && task.assignedWorker === principal.principalId) throw new ApprovalError('self_approval', `${principal.principalId} is the worker assigned to ${task.id} and cannot approve its design`);
+    const fingerprint = designFingerprint(design);
+    const revision = approvals.nextRevision(input.objectiveId, input.taskId);
+    const principal = authority.authenticate(input.credential, approveDigest({ objectiveId: input.objectiveId, taskId: input.taskId, designFingerprint: fingerprint, revision }));
+    if (!principal) throw new ApprovalError('not_authenticated', 'the credential does not authenticate this exact approval request');
+    const grant = authority.grant(principal.grantId);
+    const problem = authorityProblem(grant, 'approve', { objectiveId: input.objectiveId, language: facts.language, allowedFiles: facts.files, risk: facts.risk }, store.now());
+    if (problem) throw new ApprovalError(problem.code, problem.reason);
+    if (task.assignedWorker && task.assignedWorker === principal.principalId) throw new ApprovalError('self_approval', `${principal.principalId} is the worker assigned to ${task.id} and cannot approve its design`);
 
-  const latest = approvals.latestRevision(input.objectiveId, input.taskId);
-  if (latest) {
-    const current = approvals.load(latest.approvalId);
-    if ('record' in current && !current.row.revoked_at && current.record.designFingerprint === fingerprint) {
-      // Same design already approved at the latest revision: idempotent, never a new revision.
-      return { approvalId: current.row.approval_id, record: current.record };
+    const latest = approvals.latestRevision(input.objectiveId, input.taskId);
+    if (latest) {
+      const current = approvals.load(latest.approvalId);
+      if ('record' in current && !current.row.revoked_at && current.record.designFingerprint === fingerprint) {
+        // Same design already approved at the latest revision: idempotent, never a new revision.
+        return { approvalId: current.row.approval_id, record: current.record };
+      }
     }
-  }
 
-  const now = store.now();
-  const record: ApprovalRecord = {
-    v: 1,
-    objectiveId: input.objectiveId,
-    taskId: input.taskId,
-    revision,
-    designFingerprint: fingerprint,
-    allowedFiles: [...facts.files].sort(),
-    filesSha256: filesDigest(facts.files),
-    language: facts.language,
-    risk: facts.risk,
-    approverId: principal.principalId,
-    role: grant!.role,
-    grantId: grant!.grantId,
-    scope: { objectiveIds: [...grant!.scope.objectiveIds], languages: [...grant!.scope.languages], pathPrefixes: [...grant!.scope.pathPrefixes], maxRisk: grant!.scope.maxRisk },
-    approvedAt: now,
-    expiresAt: input.ttlMs === undefined ? (grant!.notAfter ?? null) : Math.min(now + input.ttlMs, grant!.notAfter ?? Number.POSITIVE_INFINITY),
-  };
-  const approvalId = approvals.insert(record, latest?.approvalId, principal.principalId);
-  return { approvalId, record };
+    const now = store.now();
+    const record: ApprovalRecord = {
+      v: 1,
+      objectiveId: input.objectiveId,
+      taskId: input.taskId,
+      revision,
+      designFingerprint: fingerprint,
+      allowedFiles: [...facts.files].sort(),
+      filesSha256: filesDigest(facts.files),
+      language: facts.language,
+      risk: facts.risk,
+      approverId: principal.principalId,
+      role: grant!.role,
+      grantId: grant!.grantId,
+      scope: { objectiveIds: [...grant!.scope.objectiveIds], languages: [...grant!.scope.languages], pathPrefixes: [...grant!.scope.pathPrefixes], maxRisk: grant!.scope.maxRisk },
+      approvedAt: now,
+      expiresAt: input.ttlMs === undefined ? (grant!.notAfter ?? null) : Math.min(now + input.ttlMs, grant!.notAfter ?? Number.POSITIVE_INFINITY),
+    };
+    const approvalId = approvals.insert(record, latest?.approvalId, principal.principalId);
+    return { approvalId, record };
+  });
 }
 
 /** Withdraws an approval. Needs a credential whose grant permits "revoke" over the approval's objective; reviewers cannot rewrite a design, only escalate. */
 export function revokeApproval(deps: ApprovalDeps, input: { approvalId: string; credential: string; reason: string }): void {
   const approvals = new DesignApprovalStore(deps.store);
-  const loaded = approvals.load(input.approvalId);
-  if ('error' in loaded) throw new ApprovalError(loaded.error.code, loaded.error.reason);
-  if (loaded.row.revoked_at) return; // idempotent
   if (!input.reason.trim()) throw new ApprovalError('invalid_design', 'a revocation needs a reason');
-  const principal = deps.authority.authenticate(input.credential, revokeDigest({ approvalId: input.approvalId }));
-  if (!principal) throw new ApprovalError('not_authenticated', 'the credential does not authenticate this exact revocation');
-  const { record } = loaded;
-  const problem = authorityProblem(deps.authority.grant(principal.grantId), 'revoke', { objectiveId: record.objectiveId, language: record.language, allowedFiles: record.allowedFiles, risk: record.risk }, deps.store.now());
-  if (problem) throw new ApprovalError(problem.code, problem.reason);
-  approvals.revoke(input.approvalId, principal.principalId, input.reason);
+  atomically(deps.store, () => {
+    const loaded = approvals.load(input.approvalId);
+    if ('error' in loaded) throw new ApprovalError(loaded.error.code, loaded.error.reason);
+    if (loaded.row.revoked_at) return; // idempotent
+    const principal = deps.authority.authenticate(input.credential, revokeDigest({ approvalId: input.approvalId }));
+    if (!principal) throw new ApprovalError('not_authenticated', 'the credential does not authenticate this exact revocation');
+    const { record } = loaded;
+    const problem = authorityProblem(deps.authority.grant(principal.grantId), 'revoke', { objectiveId: record.objectiveId, language: record.language, allowedFiles: record.allowedFiles, risk: record.risk }, deps.store.now());
+    if (problem) throw new ApprovalError(problem.code, problem.reason);
+    approvals.revoke(input.approvalId, principal.principalId, input.reason);
+  });
 }
 
 // ---- verification (the only thing the rest of the runtime trusts) ---------------------------------------------------
