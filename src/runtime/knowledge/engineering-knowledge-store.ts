@@ -67,6 +67,26 @@ export class DurableEngineeringKnowledge implements SessionObservationStore {
     } catch(e) { this.db.exec('ROLLBACK'); throw e; }
   }
 
+  /** Activate a curated rule/skill/ADR/role after authenticated, digest-bound promotion. */
+  async promoteCurated(candidate: KnowledgeEntry, authority: PromotionAuthority): Promise<void> {
+    if (candidate.approved) throw new Error('knowledge: candidate must start inactive');
+    const entry: KnowledgeEntry = { ...candidate, approved:true };
+    const catalog = new EngineeringKnowledgeCatalog([entry]);
+    catalog.resolve({language:entry.language === 'common' ? 'go' : entry.language,ids:[entry.id]});
+    const json = JSON.stringify(entry);
+    const digest = sha(json);
+    const principal = await authority.authorize(digest);
+    if (!principal?.principalId || !principal.grantId) throw new Error('knowledge: promotion not authorized');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const exists = this.db.prepare('SELECT id FROM engineering_knowledge WHERE id=?').get(entry.id);
+      if (exists) throw new Error('knowledge: ID already promoted');
+      this.db.prepare('INSERT INTO engineering_knowledge (id,revision,manifest_json,digest,approved_at,principal_id,grant_id,revoked_at) VALUES (?,?,?,?,?,?,?,NULL)').run(entry.id,entry.revision,json,digest,Date.now(),principal.principalId,principal.grantId);
+      this.db.prepare('INSERT INTO engineering_knowledge_events (knowledge_id,action,digest,at,actor) VALUES (?,?,?,?,?)').run(entry.id,'promoted',digest,Date.now(),principal.principalId);
+      this.db.exec('COMMIT');
+    } catch(e) {this.db.exec('ROLLBACK');throw e;}
+  }
+
   /** Revocation is operator-authorized and leaves the full immutable record for audit. */
   async revoke(id: string, authority: PromotionAuthority): Promise<void> {
     const record = this.db.prepare('SELECT digest,revoked_at FROM engineering_knowledge WHERE id=?').get(id) as { digest:string;revoked_at:number|null }|undefined;
