@@ -213,6 +213,55 @@ describe('delegated authority is enforced deterministically', () => {
   });
 });
 
+describe('review validation of PR #51 (c94c9f2)', () => {
+  it('a task a worker already started once cannot be approved after its lease expired and the claim was refunded', () => {
+    const s = makeStore(() => clock);
+    s.createBatch(plan('/repo', [workerTask('a', { files: ['src/a.js'] })], { batchId: 'obj1' }));
+    s.promote();
+    assert.equal(s.claim({ workerId: 'worker-1', languages: ['go', 'js'], leaseMs: 1000, maxActive: 8 })?.task.id, 'a');
+    clock += 5000;
+    assert.deepEqual(s.reapExpired().requeued, ['a']);
+    const t = s.requireTask('a');
+    assert.deepEqual({ state: t.state, claims: t.claims }, { state: 'READY', claims: 0 }, 'the refund makes the counter look like "never started"');
+    const attempt = () => issueApproval({ store: s, authority }, { objectiveId: 'obj1', taskId: 'a', design, credential: approveCredential(s, 'lead-1', LEAD_KEY, 'obj1', 'a', design) });
+    assert.equal(codeOf(attempt), 'task_started');
+    assert.equal((s.db.prepare('SELECT COUNT(*) AS n FROM design_approvals').get() as { n: number }).n, 0);
+  });
+
+  it('rejects an expiry that is not a positive finite duration instead of silently storing "never expires"', () => {
+    for (const ttlMs of [Number.NaN, Number.POSITIVE_INFINITY, 0, -5]) {
+      assert.equal(codeOf(() => issue('a', design, { ttlMs })), 'invalid_design', `ttlMs=${ttlMs}`);
+    }
+    assert.equal(new DesignApprovalStore(store).latestRevision('obj1', 'a'), undefined, 'nothing was written');
+    assert.equal(issue('a', design, { ttlMs: 1 }).record.expiresAt, clock + 1);
+  });
+
+  it('revoking an already-revoked approval is an idempotent no-op: no write, no audit event, no information beyond what the verifier gives anyone', () => {
+    const { approvalId } = issue();
+    revokeApproval({ store, authority }, { approvalId, credential: revokeCredential('lead-1', LEAD_KEY, approvalId), reason: 'real' });
+    const events = new DesignApprovalStore(store).events().length;
+    assert.equal(codeOf(() => revokeApproval({ store, authority }, { approvalId, credential: 'not.valid', reason: 'unauthenticated' })), 'no error');
+    assert.equal(new DesignApprovalStore(store).events().length, events);
+    assert.equal(store.db.prepare('SELECT revoke_reason FROM design_approvals WHERE approval_id = ?').get(approvalId)!.revoke_reason, 'real', 'the original revocation is untouched');
+    fails(verifier()(check(approvalId)), 'approval_revoked'); // the credential-free verifier reveals the same state
+  });
+
+  it('an unauthenticated request that WOULD change state never does', () => {
+    const { approvalId } = issue();
+    assert.equal(codeOf(() => revokeApproval({ store, authority }, { approvalId, credential: 'not.valid', reason: 'x' })), 'not_authenticated');
+    assert.equal(verifier()(check(approvalId)).ok, true);
+  });
+
+  it('the persisted risk, language and files the verifier relies on cannot be changed through the scheduler API', () => {
+    const before = JSON.stringify(store.requireTask('a').spec) + store.requireTask('a').language;
+    for (const key of ['spec', 'language', 'risk', 'priority', 'allowedFiles', 'assessment']) {
+      assert.throws(() => store.patchTask('a', { [key]: 'x' } as never, 't'), /not patchable/, key);
+      assert.throws(() => store.transition('a', 'CANCELLED', { actor: 't', patch: { [key]: 'x' } as never }), /not patchable/, key);
+    }
+    assert.equal(JSON.stringify(store.requireTask('a').spec) + store.requireTask('a').language, before);
+  });
+});
+
 describe('revocation, supersession and expiry', () => {
   it('revoking an approval stops it authorizing; revoking is audited and idempotent', () => {
     const { approvalId } = issue();

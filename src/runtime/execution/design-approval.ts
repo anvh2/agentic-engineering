@@ -349,6 +349,10 @@ function atomically<T>(store: SchedulerStore, fn: () => T): T {
 const STARTED_STATES = new Set(['BACKLOG', 'READY', 'BLOCKED']);
 const MAX_PART = 12_000;
 
+function wasEverClaimed(store: SchedulerStore, taskId: string): boolean {
+  return store.db.prepare("SELECT 1 FROM events WHERE task_id = ? AND to_state = 'CLAIMED' LIMIT 1").get(taskId) !== undefined;
+}
+
 function taskFacts(task: TaskRow): { files: string[]; risk: Risk; language: EnabledLanguage } {
   const request = task.spec.request;
   if (!request) throw new ApprovalError('task_mismatch', `task ${task.id} has no worker request, so there is nothing to approve a design for`);
@@ -371,13 +375,21 @@ export function issueApproval(deps: ApprovalDeps, input: { objectiveId: string; 
   if (!design.hld?.trim() || !design.lld?.trim() || parts.some((p) => typeof p !== 'string' || p.length > MAX_PART) || (design.adr ?? []).some((a) => !a.trim())) {
     throw new ApprovalError('invalid_design', 'HLD and LLD are required, every part must be non-empty text of at most 12000 characters');
   }
+  // An expiry that is not a positive finite duration would serialize as "never expires" (NaN, Infinity become null in the stored record).
+  if (input.ttlMs !== undefined && !(typeof input.ttlMs === 'number' && Number.isFinite(input.ttlMs) && input.ttlMs > 0)) {
+    throw new ApprovalError('invalid_design', 'ttlMs must be a positive finite number of milliseconds (omit it for no expiry beyond the grant)');
+  }
   // From here on every read and write is one write transaction (see atomically): the task cannot be claimed in between.
   return atomically(store, () => {
     const task = store.getTask(input.taskId);
     if (!task) throw new ApprovalError('task_unknown', `no task ${input.taskId}`);
     if (task.batchId !== input.objectiveId) throw new ApprovalError('task_mismatch', `task ${task.id} belongs to objective ${task.batchId}, not ${input.objectiveId}`);
     // A design approved after a worker already ran would be the worker's own work being approved after the fact.
-    if (task.claims > 0 || !STARTED_STATES.has(task.state)) throw new ApprovalError('task_started', `task ${task.id} is ${task.state} (claimed ${task.claims}x); a design can only be approved before a worker starts`);
+    // `claims` is a budget, not a history: a lease expiry refunds the claim (reapExpired), returning a task a worker already
+  // started to READY with claims = 0. Whether a worker ever started is therefore read from the append-only event log.
+  if (task.claims > 0 || !STARTED_STATES.has(task.state) || wasEverClaimed(store, task.id)) {
+    throw new ApprovalError('task_started', `task ${task.id} is ${task.state} (claim count ${task.claims}, ever claimed: ${wasEverClaimed(store, task.id)}); a design can only be approved before a worker has ever started it`);
+  }
     const facts = taskFacts(task);
 
     const fingerprint = designFingerprint(design);
@@ -421,7 +433,14 @@ export function issueApproval(deps: ApprovalDeps, input: { objectiveId: string; 
   });
 }
 
-/** Withdraws an approval. Needs a credential whose grant permits "revoke" over the approval's objective; reviewers cannot rewrite a design, only escalate. */
+/**
+ * Withdraws an approval. Needs a credential whose grant permits "revoke" over the approval's objective; reviewers cannot rewrite a design, only escalate.
+ *
+ * Revoking an approval that is ALREADY revoked is an idempotent no-op that returns without authenticating: it changes nothing,
+ * writes no audit event, and tells the caller only what the credential-free verifier already tells anyone who holds the id
+ * (`approval_revoked`). Requiring a currently-valid credential for it would make a retry fail after the revoking grant was
+ * withdrawn, although the requested end state already holds. Every request that WOULD change state is authenticated first.
+ */
 export function revokeApproval(deps: ApprovalDeps, input: { approvalId: string; credential: string; reason: string }): void {
   const approvals = new DesignApprovalStore(deps.store);
   if (!input.reason.trim()) throw new ApprovalError('invalid_design', 'a revocation needs a reason');
