@@ -13,6 +13,7 @@ import { pendingReviews, reviewDecision } from '../review.ts';
 import { requiredTasks, runAcceptance, type AcceptanceRecord } from './oracle.ts';
 import { FINAL_PHASES, LifecycleError, type LifecyclePhase, type LifecycleRow, type LifecycleStore } from './store.ts';
 import type { ApprovalVerifier } from '../../runtime/execution/design-approval.ts';
+import type { EngineeringKnowledgeCatalog } from '../../runtime/knowledge/engineering-knowledge.ts';
 import { verifyReview, type ReviewVerdict } from './verified-review.ts';
 
 /**
@@ -57,6 +58,8 @@ export interface LifecycleDeps {
   acknowledgeWarnings?: readonly string[];
   /** Re-verifies attached design approvals during review (default: deny all, so such tasks escalate). */
   approvals?: ApprovalVerifier;
+  /** Trusted runtime catalog used to re-resolve any curated knowledge a task pinned (default: none, so such a task cannot be approved). */
+  knowledgeCatalog?: EngineeringKnowledgeCatalog;
   /** Safety bound on rounds (default 25): a lifecycle that cannot finish in this many rounds stops ESCALATED. */
   maxRounds?: number;
   /** Where the final verdict file is written (default: none). */
@@ -274,7 +277,7 @@ async function reviewRound(deps: LifecycleDeps, objectiveId: string, batchId: st
     if (lifecycle.require(objectiveId).phase !== 'EXECUTING') break;
     let verdict: ReviewVerdict;
     try {
-      verdict = await verifyReview({ store, worktrees: deps.worktrees, run: deps.run, acknowledgeWarnings: deps.acknowledgeWarnings, approvals: deps.approvals }, task.id);
+      verdict = await verifyReview({ store, worktrees: deps.worktrees, run: deps.run, acknowledgeWarnings: deps.acknowledgeWarnings, approvals: deps.approvals, knowledgeCatalog: deps.knowledgeCatalog }, task.id);
     } catch (err) {
       lifecycle.audit(objectiveId, REVIEWER, 'review_error', `${task.id}: the review could not be performed: ${(err as Error).message}`);
       continue; // changed under us (cancelled, decided elsewhere); the next round sees its new state

@@ -15,7 +15,7 @@ import {
 import { persistRun } from './coding-task-artifacts.ts';
 import { createTraceSink, redact, type TraceSink } from './coding-task-trace.ts';
 import { denyAllApprovals, type ApprovalVerifier } from './design-approval.ts';
-import type { EngineeringKnowledgeCatalog } from '../knowledge/engineering-knowledge.ts';
+import { knowledgeLanguageForFiles, type EngineeringKnowledgeCatalog } from '../knowledge/engineering-knowledge.ts';
 import { LANGUAGE_ADAPTERS, delegatableLanguage } from './language-adapters.ts';
 
 /**
@@ -146,7 +146,7 @@ export async function routeTask(
   request: DelegationRequest,
   repoRoot: string,
   explicitPolicy?: DelegationPolicy,
-  options: { approvals?: ApprovalVerifier } = {},
+  options: { approvals?: ApprovalVerifier; knowledgeCatalog?: EngineeringKnowledgeCatalog } = {},
 ): Promise<Route> {
   const parsed = delegationRequestSchema.safeParse(request);
   if (!parsed.success) {
@@ -161,6 +161,21 @@ export async function routeTask(
   const policy = effectivePolicy(language, explicitPolicy);
   if (contract.allowedFiles.length > 0 && !language) {
     reasons.push('allowed files must all be .go, or all be .js/.mjs/.cjs (mixed or other file types are not delegated)');
+  }
+
+  // Pinned curated knowledge must resolve, in the runtime's own catalog, to exactly the digest the Lead pinned. Otherwise the
+  // task stays with Claude with a reason, instead of failing late inside the runner after a worker slot was spent.
+  if (contract.knowledge) {
+    try {
+      if (!options.knowledgeCatalog) throw new Error('no trusted runtime catalog is configured');
+      const lang = knowledgeLanguageForFiles(contract.allowedFiles);
+      if (!lang) throw new Error('implementation language is unknown or mixed');
+      const selection = options.knowledgeCatalog.resolve({ language: lang, ids: contract.knowledge.ids });
+      if (selection.omitted.length) throw new Error('selection exceeds the context budget');
+      if (selection.digest !== contract.knowledge.selectionDigest) throw new Error('selection digest differs from the pinned digest (changed, replaced or revoked)');
+    } catch (err) {
+      reasons.push(`pinned knowledge rejected: ${(err as Error).message}`);
+    }
   }
 
   if (assessment.complexity !== 'small') reasons.push(`complexity is "${assessment.complexity}", only "small" tasks are delegated`);

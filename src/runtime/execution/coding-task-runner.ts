@@ -56,7 +56,7 @@ export const codingTaskSchema = z.object({
     adr: z.array(z.string().trim().min(1).max(2000)).max(20).optional(),
   }).optional(),
   /** Explicit curated knowledge IDs; never inferred from untrusted code or worker prose. */
-  knowledge: z.object({ ids: z.array(z.string()).max(16), catalogDigest: z.string().regex(/^[a-f0-9]{64}$/) }).optional(),
+  knowledge: z.object({ ids: z.array(z.string()).min(1).max(16), selectionDigest: z.string().regex(/^[a-f0-9]{64}$/) }).optional(),
   acceptanceCriteria: z.array(z.string()).default([]),
   /** argv arrays run by the runtime from the repository root, in order; the first failing one is the failure fed back. */
   verificationCommands: z.array(z.array(z.string()).min(1)).min(1),
@@ -374,9 +374,9 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
   const language = detectLanguage(task.allowedFiles.map((file) => extname(file)));
   if (task.knowledge && !language) throw new Error('knowledge: implementation language is unknown or mixed');
   if (task.knowledge && !options.knowledgeCatalog) throw new Error('knowledge: no trusted runtime catalog configured');
-  if (task.knowledge && options.knowledgeCatalog!.catalogDigest !== task.knowledge.catalogDigest) throw new Error('knowledge: catalog revision mismatch');
   const knowledge = task.knowledge ? options.knowledgeCatalog!.resolve({ language: language!, ids: task.knowledge.ids }) : undefined;
   if (knowledge?.omitted.length) throw new Error('knowledge: explicit selection exceeded context budget');
+  if (knowledge && knowledge.digest !== task.knowledge!.selectionDigest) throw new Error('knowledge: selection digest mismatch (an entry was changed, replaced or revoked since the Lead pinned it)');
   const engineeringContext = language ? buildEngineeringContext(task.allowedFiles, task.approvedDesign, verifiedApproval, knowledge) : undefined;
   const maxAttempts = Math.min(options.maxAttempts ?? 3, worker.provider?.limits?.maxCodingAttempts ?? Number.POSITIVE_INFINITY);
   const maxRuntimeRetries = worker.provider?.limits?.maxRuntimeRetries ?? MAX_RUNTIME_RETRIES;
