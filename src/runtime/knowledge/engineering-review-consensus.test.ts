@@ -9,8 +9,8 @@ test('merges duplicate evidence across reviewers and chooses strictest severity'
  assert.equal(findings.length,1);assert.equal(findings[0]!.severity,'HIGH');
  assert.equal(findings[0]!.reviewerIds.length,2);
  assert.equal(decideReview(findings,[]).canApprove,false);
- assert.equal(decideReview(findings,[{key:findings[0]!.key,verifierId:'independent',verdict:'confirmed',evidence:'reproduced'}]).canApprove,false);
- assert.equal(decideReview(findings,[{key:findings[0]!.key,verifierId:'independent',verdict:'refuted',evidence:'counterexample'}]).canApprove,true);
+ assert.equal(decideReview(findings,[{key:findings[0]!.key,verifierId:'independent',verdict:'confirmed',evidence:'reproduced'}],['independent']).canApprove,false);
+ assert.equal(decideReview(findings,[{key:findings[0]!.key,verifierId:'independent',verdict:'refuted',evidence:'counterexample'}],['independent']).canApprove,true);
 });
 test('refuses unsafe paths and self-verification of a sole reviewer',()=>{
  assert.throws(()=>consolidateReviewFindings([{reviewerId:'x',role:'code',path:'../secret',evidence:'e',severity:'HIGH',description:'d'}]));
@@ -26,4 +26,14 @@ test('a member of a multi-reviewer finding cannot self-refute',()=>{
  const attempt=decideReview(findings,[{key:findings[0]!.key,verifierId:'b',verdict:'refuted',evidence:'I disagree'}]);
  assert.equal(attempt.canApprove,false);
  assert.equal(attempt.unresolved.length,1);
+});
+
+test('untrusted verifier identity cannot clear a critical finding',()=>{
+ const findings=consolidateReviewFindings([
+  {reviewerId:'writer',role:'security',path:'src/auth.go',evidence:'auth bypass',severity:'CRITICAL',description:'risk'},
+ ]);
+ const forged={key:findings[0]!.key,verifierId:'claimed-independent',verdict:'refuted' as const,evidence:'looks fine'};
+ assert.equal(decideReview(findings,[forged]).canApprove,false);
+ assert.equal(decideReview(findings,[forged],['real-independent']).canApprove,false);
+ assert.equal(decideReview(findings,[forged],['claimed-independent']).canApprove,true);
 });
