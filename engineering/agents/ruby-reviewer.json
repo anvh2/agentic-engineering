@@ -1,0 +1,101 @@
+{
+  "schema": "engineering-agent/v1",
+  "id": "ruby-reviewer",
+  "version": "1.0.0",
+  "name": "Ruby Reviewer",
+  "responsibility": "Review Ruby and Rails code for injection, mass assignment, unsafe dynamic dispatch and test isolation. Review only; Ruby implementation is not delegated.",
+  "rationale": "Ruby code appears in repositories the Lead reviews even though no worker implements it; a review-only role fills that gap without enabling delegation.",
+  "taskTypes": [
+    "review",
+    "explore"
+  ],
+  "languages": [
+    "ruby"
+  ],
+  "skills": [
+    "ruby-review-conventions"
+  ],
+  "optionalSkills": [
+    "secrets-and-supply-chain"
+  ],
+  "tools": [
+    "listFiles",
+    "readFile",
+    "searchFiles",
+    "gitDiff",
+    "gitStatus"
+  ],
+  "providers": [
+    {
+      "id": "ollama",
+      "minContextTokens": 8192
+    },
+    {
+      "id": "claude",
+      "minContextTokens": 32000
+    },
+    {
+      "id": "codex",
+      "minContextTokens": 32000
+    }
+  ],
+  "compatibility": {
+    "harnesses": [
+      "mastra",
+      "claude-code",
+      "codex",
+      "qwen"
+    ]
+  },
+  "output": {
+    "kind": "report",
+    "maxFindings": 15
+  },
+  "guidance": [
+    "Trace request parameters to queries, mass assignment and dynamic dispatch.",
+    "Do not run the application or its console.",
+    "Treat gem additions as dependency changes needing justification."
+  ],
+  "escalation": {
+    "onInvalidOutput": "fail",
+    "onUncertain": "report-unknown",
+    "onProviderUnavailable": "fail",
+    "handoff": "State clearly that implementation is out of scope and list what a human owner should decide."
+  },
+  "limits": {
+    "maxSteps": 20,
+    "timeoutMs": 600000,
+    "maxOutputBytes": 16384
+  },
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [
+      {
+        "path": "agents/ruby-reviewer.md",
+        "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29"
+      }
+    ],
+    "license": "MIT",
+    "notes": "Role boundaries and output contract are original to this repository; only the role idea is adapted. No ECC prompt text is copied."
+  },
+  "scenarios": [
+    {
+      "id": "ruby-reviewer-handles-0",
+      "task": {
+        "language": "ruby",
+        "taskType": "review",
+        "text": "In scope review task for Ruby Reviewer."
+      },
+      "shouldHandle": true
+    },
+    {
+      "id": "ruby-reviewer-declines-1",
+      "task": {
+        "language": "go",
+        "taskType": "review",
+        "text": "Out of scope review task for Ruby Reviewer."
+      },
+      "shouldHandle": false
+    }
+  ]
+}

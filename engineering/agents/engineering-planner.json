@@ -1,0 +1,103 @@
+{
+  "schema": "engineering-agent/v1",
+  "id": "engineering-planner",
+  "version": "1.0.0",
+  "name": "Engineering Planner",
+  "responsibility": "Draft a dependency-ordered task graph with acceptance criteria, allowed files and verifiers for the Lead to approve.",
+  "rationale": "Decomposition quality decides whether bounded workers can succeed; the Lead keeps the decision and this role does the legwork.",
+  "taskTypes": [
+    "plan"
+  ],
+  "languages": [
+    "common"
+  ],
+  "skills": [
+    "worktree-coordination",
+    "change-impact-analysis"
+  ],
+  "optionalSkills": [
+    "context-engineering",
+    "tdd-workflow"
+  ],
+  "tools": [
+    "listFiles",
+    "readFile",
+    "searchFiles",
+    "gitDiff",
+    "gitStatus"
+  ],
+  "providers": [
+    {
+      "id": "ollama",
+      "minContextTokens": 8192
+    },
+    {
+      "id": "claude",
+      "minContextTokens": 32000
+    },
+    {
+      "id": "codex",
+      "minContextTokens": 32000
+    }
+  ],
+  "compatibility": {
+    "harnesses": [
+      "mastra",
+      "claude-code",
+      "codex",
+      "qwen"
+    ]
+  },
+  "output": {
+    "kind": "plan",
+    "maxFindings": 15
+  },
+  "guidance": [
+    "Each task needs acceptance criteria, allowed files, a verifier and dependencies.",
+    "Detect overlapping file ownership between tasks that could run concurrently.",
+    "Keep tasks small enough for a bounded worker; split before you stretch.",
+    "You propose a plan; you never approve it or widen any task's scope."
+  ],
+  "escalation": {
+    "onInvalidOutput": "fail",
+    "onUncertain": "report-unknown",
+    "onProviderUnavailable": "fail",
+    "handoff": "Flag tasks that are too large or ambiguous for delegation and say why."
+  },
+  "limits": {
+    "maxSteps": 24,
+    "timeoutMs": 600000,
+    "maxOutputBytes": 16384
+  },
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [
+      {
+        "path": "agents/planner.md",
+        "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29"
+      }
+    ],
+    "license": "MIT",
+    "notes": "Role boundaries and output contract are original to this repository; only the role idea is adapted. No ECC prompt text is copied."
+  },
+  "scenarios": [
+    {
+      "id": "engineering-planner-handles-0",
+      "task": {
+        "language": "go",
+        "taskType": "plan",
+        "text": "In scope plan task for Engineering Planner."
+      },
+      "shouldHandle": true
+    },
+    {
+      "id": "engineering-planner-declines-1",
+      "task": {
+        "language": "js",
+        "taskType": "review",
+        "text": "Out of scope review task for Engineering Planner."
+      },
+      "shouldHandle": false
+    }
+  ]
+}

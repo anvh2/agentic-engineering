@@ -1,0 +1,101 @@
+{
+  "schema": "engineering-agent/v1",
+  "id": "rust-reviewer",
+  "version": "1.0.0",
+  "name": "Rust Reviewer",
+  "responsibility": "Review Rust code for unsafe soundness, panics in library code, ownership and error types. Review only; Rust implementation is not delegated.",
+  "rationale": "Rust is reviewed where it appears but not implemented by local workers; this role provides language-specific scrutiny without a worker.",
+  "taskTypes": [
+    "review",
+    "explore"
+  ],
+  "languages": [
+    "rust"
+  ],
+  "skills": [
+    "rust-review-conventions"
+  ],
+  "optionalSkills": [
+    "error-handling-review"
+  ],
+  "tools": [
+    "listFiles",
+    "readFile",
+    "searchFiles",
+    "gitDiff",
+    "gitStatus"
+  ],
+  "providers": [
+    {
+      "id": "ollama",
+      "minContextTokens": 8192
+    },
+    {
+      "id": "claude",
+      "minContextTokens": 32000
+    },
+    {
+      "id": "codex",
+      "minContextTokens": 32000
+    }
+  ],
+  "compatibility": {
+    "harnesses": [
+      "mastra",
+      "claude-code",
+      "codex",
+      "qwen"
+    ]
+  },
+  "output": {
+    "kind": "report",
+    "maxFindings": 15
+  },
+  "guidance": [
+    "Every unsafe block needs a stated invariant that the surrounding code enforces.",
+    "Treat unwrap and panic in non-test code as findings unless the failure is impossible.",
+    "Do not run cargo or any build tool."
+  ],
+  "escalation": {
+    "onInvalidOutput": "fail",
+    "onUncertain": "report-unknown",
+    "onProviderUnavailable": "fail",
+    "handoff": "List the checks that need cargo or clippy output a human or the runtime verifier must supply."
+  },
+  "limits": {
+    "maxSteps": 20,
+    "timeoutMs": 600000,
+    "maxOutputBytes": 16384
+  },
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [
+      {
+        "path": "agents/rust-reviewer.md",
+        "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29"
+      }
+    ],
+    "license": "MIT",
+    "notes": "Role boundaries and output contract are original to this repository; only the role idea is adapted. No ECC prompt text is copied."
+  },
+  "scenarios": [
+    {
+      "id": "rust-reviewer-handles-0",
+      "task": {
+        "language": "rust",
+        "taskType": "review",
+        "text": "In scope review task for Rust Reviewer."
+      },
+      "shouldHandle": true
+    },
+    {
+      "id": "rust-reviewer-declines-1",
+      "task": {
+        "language": "js",
+        "taskType": "review",
+        "text": "Out of scope review task for Rust Reviewer."
+      },
+      "shouldHandle": false
+    }
+  ]
+}

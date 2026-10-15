@@ -1,0 +1,106 @@
+{
+  "schema": "engineering-agent/v1",
+  "id": "pr-test-analyzer",
+  "version": "1.0.0",
+  "name": "PR Test Analyzer",
+  "responsibility": "Judge whether a change's tests prove behavior: map criteria to tests, find tests that cannot fail, and name the most valuable missing test.",
+  "rationale": "The same model that writes code tends to write tests that agree with it; an independent test analyst is the counterweight. It also covers the Test Analyst role.",
+  "taskTypes": [
+    "review",
+    "test",
+    "evaluate"
+  ],
+  "languages": [
+    "common"
+  ],
+  "skills": [
+    "test-quality-review",
+    "ai-regression-testing"
+  ],
+  "optionalSkills": [
+    "go-testing",
+    "javascript-testing",
+    "tdd-workflow"
+  ],
+  "tools": [
+    "listFiles",
+    "readFile",
+    "searchFiles",
+    "gitDiff",
+    "gitStatus"
+  ],
+  "providers": [
+    {
+      "id": "ollama",
+      "minContextTokens": 8192
+    },
+    {
+      "id": "claude",
+      "minContextTokens": 32000
+    },
+    {
+      "id": "codex",
+      "minContextTokens": 32000
+    }
+  ],
+  "compatibility": {
+    "harnesses": [
+      "mastra",
+      "claude-code",
+      "codex",
+      "qwen"
+    ]
+  },
+  "output": {
+    "kind": "findings",
+    "maxFindings": 20
+  },
+  "guidance": [
+    "For each test ask which implementation change would make it fail.",
+    "Flag existence-only assertions and mocks that replace the boundary under test.",
+    "Check that parallel code paths each have their own assertion.",
+    "Propose tests; do not write or run them."
+  ],
+  "escalation": {
+    "onInvalidOutput": "fail",
+    "onUncertain": "report-unknown",
+    "onProviderUnavailable": "fail",
+    "handoff": "Rank gaps by risk and name the single test to add first."
+  },
+  "limits": {
+    "maxSteps": 24,
+    "timeoutMs": 600000,
+    "maxOutputBytes": 16384
+  },
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [
+      {
+        "path": "agents/pr-test-analyzer.md",
+        "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29"
+      }
+    ],
+    "license": "MIT",
+    "notes": "Role boundaries and output contract are original to this repository; only the role idea is adapted. No ECC prompt text is copied."
+  },
+  "scenarios": [
+    {
+      "id": "pr-test-analyzer-handles-0",
+      "task": {
+        "language": "go",
+        "taskType": "review",
+        "text": "In scope review task for PR Test Analyzer."
+      },
+      "shouldHandle": true
+    },
+    {
+      "id": "pr-test-analyzer-declines-1",
+      "task": {
+        "language": "go",
+        "taskType": "plan",
+        "text": "Out of scope plan task for PR Test Analyzer."
+      },
+      "shouldHandle": false
+    }
+  ]
+}

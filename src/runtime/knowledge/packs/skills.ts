@@ -138,3 +138,8 @@ export function evaluateSkillScenarios(manifests: readonly SkillManifest[]): Sce
   }
   return Object.freeze({ total, passed: total - failures.length, failures: Object.freeze(failures) });
 }
+
+/** id -> digest of every ACTIVE promoted skill entry in a catalog (the durable store's `activeCatalog()`), the selector's trust input. */
+export function activeSkillDigests(entries: readonly KnowledgeEntry[]): ReadonlyMap<string, string> {
+  return new Map(entries.filter((e) => e.kind === 'skill' && e.approved).map((e) => [e.id, entryDigest(e)]));
+}

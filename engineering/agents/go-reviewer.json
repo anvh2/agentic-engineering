@@ -1,0 +1,103 @@
+{
+  "schema": "engineering-agent/v1",
+  "id": "go-reviewer",
+  "version": "1.0.0",
+  "name": "Go Reviewer",
+  "responsibility": "Review Go changes for error handling, context propagation, goroutine lifecycles, package boundaries and test quality.",
+  "rationale": "Go delegation is enabled for local workers, so an independent Go-specific reviewer is the check on their output.",
+  "taskTypes": [
+    "review"
+  ],
+  "languages": [
+    "go"
+  ],
+  "skills": [
+    "go-engineering",
+    "go-testing"
+  ],
+  "optionalSkills": [
+    "error-handling-review",
+    "distributed-systems-invariants"
+  ],
+  "tools": [
+    "listFiles",
+    "readFile",
+    "searchFiles",
+    "gitDiff",
+    "gitStatus"
+  ],
+  "providers": [
+    {
+      "id": "ollama",
+      "minContextTokens": 8192
+    },
+    {
+      "id": "claude",
+      "minContextTokens": 32000
+    },
+    {
+      "id": "codex",
+      "minContextTokens": 32000
+    }
+  ],
+  "compatibility": {
+    "harnesses": [
+      "mastra",
+      "claude-code",
+      "codex",
+      "qwen"
+    ]
+  },
+  "output": {
+    "kind": "findings",
+    "maxFindings": 20
+  },
+  "guidance": [
+    "Verify every error is handled or propagated with context.",
+    "Check that each goroutine has an owner and an exit condition.",
+    "Compare the diff with the approved design and the allowed files.",
+    "Do not request edits to tests that the worker is forbidden to change."
+  ],
+  "escalation": {
+    "onInvalidOutput": "fail",
+    "onUncertain": "report-unknown",
+    "onProviderUnavailable": "fail",
+    "handoff": "Mark anything outside Go or outside the diff as out of scope rather than guessing."
+  },
+  "limits": {
+    "maxSteps": 24,
+    "timeoutMs": 600000,
+    "maxOutputBytes": 16384
+  },
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [
+      {
+        "path": "agents/go-reviewer.md",
+        "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29"
+      }
+    ],
+    "license": "MIT",
+    "notes": "Role boundaries and output contract are original to this repository; only the role idea is adapted. No ECC prompt text is copied."
+  },
+  "scenarios": [
+    {
+      "id": "go-reviewer-handles-0",
+      "task": {
+        "language": "go",
+        "taskType": "review",
+        "text": "In scope review task for Go Reviewer."
+      },
+      "shouldHandle": true
+    },
+    {
+      "id": "go-reviewer-declines-1",
+      "task": {
+        "language": "js",
+        "taskType": "review",
+        "text": "Out of scope review task for Go Reviewer."
+      },
+      "shouldHandle": false
+    }
+  ]
+}
