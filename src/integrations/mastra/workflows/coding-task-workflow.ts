@@ -9,6 +9,7 @@ import { createOllamaProvider } from '../../../workers/providers/ollama.ts';
 import { defaultProviderRegistry } from '../../../workers/providers/default.ts';
 import { UnknownProviderError, type ProviderRegistry } from '../../../workers/providers/registry.ts';
 import { DEFAULT_PROVIDER_ID, allowedProvidersFromEnv, authorizeProvider } from '../../../runtime/execution/worker-provider.ts';
+import type { ApprovalVerifier } from '../../../runtime/execution/design-approval.ts';
 import { delegationRequestSchema, executeDelegation, languageOf, routeTask, workerAgentIdFor, type EngineeringResult } from '../../../runtime/execution/delegation.ts';
 import type { RunCodingTaskOptions, WorkerLike } from '../../../runtime/execution/coding-task-runner.ts';
 import { phaseOf, type CodingPhase, type PhaseUpdate } from '../../../runtime/execution/coding-task-status.ts';
@@ -93,6 +94,11 @@ export interface CodingTaskWorkflowDeps {
   /** The operator's allow-list, read at run time (default: AGENTIC_ALLOW_PROVIDERS of THIS process, i.e. the Mastra server's). */
   allowProviders?: () => readonly string[];
   runOptions?: Pick<RunCodingTaskOptions, 'modelTimeoutMs' | 'runtimeRetryDelayMs'>;
+  /**
+   * Verifies an attached approvedDesign against the runtime's durable approval records. Default: deny all. The workflow input
+   * is reachable by any local caller of the Mastra API, so a design in it is never trusted on its own `approvalRef`.
+   */
+  approvals?: ApprovalVerifier;
 }
 
 const NEXT_ACTION: Record<EngineeringResult['status'], string> = {
@@ -185,7 +191,7 @@ export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
     execute: async ({ inputData, state, setState, writer }) => {
       const taskId = inputData.contract?.taskId ?? 'unknown';
       await publish({ setState, writer }, taskId, { phase: 'preparing', detail: 'validating contract and routing' }, state);
-      const route = await routeTask(inputData, inputData.repository);
+      const route = await routeTask(inputData, inputData.repository, undefined, { approvals: deps.approvals });
       return {
         taskId,
         repository: inputData.repository,
@@ -267,6 +273,7 @@ export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
         worker,
         artifactDir,
         trace,
+        approvals: deps.approvals,
         modelLabel: providerWorker ? undefined : (process.env.OLLAMA_MODEL ?? 'qwen3:8b'), // a provider labels itself (provider:model)
         runOptions: { modelTimeoutMs: 900_000, ...deps.runOptions, signal: abortSignal, runId }, // the run's own id owns its model permits
       });
