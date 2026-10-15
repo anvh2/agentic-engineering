@@ -41,7 +41,8 @@ CREATE TRIGGER IF NOT EXISTS engineering_session_events_no_delete
 `;
 
 export class DurableEngineeringKnowledge implements SessionObservationStore {
-  constructor(private readonly db: DatabaseSync) { db.exec(SQL); }
+  private readonly db: DatabaseSync;
+  constructor(db: DatabaseSync) { this.db = db; db.exec(SQL); }
 
   /** Proposed learned knowledge is never promoted without a trusted authorization callback. */
   async promote(input: CandidateLesson, authority: PromotionAuthority): Promise<void> {
