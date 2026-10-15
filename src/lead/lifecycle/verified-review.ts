@@ -222,10 +222,14 @@ export async function verifyReview(deps: VerifiedReviewDeps, taskId: string): Pr
 
       // The pinned engineering context the worker consumed: self-consistent, and the same one result.json and every attempt name.
       // The expected fingerprint is recomputed from the task contract the scheduler persisted, never from the worker's own artifacts.
-      const knowledgeContract = task.spec.request?.contract as (typeof task.spec.request.contract & {knowledge?: {ids:string[];catalogDigest:string}}) | undefined;
-      const selection = knowledgeContract?.knowledge && deps.knowledgeCatalog?.catalogDigest === knowledgeContract.knowledge.catalogDigest
-        ? deps.knowledgeCatalog.resolve({language: knowledgeLanguageForFiles(knowledgeContract.allowedFiles)!,ids:knowledgeContract.knowledge.ids})
-        : undefined;
+      const knowledgeContract = task.spec.request?.contract as ({ allowedFiles: string[]; knowledge?: {ids:string[];catalogDigest:string} }) | undefined;
+      let selection;
+      try {
+        const lang = knowledgeContract && knowledgeLanguageForFiles(knowledgeContract.allowedFiles);
+        if (knowledgeContract?.knowledge && lang && deps.knowledgeCatalog?.catalogDigest === knowledgeContract.knowledge.catalogDigest)
+          selection = deps.knowledgeCatalog.resolve({language:lang,ids:knowledgeContract.knowledge.ids});
+        if (selection?.omitted.length) selection = undefined;
+      } catch { selection = undefined; }
       const expected = knowledgeContract?.knowledge && !selection ? undefined : expectedEngineeringContext(task.spec.request?.contract, verifiedApproval, selection);
       const declared = await declaredContextFingerprint(dir);
       const snapshotRaw = await readFile(join(dir, ENGINEERING_CONTEXT_ARTIFACT), 'utf8').catch(() => undefined);
