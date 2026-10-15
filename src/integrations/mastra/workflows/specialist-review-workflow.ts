@@ -239,7 +239,15 @@ export function createSpecialistReviewWorkflow(deps: SpecialistReviewDeps = {}) 
             await publish({ setState }, { phase: 'failed', specialistId: manifest.id, detail: status });
             return ended(status, [`${status.toLowerCase()}: ${String((err as Error)?.message ?? err).slice(0, 300)}`], { inferenceCalls: calls, usage, toolCalls: [...toolTotals].map(([tool, count]) => ({ tool, count })), elapsedMs: Date.now() - started });
           }
+          // One generate() can make several model calls (one per step); cost accounting counts model calls, not invocations.
+          calls += Math.max(0, (result.steps?.length ?? 1) - 1);
           for (const { tool, count } of countToolCalls(result)) toolTotals.set(tool, (toolTotals.get(tool) ?? 0) + count);
+          // Mastra can return normally after an abort with whatever text it had; an aborted run is never a report.
+          if (signal.aborted) {
+            const status: ReviewStatus = abortSignal?.aborted ? 'CANCELED' : 'TIMEOUT';
+            await publish({ setState }, { phase: 'failed', specialistId: manifest.id, detail: status });
+            return ended(status, [`${status.toLowerCase()}: the run was aborted before a complete reply`], { inferenceCalls: calls, usage, toolCalls: [...toolTotals].map(([tool, count]) => ({ tool, count })), elapsedMs: Date.now() - started });
+          }
           usage = {
             inputTokens: sumNullable(usage.inputTokens, numberOrNull(result.usage?.inputTokens ?? result.usage?.promptTokens)),
             outputTokens: sumNullable(usage.outputTokens, numberOrNull(result.usage?.outputTokens ?? result.usage?.completionTokens)),
