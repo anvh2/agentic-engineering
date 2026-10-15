@@ -7,30 +7,84 @@
   "category": "quality",
   "provenance": {
     "origin": "ecc-adapted",
-    "sources": [{ "path": "agents/pr-test-analyzer.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "skills/test-collaboration/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "sources": [
+      {
+        "path": "agents/pr-test-analyzer.md",
+        "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29"
+      },
+      {
+        "path": "skills/test-collaboration/SKILL.md",
+        "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29"
+      }
+    ],
     "license": "MIT",
     "notes": "Encodes this project's rule that a passing test must demonstrate a behavior, not the existence of a definition."
   },
   "activation": {
-    "languages": ["common"],
-    "taskTypes": ["review", "test", "evaluate"],
-    "keywords": ["test coverage", "test quality", "assertions", "mocked", "flaky", "weak test", "untested", "negative test", "test review"],
+    "languages": [
+      "common"
+    ],
+    "taskTypes": [
+      "review",
+      "test",
+      "evaluate"
+    ],
+    "keywords": [
+      "test coverage",
+      "test quality",
+      "assertions",
+      "flaky",
+      "weak test",
+      "untested",
+      "negative test",
+      "test review",
+      "mocked boundary",
+      "prove behavior"
+    ],
     "priority": 60
   },
   "inputs": [
-    { "name": "diff", "description": "The change and its tests.", "required": true },
-    { "name": "criteria", "description": "Acceptance criteria the tests should prove.", "required": false }
+    {
+      "name": "diff",
+      "description": "The change and its tests.",
+      "required": true
+    },
+    {
+      "name": "criteria",
+      "description": "Acceptance criteria the tests should prove.",
+      "required": false
+    }
   ],
   "outputs": [
-    { "name": "gaps", "description": "Behaviors or failure paths with no meaningful test." },
-    { "name": "weak-tests", "description": "Tests that cannot fail, with the reason." }
+    {
+      "name": "gaps",
+      "description": "Behaviors or failure paths with no meaningful test."
+    },
+    {
+      "name": "weak-tests",
+      "description": "Tests that cannot fail, with the reason."
+    }
   ],
   "workflow": [
-    { "step": "Map each acceptance criterion and each changed branch to a test; list the ones with none.", "check": "The map names test functions you read." },
-    { "step": "For each test ask what change to the implementation would make it fail; if none, it is weak.", "check": "Tests that assert only length, presence or a static name are flagged." },
-    { "step": "Find mocks that replace the exact boundary being tested and tests that restate the implementation.", "check": "The mocked boundary is not the thing under test." },
-    { "step": "Look for missing negative, boundary, concurrency and cancellation cases.", "check": "At least the documented failure modes have a test." },
-    { "step": "Rank gaps by the risk of the untested behavior and propose the single most valuable test to add." }
+    {
+      "step": "Map each acceptance criterion and each changed branch to a test; list the ones with none.",
+      "check": "The map names test functions you read."
+    },
+    {
+      "step": "For each test ask what change to the implementation would make it fail; if none, it is weak.",
+      "check": "Tests that assert only length, presence or a static name are flagged."
+    },
+    {
+      "step": "Find mocks that replace the exact boundary being tested and tests that restate the implementation.",
+      "check": "The mocked boundary is not the thing under test."
+    },
+    {
+      "step": "Look for missing negative, boundary, concurrency and cancellation cases.",
+      "check": "At least the documented failure modes have a test."
+    },
+    {
+      "step": "Rank gaps by the risk of the untested behavior and propose the single most valuable test to add."
+    }
   ],
   "constraints": [
     "Read-only: propose tests, do not write or run them.",
@@ -38,18 +92,61 @@
     "A flaky test is a finding, not something to retry until green."
   ],
   "examples": [
-    { "title": "Existence test", "situation": "A test asserts the agent list has 16 entries.", "guidance": "Flag it as weak: it passes if every agent is broken. Propose a test that executes one agent through its workflow with a scripted model." }
+    {
+      "title": "Existence test",
+      "situation": "A test asserts the agent list has 16 entries.",
+      "guidance": "Flag it as weak: it passes if every agent is broken. Propose a test that executes one agent through its workflow with a scripted model."
+    }
   ],
   "verification": [
     "Each finding names a test or a missing test and the behavior at risk.",
     "Weak tests are justified by the mutation that would not fail them."
   ],
-  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "compatibility": {
+    "harnesses": [
+      "mastra",
+      "claude-code",
+      "codex",
+      "qwen"
+    ]
+  },
   "dependsOn": [],
   "scenarios": [
-    { "id": "review-tests", "task": { "language": "go", "taskType": "review", "text": "Review the test quality: weak test assertions and untested failure paths." }, "selected": true },
-    { "id": "evaluate-coverage", "task": { "language": "js", "taskType": "evaluate", "text": "Evaluate whether the mocked boundary makes the test coverage meaningless; add a negative test." }, "selected": true },
-    { "id": "implement-no", "task": { "language": "go", "taskType": "implement", "text": "Fix the untested path." }, "selected": false },
-    { "id": "review-no-keyword", "task": { "language": "go", "taskType": "review", "text": "Review the logging format." }, "selected": false }
+    {
+      "id": "review-tests",
+      "task": {
+        "language": "go",
+        "taskType": "review",
+        "text": "Review the test quality: weak test assertions and untested failure paths."
+      },
+      "selected": true
+    },
+    {
+      "id": "evaluate-coverage",
+      "task": {
+        "language": "js",
+        "taskType": "evaluate",
+        "text": "Evaluate whether the mocked boundary makes the test coverage meaningless; add a negative test."
+      },
+      "selected": true
+    },
+    {
+      "id": "implement-no",
+      "task": {
+        "language": "go",
+        "taskType": "implement",
+        "text": "Fix the untested path."
+      },
+      "selected": false
+    },
+    {
+      "id": "review-no-keyword",
+      "task": {
+        "language": "go",
+        "taskType": "review",
+        "text": "Review the logging format."
+      },
+      "selected": false
+    }
   ]
 }

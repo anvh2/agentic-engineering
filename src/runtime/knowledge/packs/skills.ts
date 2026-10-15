@@ -67,8 +67,30 @@ export interface SkillRequest { language: TaskLanguage; taskType: TaskType; text
 export type SkillOmission = Readonly<{ id: string; reason: 'not-promoted' | 'stale-or-revoked' | 'language' | 'task-type' | 'no-keyword' | 'missing-dependency' | 'budget' | 'limit' }>;
 export interface SkillSelection { selected: readonly string[]; omitted: readonly SkillOmission[]; bytes: number; scores: Readonly<Record<string, number>> }
 
-const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const mentions = (haystack: string, keyword: string) => new RegExp(`(^|[^a-z0-9])${escape(keyword)}($|[^a-z0-9])`).test(haystack);
+/** Light suffix stemming so "swallows", "swallowed" and "swallowing" meet. Deliberately simple and deterministic. */
+export function stem(word: string): string {
+  let w = word.toLowerCase();
+  if (w.length <= 3) return w;
+  if (w.endsWith('ies') && w.length > 4) w = `${w.slice(0, -3)}y`;
+  else if (w.endsWith('ing') && w.length > 5) w = w.slice(0, -3);
+  else if (w.endsWith('ed') && w.length > 4) w = w.slice(0, -2);
+  else if (w.endsWith('es') && w.length > 4) w = w.slice(0, -2);
+  else if (w.endsWith('s') && !w.endsWith('ss') && w.length > 3) w = w.slice(0, -1);
+  if (w.endsWith('e') && w.length > 4) w = w.slice(0, -1);
+  return w;
+}
+const tokens = (text: string): string[] => text.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+const containsRun = (haystack: readonly string[], needle: readonly string[]): boolean => {
+  if (!needle.length) return false;
+  for (let i = 0; i + needle.length <= haystack.length; i++) if (needle.every((t, j) => haystack[i + j] === t)) return true;
+  return false;
+};
+export type Matching = 'exact' | 'stemmed';
+/** Whether `keyword` (one or more words) appears in the already-tokenized text as a contiguous run of whole words. */
+function mentions(haystack: readonly string[], keyword: string, matching: Matching): boolean {
+  const needle = tokens(keyword);
+  return containsRun(matching === 'stemmed' ? haystack.map(stem) : haystack, matching === 'stemmed' ? needle.map(stem) : needle);
+}
 const MAX_TEXT = 4_000;
 
 /**
@@ -79,11 +101,11 @@ export function selectSkills(
   manifests: readonly SkillManifest[],
   active: ReadonlyMap<string, string>,
   request: SkillRequest,
-  options: { budgetBytes?: number; maxSkills?: number } = {},
+  options: { budgetBytes?: number; maxSkills?: number; matching?: Matching } = {},
 ): SkillSelection {
   const budget = options.budgetBytes ?? 4_000, limit = options.maxSkills ?? 6;
   if (!Number.isSafeInteger(budget) || budget < 0 || budget > 64_000 || !Number.isSafeInteger(limit) || limit < 0 || limit > 32) throw new Error('skills: invalid selection budget');
-  const haystack = request.text.slice(0, MAX_TEXT).toLowerCase();
+  const haystack = tokens(request.text.slice(0, MAX_TEXT)), matching = options.matching ?? 'stemmed';
   const omitted: SkillOmission[] = [];
   const scores: Record<string, number> = {};
   const eligible: SkillManifest[] = [];
@@ -93,7 +115,7 @@ export function selectSkills(
     if (activeDigest !== promotedDigestOf(m)) { omitted.push({ id: m.id, reason: 'stale-or-revoked' }); continue; }
     if (!m.activation.languages.includes('common') && !m.activation.languages.includes(request.language)) { omitted.push({ id: m.id, reason: 'language' }); continue; }
     if (!m.activation.taskTypes.includes(request.taskType)) { omitted.push({ id: m.id, reason: 'task-type' }); continue; }
-    const hits = m.activation.keywords.filter((k) => mentions(haystack, k)).length;
+    const hits = m.activation.keywords.filter((k) => mentions(haystack, k, matching)).length;
     if (hits === 0) { omitted.push({ id: m.id, reason: 'no-keyword' }); continue; }
     scores[m.id] = m.activation.priority + 10 * hits;
     eligible.push(m);

@@ -7,30 +7,83 @@
   "category": "architecture",
   "provenance": {
     "origin": "ecc-adapted",
-    "sources": [{ "path": "skills/contract-first/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "skills/api-design/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "sources": [
+      {
+        "path": "skills/contract-first/SKILL.md",
+        "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29"
+      },
+      {
+        "path": "skills/api-design/SKILL.md",
+        "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29"
+      }
+    ],
     "license": "MIT",
     "notes": "Specialized for this repository where contracts are zod schemas and JSON envelopes; the same workflow applies to OpenAPI or protobuf."
   },
   "activation": {
-    "languages": ["common"],
-    "taskTypes": ["design", "implement", "review", "plan"],
-    "keywords": ["contract", "api design", "schema", "openapi", "json schema", "envelope", "wire format", "backward compatible", "versioned api"],
+    "languages": [
+      "common"
+    ],
+    "taskTypes": [
+      "design",
+      "implement",
+      "review",
+      "plan"
+    ],
+    "keywords": [
+      "contract",
+      "api design",
+      "openapi",
+      "json schema",
+      "envelope",
+      "wire format",
+      "backward compatible",
+      "versioned api"
+    ],
     "priority": 58
   },
   "inputs": [
-    { "name": "boundary", "description": "The interface between two components or clients.", "required": true },
-    { "name": "consumers", "description": "Known consumers and their versions.", "required": false }
+    {
+      "name": "boundary",
+      "description": "The interface between two components or clients.",
+      "required": true
+    },
+    {
+      "name": "consumers",
+      "description": "Known consumers and their versions.",
+      "required": false
+    }
   ],
   "outputs": [
-    { "name": "contract", "description": "The schema or interface definition that is the single source of truth." },
-    { "name": "conformance", "description": "Tests proving provider and consumers conform to it." }
+    {
+      "name": "contract",
+      "description": "The schema or interface definition that is the single source of truth."
+    },
+    {
+      "name": "conformance",
+      "description": "Tests proving provider and consumers conform to it."
+    }
   ],
   "workflow": [
-    { "step": "Find or create the single contract definition for the boundary; point every other description at it.", "check": "There is exactly one authoritative definition." },
-    { "step": "Specify required and optional fields, error shapes, limits, and what an unknown field means.", "check": "Unknown fields are explicitly rejected or explicitly ignored, never accidental." },
-    { "step": "Decide the compatibility rule: additive-only within a version, version bump otherwise.", "check": "Removals and renames are treated as breaking." },
-    { "step": "Write conformance tests from the contract for the provider and at least one consumer.", "check": "A test fails when a required field is dropped." },
-    { "step": "Implement against the contract and rerun the conformance tests; update the contract first if the design changes." }
+    {
+      "step": "Find or create the single contract definition for the boundary; point every other description at it.",
+      "check": "There is exactly one authoritative definition."
+    },
+    {
+      "step": "Specify required and optional fields, error shapes, limits, and what an unknown field means.",
+      "check": "Unknown fields are explicitly rejected or explicitly ignored, never accidental."
+    },
+    {
+      "step": "Decide the compatibility rule: additive-only within a version, version bump otherwise.",
+      "check": "Removals and renames are treated as breaking."
+    },
+    {
+      "step": "Write conformance tests from the contract for the provider and at least one consumer.",
+      "check": "A test fails when a required field is dropped."
+    },
+    {
+      "step": "Implement against the contract and rerun the conformance tests; update the contract first if the design changes."
+    }
   ],
   "constraints": [
     "Do not change a published contract in place; version it.",
@@ -38,18 +91,61 @@
     "Do not widen a task's allowed files to edit consumers; report them as follow-up work."
   ],
   "examples": [
-    { "title": "New optional field", "situation": "An envelope gains an optional field.", "guidance": "Add it to the schema as optional, add a conformance test with and without it, and keep older consumers passing." }
+    {
+      "title": "New optional field",
+      "situation": "An envelope gains an optional field.",
+      "guidance": "Add it to the schema as optional, add a conformance test with and without it, and keep older consumers passing."
+    }
   ],
   "verification": [
     "Provider and consumer tests both derive from the contract definition.",
     "A removed or renamed field is caught by a failing test."
   ],
-  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "compatibility": {
+    "harnesses": [
+      "mastra",
+      "claude-code",
+      "codex",
+      "qwen"
+    ]
+  },
   "dependsOn": [],
   "scenarios": [
-    { "id": "define-contract", "task": { "language": "js", "taskType": "design", "text": "Define the contract and json schema for the new envelope, backward compatible." }, "selected": true },
-    { "id": "review-api", "task": { "language": "go", "taskType": "review", "text": "Review the api design for the versioned api and wire format." }, "selected": true },
-    { "id": "debug-no", "task": { "language": "go", "taskType": "debug", "text": "Why does the contract test crash with the schema?" }, "selected": false },
-    { "id": "no-contract-words", "task": { "language": "go", "taskType": "design", "text": "Pick a color for the dashboard." }, "selected": false }
+    {
+      "id": "define-contract",
+      "task": {
+        "language": "js",
+        "taskType": "design",
+        "text": "Define the contract and json schema for the new envelope, backward compatible."
+      },
+      "selected": true
+    },
+    {
+      "id": "review-api",
+      "task": {
+        "language": "go",
+        "taskType": "review",
+        "text": "Review the api design for the versioned api and wire format."
+      },
+      "selected": true
+    },
+    {
+      "id": "debug-no",
+      "task": {
+        "language": "go",
+        "taskType": "debug",
+        "text": "Why does the contract test crash with the schema?"
+      },
+      "selected": false
+    },
+    {
+      "id": "no-contract-words",
+      "task": {
+        "language": "go",
+        "taskType": "design",
+        "text": "Pick a color for the dashboard."
+      },
+      "selected": false
+    }
   ]
 }
