@@ -36,7 +36,7 @@ export function consolidateReviewFindings(findings:readonly ReviewFinding[]):rea
 export interface FindingVerification {
  key:string; verifierId:string; verdict:'confirmed'|'refuted'|'inconclusive'; evidence:string;
 }
-export function decideReview(findings:readonly ConsolidatedFinding[],verifications:readonly FindingVerification[]):{
+export function decideReview(findings:readonly ConsolidatedFinding[],verifications:readonly FindingVerification[], trustedVerifierIds:readonly string[]=[]):{
  canApprove:boolean;blocking:readonly string[];unresolved:readonly string[];
 }{
  const byKey=new Map<string,FindingVerification>();
@@ -49,7 +49,7 @@ export function decideReview(findings:readonly ConsolidatedFinding[],verificatio
  for(const f of findings){
   if(f.status==='advisory')continue;
   const v=byKey.get(f.key);
-  if(!v||f.reviewerIds.includes(v.verifierId)||v.verdict==='inconclusive')
+  if(!v||!trustedVerifierIds.includes(v.verifierId)||f.reviewerIds.includes(v.verifierId)||v.verdict==='inconclusive')
     unresolved.push(f.key);
   else if(v.verdict==='confirmed')blocking.push(f.key);
  }
