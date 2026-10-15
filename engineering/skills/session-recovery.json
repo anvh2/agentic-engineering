@@ -1,0 +1,53 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "session-recovery",
+  "version": "1.0.0",
+  "title": "Session recovery from verified checkpoints",
+  "summary": "Resume interrupted work from durable, runtime-verified state, never from a transcript or a model's memory, and never replay a completed side effect.",
+  "category": "agent-engineering",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "hooks/memory-persistence", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "skills/unified-memory/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "ECC persists session summaries through hooks. Here the durable scheduler state is the single source of truth and summaries are projections of it."
+  },
+  "activation": {
+    "languages": ["common"],
+    "taskTypes": ["operate", "plan", "debug", "review"],
+    "keywords": ["resume", "checkpoint", "interrupted", "recover", "restart", "compaction", "session state", "continue the task", "crashed", "pre-compact"],
+    "priority": 64
+  },
+  "inputs": [
+    { "name": "checkpoint", "description": "The latest durable checkpoint and its digest.", "required": true }
+  ],
+  "outputs": [
+    { "name": "resume-plan", "description": "What is done and verified, what is pending, what is unverified, and the next safe step." }
+  ],
+  "workflow": [
+    { "step": "Load the latest checkpoint from durable storage and verify its digest against the source evidence.", "check": "A checkpoint whose digest does not verify is not used." },
+    { "step": "Classify each step: completed and verified, completed but unverified, in flight, or not started.", "check": "Model claims are listed as unverified, never as completed." },
+    { "step": "For an in-flight step, inspect the repository and records to learn what actually happened before deciding anything.", "check": "The decision is based on state, not on the last message." },
+    { "step": "Never re-run a step whose side effect is recorded as done; resume at the first step that is not.", "check": "Replay is a no-op." },
+    { "step": "Write the next checkpoint with a sequence number and a fingerprint so replays are idempotent." }
+  ],
+  "constraints": [
+    "Do not copy transcripts or credentials into checkpoints.",
+    "Compaction must be lossless for durable state: if it does not fit, fail rather than truncate.",
+    "An ambiguous in-flight state is escalated to the Lead, not guessed."
+  ],
+  "examples": [
+    { "title": "Crash mid-edit", "situation": "A worker died after writing one of two files.", "guidance": "Compare the working tree with the recorded hashes, restore to the recorded state, and re-dispatch as a new run." }
+  ],
+  "verification": [
+    "The resume plan separates verified, unverified and pending work.",
+    "No completed side effect appears in the pending list."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "resume-after-crash", "task": { "language": "go", "taskType": "operate", "text": "Resume the interrupted task from the checkpoint after the restart; do not replay done steps." }, "selected": true },
+    { "id": "debug-compaction", "task": { "language": "ts", "taskType": "debug", "text": "The pre-compact summary lost the session state; recover and continue the task." }, "selected": true },
+    { "id": "design-no", "task": { "language": "go", "taskType": "design", "text": "Design the resume checkpoint." }, "selected": false },
+    { "id": "operate-no-keyword", "task": { "language": "go", "taskType": "operate", "text": "Book a meeting room." }, "selected": false }
+  ]
+}

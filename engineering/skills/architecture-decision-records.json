@@ -1,0 +1,55 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "architecture-decision-records",
+  "version": "1.0.0",
+  "title": "Architecture decision records",
+  "summary": "Record consequential decisions with context, alternatives, consequences and revision history so a reset session can recover the decision and its reason.",
+  "category": "architecture",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "skills/architecture-decision-records/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "skills/recursive-decision-ledger/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "Adds the distinction between an accepted decision and an execution approval: an ADR never authorizes a worker to run."
+  },
+  "activation": {
+    "languages": ["common"],
+    "taskTypes": ["design", "document", "plan", "review"],
+    "keywords": ["adr", "decision record", "architecture decision", "supersede", "rationale", "alternatives considered", "decision log"],
+    "priority": 55
+  },
+  "inputs": [
+    { "name": "decision", "description": "The decision being taken or reviewed.", "required": true },
+    { "name": "existing-adrs", "description": "ADRs already in the repository that the decision touches.", "required": false }
+  ],
+  "outputs": [
+    { "name": "adr", "description": "A record with id, status, context, decision, alternatives, consequences and source reference." },
+    { "name": "supersession", "description": "Which earlier records it replaces, if any." }
+  ],
+  "workflow": [
+    { "step": "Search the repository for existing ADRs covering the same question before writing a new one.", "check": "Duplicates are linked or superseded, never contradicted silently." },
+    { "step": "State the context as forces and constraints that were true at the time, not as a story of the solution.", "check": "Someone with no history can see why the decision was needed." },
+    { "step": "Record the decision in one sentence, then at least two alternatives with the reason each was not chosen.", "check": "Alternatives include doing nothing or doing less." },
+    { "step": "List consequences, both good and bad, and the signal that would make the team revisit the decision.", "check": "Negative consequences are not omitted." },
+    { "step": "Set status to proposed until the owner accepts it; link superseded records and keep their text." }
+  ],
+  "constraints": [
+    "An accepted ADR is a record of intent. It is not an approval for a worker to execute a task.",
+    "Never edit an accepted record's decision text; supersede it with a new revision.",
+    "Do not record secrets or customer data in an ADR."
+  ],
+  "examples": [
+    { "title": "Replace polling", "situation": "The team replaces polling with an event stream.", "guidance": "Create a new ADR marked as superseding the polling decision, keep the old one, and list the migration consequence." }
+  ],
+  "verification": [
+    "The record has status, context, decision, alternatives, consequences and a source reference.",
+    "A superseded record remains readable and points to its replacement."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "write-adr", "task": { "language": "go", "taskType": "document", "text": "Write an ADR with the decision record, alternatives considered and the rationale." }, "selected": true },
+    { "id": "supersede-adr", "task": { "language": "js", "taskType": "design", "text": "This architecture decision will supersede the old one; update the decision log." }, "selected": true },
+    { "id": "implement-adr", "task": { "language": "go", "taskType": "implement", "text": "Implement the adr decision record parser." }, "selected": false },
+    { "id": "document-no-adr", "task": { "language": "go", "taskType": "document", "text": "Write the README install section." }, "selected": false }
+  ]
+}

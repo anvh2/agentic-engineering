@@ -1,0 +1,56 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "go-engineering",
+  "version": "1.0.0",
+  "title": "Go engineering",
+  "summary": "Write and review idiomatic Go that preserves package boundaries, handles every error, propagates context and stays within the approved design.",
+  "category": "implementation",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "skills/golang-patterns/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "agents/go-reviewer.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "Rewritten around the checks a small bounded worker can follow reliably; stylistic advice that gofmt already enforces is omitted."
+  },
+  "activation": {
+    "languages": ["go"],
+    "taskTypes": ["implement", "review", "refactor", "debug"],
+    "keywords": ["go", "golang", "goroutine", "context", "interface", "package", "error wrapping", "channel", "struct", "gofmt"],
+    "priority": 50
+  },
+  "inputs": [
+    { "name": "files", "description": "The Go files in scope.", "required": true },
+    { "name": "acceptance", "description": "The behavior that must hold when the change is done.", "required": true }
+  ],
+  "outputs": [
+    { "name": "change", "description": "A minimal diff inside the allowed files." },
+    { "name": "notes", "description": "Any boundary, error or concurrency concern found while working." }
+  ],
+  "workflow": [
+    { "step": "Read the target file, its package's other files and the nearest tests before changing anything.", "check": "The change matches the package's existing naming and error style." },
+    { "step": "Make the smallest change that satisfies the acceptance criteria; keep exported signatures stable unless the task says otherwise.", "check": "No unrelated reformatting or renames appear in the diff." },
+    { "step": "Return errors instead of panicking; wrap with %w and add context that names the operation. Never discard an error with the blank identifier unless a comment states why.", "check": "Every call that returns an error is handled." },
+    { "step": "Pass context.Context as the first parameter of anything that blocks or performs I/O, honor cancellation, and never store a context in a struct.", "check": "A cancelled context stops the work." },
+    { "step": "For goroutines and channels, name the owner that closes the channel and the condition that ends each goroutine.", "check": "There is no goroutine without a defined exit." },
+    { "step": "Run gofmt and the approved targeted go test; fix failures in the code, not in the tests." }
+  ],
+  "constraints": [
+    "Do not edit test files or add dependencies unless the task explicitly allows it.",
+    "Do not introduce global mutable state or init-time side effects.",
+    "Stay within the allowed files; report needed changes elsewhere instead of making them."
+  ],
+  "examples": [
+    { "title": "Swallowed error", "situation": "A helper ignores the error from a close call.", "guidance": "Return it (or log it with the operation named) and add a test that forces the failure." }
+  ],
+  "verification": [
+    "gofmt reports no diff and the targeted go test passes.",
+    "No new exported API, dependency or goroutine was added beyond what the acceptance criteria require."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "go-error-context", "task": { "language": "go", "taskType": "implement", "text": "Add context cancellation and error wrapping to this goroutine worker in the package." }, "selected": true },
+    { "id": "go-review", "task": { "language": "go", "taskType": "review", "text": "Review the golang interface and struct changes for channel leaks." }, "selected": true },
+    { "id": "wrong-language", "task": { "language": "js", "taskType": "implement", "text": "Add context cancellation and error wrapping to this goroutine worker." }, "selected": false },
+    { "id": "go-docs-task", "task": { "language": "go", "taskType": "document", "text": "Document the goroutine lifecycle." }, "selected": false }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "brownfield-spec-mining",
+  "version": "1.0.0",
+  "title": "Brownfield specification mining",
+  "summary": "Recover the observable behavior, invariants and test anchors of legacy code so a change can be specified against what the system actually does, not what its comments claim.",
+  "category": "research",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "agents/spec-miner.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "skills/brownfield-retrospective/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "Restated as a read-only workflow whose output is a list of testable statements, each tied to code or an existing test."
+  },
+  "activation": {
+    "languages": ["common"],
+    "taskTypes": ["explore", "plan", "document", "design"],
+    "keywords": ["legacy", "brownfield", "existing behavior", "undocumented", "reverse engineer", "specification", "invariant", "characterization"],
+    "priority": 55
+  },
+  "inputs": [
+    { "name": "target", "description": "The module, function or endpoint whose behavior must be specified.", "required": true },
+    { "name": "change", "description": "The intended change, if known, so the spec can focus on the affected surface.", "required": false }
+  ],
+  "outputs": [
+    { "name": "behavior-list", "description": "Numbered observable behaviors, each with the file and test that evidence it." },
+    { "name": "gaps", "description": "Behaviors with no test and no clear code evidence, ranked by risk for the intended change." }
+  ],
+  "workflow": [
+    { "step": "Identify the public surface of the target: exported symbols, routes, CLI flags, persisted formats and error values.", "check": "The surface is enumerated from code, not from documentation." },
+    { "step": "For each surface element, read the implementation and write one sentence of observable behavior in input-to-output terms, including error and boundary cases.", "check": "Each sentence can be falsified by a test." },
+    { "step": "Find existing tests and map them to the sentences; mark every sentence with no covering test as unpinned.", "check": "Mapping cites test function names you opened." },
+    { "step": "Flag behaviors that look accidental (undocumented defaults, ordering dependence, swallowed errors) and say whether the intended change may legitimately alter them.", "check": "Accidental behavior is labelled as such, not silently preserved or dropped." },
+    { "step": "Recommend characterization tests for unpinned behaviors on the change path, before any implementation starts." }
+  ],
+  "constraints": [
+    "Read-only: describe behavior, never modify the code or run it.",
+    "Do not turn a comment or docstring into a behavior without matching code.",
+    "Keep the mined specification separate from the proposed new behavior."
+  ],
+  "examples": [
+    { "title": "Pagination edge", "situation": "A legacy list endpoint is being changed; no spec exists.", "guidance": "Record what it returns for page zero, an out-of-range page and an empty set, cite the test or note the gap, and recommend characterization tests for the gaps." }
+  ],
+  "verification": [
+    "Every behavior statement cites code or a test.",
+    "Unpinned behaviors on the change path are listed with a recommended test."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "mine-legacy-endpoint", "task": { "language": "go", "taskType": "explore", "text": "Reverse engineer the undocumented behavior of the legacy export function before the rewrite." }, "selected": true },
+    { "id": "characterization", "task": { "language": "js", "taskType": "plan", "text": "We need characterization tests and an invariant list for the existing behavior of the parser." }, "selected": true },
+    { "id": "debug-not-spec", "task": { "language": "go", "taskType": "debug", "text": "Reverse engineer why the legacy loop panics." }, "selected": false },
+    { "id": "greenfield", "task": { "language": "go", "taskType": "plan", "text": "Plan the new endpoint from scratch with a clean schema." }, "selected": false }
+  ]
+}

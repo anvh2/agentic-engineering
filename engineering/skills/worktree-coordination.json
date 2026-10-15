@@ -1,0 +1,54 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "worktree-coordination",
+  "version": "1.0.0",
+  "title": "Worktree and task coordination",
+  "summary": "Split work into dependency-ordered tasks with non-overlapping file ownership, one worktree per task, explicit handoffs and conflict detection before integration.",
+  "category": "agent-engineering",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "scripts/orchestrate-worktrees.js", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "skills/team-agent-orchestration/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "ECC's worktree orchestrator is a script; here only the planning discipline is adopted, and execution stays with the existing scheduler."
+  },
+  "activation": {
+    "languages": ["common"],
+    "taskTypes": ["plan", "operate", "review", "design"],
+    "keywords": ["worktree", "parallel tasks", "task graph", "dag", "file ownership", "merge conflict", "handoff", "decompose", "dependencies between tasks", "integration"],
+    "priority": 60
+  },
+  "inputs": [
+    { "name": "objective", "description": "The objective to split into tasks.", "required": true }
+  ],
+  "outputs": [
+    { "name": "task-graph", "description": "Tasks with acceptance criteria, allowed files, dependencies and owners." },
+    { "name": "conflicts", "description": "File overlaps and ordering hazards." }
+  ],
+  "workflow": [
+    { "step": "Break the objective into tasks small enough to verify independently; write acceptance criteria and allowed files for each.", "check": "Each task has a verifier." },
+    { "step": "Record dependencies as a DAG and reject cycles.", "check": "A valid topological order exists." },
+    { "step": "Detect overlapping allowed files between tasks that could run in parallel; serialize or merge overlapping tasks.", "check": "No two concurrent tasks own the same file." },
+    { "step": "Give every task its own worktree and a named owner; record handoffs and what each receiver must re-verify.", "check": "Ownership is unambiguous at every moment." },
+    { "step": "Before integration, rebase or merge in dependency order and rerun the verifiers on the integrated result." }
+  ],
+  "constraints": [
+    "Do not build a competing scheduler; plans feed the existing one.",
+    "Never touch another session's worktree or force-push.",
+    "A plan does not grant any task additional files."
+  ],
+  "examples": [
+    { "title": "Shared helper", "situation": "Two parallel tasks both need to edit the same helper file.", "guidance": "Serialize them, or extract the helper change as a first task both depend on." }
+  ],
+  "verification": [
+    "The graph is acyclic and file ownership is disjoint for concurrent tasks.",
+    "Integration reruns verifiers on the merged result."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "plan-dag", "task": { "language": "go", "taskType": "plan", "text": "Decompose into parallel tasks as a dag with file ownership and avoid merge conflict in each worktree." }, "selected": true },
+    { "id": "operate-handoff", "task": { "language": "js", "taskType": "operate", "text": "Coordinate the handoff between worktrees and run the integration." }, "selected": true },
+    { "id": "debug-no", "task": { "language": "go", "taskType": "debug", "text": "Worktree problem." }, "selected": false },
+    { "id": "plan-no-keyword", "task": { "language": "go", "taskType": "plan", "text": "Plan the offsite agenda." }, "selected": false }
+  ]
+}

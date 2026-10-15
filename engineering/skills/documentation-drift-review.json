@@ -1,0 +1,54 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "documentation-drift-review",
+  "version": "1.0.0",
+  "title": "Documentation drift review",
+  "summary": "Compare documentation and architecture notes with the code they describe, and flag claims that overstate what is implemented.",
+  "category": "operations",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "skills/docs-governance/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "agents/doc-updater.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "Mirrors an observed failure in this project: documents describing guarantees (shared reviewer context, strict verifier permissions) the code did not yet provide."
+  },
+  "activation": {
+    "languages": ["common"],
+    "taskTypes": ["document", "review"],
+    "keywords": ["documentation", "readme", "docs", "stale", "overstate", "guarantee", "drift", "runbook", "architecture doc"],
+    "priority": 50
+  },
+  "inputs": [
+    { "name": "docs", "description": "Documents to check.", "required": true },
+    { "name": "code", "description": "The code paths they describe.", "required": true }
+  ],
+  "outputs": [
+    { "name": "drift", "description": "Claims not supported by code, code behavior not documented, and stale commands." }
+  ],
+  "workflow": [
+    { "step": "Extract every checkable claim: guarantees, commands, file paths, names, defaults, limits.", "check": "Claims are quoted with their location." },
+    { "step": "Verify each against the code or by checking that the command and path exist; mark verified, contradicted or unverifiable.", "check": "No claim is marked verified without a file reference." },
+    { "step": "Flag claims stronger than the implementation, such as 'always', 'guarantees' or 'prevents' where the code only checks in some paths.", "check": "Absolute words are traced to enforcing code." },
+    { "step": "Separate implemented behavior from proposed or deferred work and make the document say which is which.", "check": "Status labels match reality." },
+    { "step": "Propose minimal edits; do not rewrite unrelated sections." }
+  ],
+  "constraints": [
+    "Do not add stray Markdown beside code; follow the repository's documentation layout.",
+    "Do not describe a smoke test as passed when it was deferred.",
+    "Keep edits within the documents in scope."
+  ],
+  "examples": [
+    { "title": "Overstated guarantee", "situation": "A document says every reviewer receives the pinned design, but one path does not pass it.", "guidance": "Report as contradicted, cite the path, and reword the document or fix the code in a separate task." }
+  ],
+  "verification": [
+    "Each finding quotes the claim and cites the contradicting or missing code.",
+    "Commands in the document were checked to exist."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "doc-drift", "task": { "language": "go", "taskType": "review", "text": "Check the docs for stale claims that overstate the guarantee versus the code." }, "selected": true },
+    { "id": "update-readme", "task": { "language": "js", "taskType": "document", "text": "Update the readme and runbook after the change." }, "selected": true },
+    { "id": "implement-no", "task": { "language": "go", "taskType": "implement", "text": "Update the readme parser." }, "selected": false },
+    { "id": "document-no-keyword", "task": { "language": "go", "taskType": "document", "text": "Draft the quarterly budget." }, "selected": false }
+  ]
+}

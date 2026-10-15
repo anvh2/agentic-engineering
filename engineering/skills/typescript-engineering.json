@@ -1,0 +1,54 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "typescript-engineering",
+  "version": "1.0.0",
+  "title": "TypeScript engineering",
+  "summary": "Review and design strictly typed TypeScript with runtime validation at trust boundaries. Read-only guidance: TypeScript delegation to workers stays disabled.",
+  "category": "implementation",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "agents/typescript-reviewer.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "rules/typescript/coding-style.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "Specialist and Lead use only. This repository runs TypeScript directly under Node strip-only mode, so enums, namespaces and parameter properties are called out."
+  },
+  "activation": {
+    "languages": ["ts"],
+    "taskTypes": ["review", "design", "plan", "refactor"],
+    "keywords": ["typescript", "strict", "type safety", "generics", "zod", "strip-only", "erasable", "tsconfig", "any type", "type guard"],
+    "priority": 52
+  },
+  "inputs": [
+    { "name": "files", "description": "TypeScript files under review.", "required": true },
+    { "name": "boundary", "description": "Where untrusted data enters the code under review.", "required": false }
+  ],
+  "outputs": [
+    { "name": "findings", "description": "Typing, validation and runtime-compatibility findings with the line that proves each." }
+  ],
+  "workflow": [
+    { "step": "Check that types describe runtime reality: any, unchecked assertions (as X) and non-null assertions on external data are findings.", "check": "Every assertion on external data is justified by a validator." },
+    { "step": "Find trust boundaries (request bodies, files, env, model output) and confirm each is parsed with a runtime schema such as zod before use.", "check": "No external value flows to a sensitive sink as an unvalidated type." },
+    { "step": "Confirm the code runs under Node strip-only TypeScript: no enums, namespaces or constructor parameter properties; imports use explicit .ts extensions.", "check": "tsc with erasableSyntaxOnly accepts the file." },
+    { "step": "Look for exhaustive handling of unions (switch with a never check) and for errors typed as unknown rather than any.", "check": "Adding a union member would fail the build." },
+    { "step": "Report findings by severity; do not propose runtime-affecting rewrites outside the reviewed scope." }
+  ],
+  "constraints": [
+    "TypeScript implementation is not delegated to local workers; this skill is for analysis and design.",
+    "Do not recommend loosening strictness to make a build pass.",
+    "Findings are advisory input to review, not approval."
+  ],
+  "examples": [
+    { "title": "Cast on parsed JSON", "situation": "JSON.parse(text) as Config is used directly.", "guidance": "Replace with a zod parse that rejects unknown fields and report the unvalidated boundary as a finding." }
+  ],
+  "verification": [
+    "Each finding cites a file and line.",
+    "The typecheck command named in the repository passes for any suggested snippet."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "ts-review", "task": { "language": "ts", "taskType": "review", "text": "Review the typescript module for any type use and missing zod validation at the boundary." }, "selected": true },
+    { "id": "ts-strip-only", "task": { "language": "ts", "taskType": "refactor", "text": "Remove enums so the file works under strip-only mode and erasable syntax." }, "selected": true },
+    { "id": "ts-implement-no", "task": { "language": "ts", "taskType": "implement", "text": "Add generics with zod to the typescript helper." }, "selected": false },
+    { "id": "js-file", "task": { "language": "js", "taskType": "review", "text": "Review the typescript strict settings." }, "selected": false }
+  ]
+}

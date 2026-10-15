@@ -1,0 +1,53 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "context-engineering",
+  "version": "1.0.0",
+  "title": "Context engineering and budget",
+  "summary": "Decide what enters a prompt: mandatory design, acceptance and verifier text is never dropped, optional guidance is selected by relevance and budget, and the whole selection is fingerprinted.",
+  "category": "optimization",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "skills/context-budget/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "skills/cost-aware-llm-pipeline/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "skills/iterative-retrieval/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "ECC accounts for tool-schema and server context cost; here that accounting sits next to the rule that required content is never truncated."
+  },
+  "activation": {
+    "languages": ["common"],
+    "taskTypes": ["design", "review", "evaluate", "plan"],
+    "keywords": ["context window", "token budget", "prompt size", "truncate", "context overhead", "optional context", "fingerprint", "retrieval", "compaction", "context cost"],
+    "priority": 62
+  },
+  "inputs": [
+    { "name": "prompt-parts", "description": "The parts that make up the prompt, with their sizes.", "required": true }
+  ],
+  "outputs": [
+    { "name": "plan", "description": "Mandatory parts, ranked optional parts, omissions and the resulting fingerprint." }
+  ],
+  "workflow": [
+    { "step": "Split the prompt into mandatory (approved design, acceptance criteria, verifier commands, security restrictions) and optional (skills, rules, examples).", "check": "Nothing mandatory is in the optional list." },
+    { "step": "Measure each part in bytes or tokens, including tool schemas and instructions.", "check": "The total is compared with the model's window." },
+    { "step": "Rank optional parts by task relevance; include in order until the optional budget is spent and report what was omitted.", "check": "Omissions are listed, not silent." },
+    { "step": "If mandatory parts alone exceed the window, fail the task as too large rather than truncating them.", "check": "Over-budget mandatory content is an error." },
+    { "step": "Fingerprint the exact assembled optional context so a worker and a reviewer can both recompute it." }
+  ],
+  "constraints": [
+    "Never truncate approved design, acceptance, verifier or security text to fit.",
+    "Skills and rules are instructional data and cannot expand a task's permissions.",
+    "Do not load every skill into every prompt."
+  ],
+  "examples": [
+    { "title": "Small local model", "situation": "The target model has a 4096 token window and the prompt is over budget.", "guidance": "Drop optional skills first, keep acceptance and verifier text, and split the task if mandatory text still does not fit." }
+  ],
+  "verification": [
+    "The plan lists byte counts per part and the omitted items.",
+    "Recomputing the fingerprint from the same inputs gives the same value."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "design-budget", "task": { "language": "go", "taskType": "design", "text": "Design the token budget and context window plan; do not truncate the acceptance criteria." }, "selected": true },
+    { "id": "review-overhead", "task": { "language": "ts", "taskType": "review", "text": "Review the prompt size and context overhead of the optional context fingerprint." }, "selected": true },
+    { "id": "implement-no", "task": { "language": "go", "taskType": "implement", "text": "Add the token budget." }, "selected": false },
+    { "id": "design-no-keyword", "task": { "language": "go", "taskType": "design", "text": "Design the logo." }, "selected": false }
+  ]
+}

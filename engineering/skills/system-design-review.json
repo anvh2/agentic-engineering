@@ -1,0 +1,55 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "system-design-review",
+  "version": "1.0.0",
+  "title": "System design review",
+  "summary": "Assess a proposed design against the system's real boundaries: component responsibilities, data ownership, failure modes and the alternatives that were not chosen.",
+  "category": "architecture",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "agents/architect.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "skills/agent-architecture-audit/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "skills/hexagonal-architecture/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "Condensed into a review checklist; adds the requirement that every recommendation names the boundary it protects."
+  },
+  "activation": {
+    "languages": ["common"],
+    "taskTypes": ["design", "review", "plan"],
+    "keywords": ["architecture", "design review", "hld", "lld", "component boundary", "tradeoff", "scalability", "coupling", "layering", "responsibility"],
+    "priority": 60
+  },
+  "inputs": [
+    { "name": "design", "description": "The high-level and low-level design being reviewed.", "required": true },
+    { "name": "constraints", "description": "Operational, security or compatibility constraints the design must meet.", "required": false }
+  ],
+  "outputs": [
+    { "name": "assessment", "description": "Per-boundary verdict with the evidence in the repository it was checked against." },
+    { "name": "risks", "description": "Ranked design risks with a concrete mitigation each." }
+  ],
+  "workflow": [
+    { "step": "Restate each component's single responsibility and who owns each piece of data; flag any with two owners or none.", "check": "Every piece of state has exactly one owner." },
+    { "step": "Check the dependency direction against the repository's stated layering and against actual imports.", "check": "Violations cite the import that breaks the rule." },
+    { "step": "Walk the failure modes: partial failure, retries, duplicate delivery, cancellation and restart. Ask what state is left behind each time.", "check": "Each failure mode has a stated outcome." },
+    { "step": "List at least two alternatives, including doing less, and say what the chosen design gives up.", "check": "The tradeoff is stated in terms of a measurable property." },
+    { "step": "Separate must-fix risks from preferences; reference the invariants any later review must keep checking." }
+  ],
+  "constraints": [
+    "Review the design that was approved; do not substitute your own and do not widen scope.",
+    "Prefer extending the existing execution path over adding a parallel one.",
+    "A design review is advisory and never grants approval of the design."
+  ],
+  "examples": [
+    { "title": "Second scheduler", "situation": "A design adds its own retry loop beside the existing scheduler.", "guidance": "Flag it as a parallel path, point to the scheduler's retry budget, and recommend extending that instead." }
+  ],
+  "verification": [
+    "Each risk names the boundary or invariant it threatens.",
+    "At least one rejected alternative and its cost is recorded."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "design-review", "task": { "language": "go", "taskType": "review", "text": "Review the HLD and LLD for coupling and component boundary problems." }, "selected": true },
+    { "id": "design-tradeoff", "task": { "language": "ts", "taskType": "design", "text": "Compare the architecture options and the tradeoff in layering." }, "selected": true },
+    { "id": "test-type-no", "task": { "language": "go", "taskType": "test", "text": "Review the architecture for coupling." }, "selected": false },
+    { "id": "no-design-words", "task": { "language": "go", "taskType": "review", "text": "Check the changelog wording for typos." }, "selected": false }
+  ]
+}

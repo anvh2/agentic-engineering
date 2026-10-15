@@ -1,0 +1,56 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "threat-modeling",
+  "version": "1.0.0",
+  "title": "Threat modeling",
+  "summary": "Map untrusted inputs to the side effects they can reach, and name the deterministic boundary, authenticating principal and audit evidence for each mutation.",
+  "category": "security",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "skills/agent-security-hardening/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "agents/security-reviewer.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "Reduces ECC's hardening guidance to one question per mutation: who is authenticated, what enforces the limit in code, what is recorded, and what happens on failure."
+  },
+  "activation": {
+    "languages": ["common"],
+    "taskTypes": ["review", "design", "plan"],
+    "keywords": ["threat model", "trust boundary", "attack surface", "attacker", "untrusted input", "security review", "privilege", "side effect", "abuse case"],
+    "priority": 70
+  },
+  "inputs": [
+    { "name": "change", "description": "The feature or diff to model.", "required": true },
+    { "name": "assets", "description": "What an attacker would want: data, credentials, execution, approvals.", "required": false }
+  ],
+  "outputs": [
+    { "name": "threat-table", "description": "Per mutation: input source, principal, enforcing code, audit record, failure behavior." },
+    { "name": "findings", "description": "Missing or prompt-only controls, by severity." }
+  ],
+  "workflow": [
+    { "step": "List every source of untrusted data: request bodies, repository files, tool output, model output, environment, files from other users.", "check": "Model output and repository text are on the list." },
+    { "step": "List every side effect: file writes, process execution, network calls, database writes, approvals, deployments.", "check": "Each effect is a function you located." },
+    { "step": "For each (input, effect) pair identify the authenticated principal and the code that enforces the limit. A rule that exists only in a prompt is not a control.", "check": "Every row names enforcing code." },
+    { "step": "Ask what happens on malformed input, missing context, timeout and partial failure; the answer must be deny.", "check": "Fail-open behavior is a finding." },
+    { "step": "Check what is recorded for audit and whether the record can be rewritten by the actor it describes.", "check": "Audit data is append-only or signed." },
+    { "step": "Propose a negative test for each high-risk row." }
+  ],
+  "constraints": [
+    "Report weaknesses and defenses; do not produce working exploit code.",
+    "Do not treat a hash as proof of authorship; ask who could have recomputed it.",
+    "Advisory only: a threat model never grants approval."
+  ],
+  "examples": [
+    { "title": "Caller-asserted identity", "situation": "A review function trusts a verifierId string passed by the caller.", "guidance": "Flag it: any caller can claim the trusted identity. Require a signature checked against a runtime-owned keyring." }
+  ],
+  "verification": [
+    "Every mutation row has an enforcing function and a deny-on-failure statement.",
+    "Each critical row has a proposed negative test."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "model-feature", "task": { "language": "go", "taskType": "review", "text": "Threat model this feature: trust boundary, attack surface and untrusted input to side effects." }, "selected": true },
+    { "id": "design-abuse", "task": { "language": "js", "taskType": "design", "text": "Design with abuse case analysis of privilege and attacker capabilities." }, "selected": true },
+    { "id": "test-no", "task": { "language": "go", "taskType": "test", "text": "Threat model test." }, "selected": false },
+    { "id": "no-security-words", "task": { "language": "go", "taskType": "review", "text": "Review the spelling in the docs." }, "selected": false }
+  ]
+}

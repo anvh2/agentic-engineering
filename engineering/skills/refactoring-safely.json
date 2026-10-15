@@ -1,0 +1,55 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "refactoring-safely",
+  "version": "1.0.0",
+  "title": "Behavior-preserving refactoring",
+  "summary": "Change structure without changing behavior: pin current behavior first, move in small verified steps and stop when the diff starts to carry intent changes.",
+  "category": "implementation",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "agents/refactor-cleaner.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "agents/code-simplifier.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "Adds the stop rule: a refactor that needs a test edit is not a refactor."
+  },
+  "activation": {
+    "languages": ["common"],
+    "taskTypes": ["refactor", "review", "implement"],
+    "keywords": ["refactor", "extract function", "rename", "dead code", "duplicate", "simplify", "restructure", "cleanup", "move code"],
+    "priority": 50
+  },
+  "inputs": [
+    { "name": "scope", "description": "Files and symbols to restructure.", "required": true },
+    { "name": "pinning-tests", "description": "Tests that already pin the behavior.", "required": true }
+  ],
+  "outputs": [
+    { "name": "diff", "description": "A structure-only diff." },
+    { "name": "risk-notes", "description": "Anything whose behavior could not be shown unchanged." }
+  ],
+  "workflow": [
+    { "step": "Run or read the tests that cover the code to be moved; if none exist, stop and recommend characterization tests first.", "check": "Current behavior is pinned before any edit." },
+    { "step": "Choose one mechanical transformation at a time: rename, extract, inline, move.", "check": "Each step is small enough to review by eye." },
+    { "step": "After each step re-run the pinning tests unchanged.", "check": "No test file appears in the diff." },
+    { "step": "Compare public signatures, error values and ordering before and after; list any difference.", "check": "Any difference is reported, not hidden." },
+    { "step": "Stop and escalate if the change needs a test edit, a signature change outside scope or a behavior decision." }
+  ],
+  "constraints": [
+    "Never mix a refactor with a bug fix or feature in the same change.",
+    "Do not edit tests to make a refactor pass.",
+    "Stay inside the allowed files."
+  ],
+  "examples": [
+    { "title": "Extract helper", "situation": "A 120-line function repeats a validation block.", "guidance": "Extract the block, rerun the tests, and confirm the error text is byte-identical." }
+  ],
+  "verification": [
+    "Pinning tests pass without modification.",
+    "The diff contains no behavior change or is reported as such."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "extract-function", "task": { "language": "go", "taskType": "refactor", "text": "Refactor: extract function from the long handler and remove duplicate validation." }, "selected": true },
+    { "id": "review-refactor", "task": { "language": "js", "taskType": "review", "text": "Review this cleanup and rename for hidden behavior changes." }, "selected": true },
+    { "id": "debug-no", "task": { "language": "go", "taskType": "debug", "text": "Refactor the crash." }, "selected": false },
+    { "id": "no-refactor-words", "task": { "language": "go", "taskType": "refactor", "text": "Update the telemetry sampling rate." }, "selected": false }
+  ]
+}

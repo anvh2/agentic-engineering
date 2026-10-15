@@ -1,0 +1,54 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "agent-evaluation-design",
+  "version": "1.0.0",
+  "title": "Agent evaluation design",
+  "summary": "Design repeatable agent evaluations: pinned fixtures, deterministic oracles, independent review, and metrics that separate capability from consistency.",
+  "category": "agent-engineering",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "skills/agent-eval/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "skills/eval-harness/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "agents/agent-evaluator.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "Uses pass@k for capability and pass^k for consistency, with the project's rule that acceptance needs a runtime verifier and a different reviewer."
+  },
+  "activation": {
+    "languages": ["common"],
+    "taskTypes": ["evaluate", "design", "plan", "review"],
+    "keywords": ["evaluation", "benchmark", "pass rate", "consistency", "fixture", "oracle", "baseline", "trials", "eval harness", "compare providers"],
+    "priority": 66
+  },
+  "inputs": [
+    { "name": "question", "description": "What the evaluation must decide: adopt a skill, pick a provider, detect a regression.", "required": true }
+  ],
+  "outputs": [
+    { "name": "design", "description": "Fixtures, oracles, trial counts, metrics and the decision rule fixed before running." }
+  ],
+  "workflow": [
+    { "step": "State the decision and the rule that will make it (for example adopt only if accepted rate rises with no security regression) before any run.", "check": "The rule is written down in advance." },
+    { "step": "Pin fixtures to commits and give each a deterministic oracle that the worker cannot edit.", "check": "Re-running a fixture on the same code gives the same verdict." },
+    { "step": "Choose repetitions per fixture and paired baseline/treatment runs; report pass@k and pass^k, not a single pass rate.", "check": "Sample sizes and intervals are stated." },
+    { "step": "Count a trial as accepted only with a passing runtime verifier and a verdict from a reviewer who is not the worker.", "check": "Self-reported success is never counted." },
+    { "step": "Record cost, tokens, wall clock, attempts and context size so a gain bought with large cost is visible." },
+    { "step": "Report limitations honestly, including what was not run." }
+  ],
+  "constraints": [
+    "Do not invoke paid providers to complete a design; use scripted stubs first.",
+    "Never compare arms on different fixtures or machine state.",
+    "A hash chain is not proof of authenticity; evidence must be signed."
+  ],
+  "examples": [
+    { "title": "Flaky winner", "situation": "Provider A passes 4 of 5 trials on one fixture, provider B passes 3 of 3.", "guidance": "pass@k favors A, pass^k favors B; decide using the consistency need of the task and report both." }
+  ],
+  "verification": [
+    "The decision rule, fixtures and sample sizes are fixed before results.",
+    "Results include intervals and unmeasured cells."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "design-eval", "task": { "language": "go", "taskType": "design", "text": "Design the evaluation with fixtures, an oracle and pass@k against a baseline." }, "selected": true },
+    { "id": "evaluate-providers", "task": { "language": "js", "taskType": "evaluate", "text": "Compare providers: run trials and report the pass rate versus the baseline." }, "selected": true },
+    { "id": "implement-no", "task": { "language": "go", "taskType": "implement", "text": "Add an evaluation helper." }, "selected": false },
+    { "id": "evaluate-no-keyword", "task": { "language": "go", "taskType": "evaluate", "text": "Evaluate the office layout." }, "selected": false }
+  ]
+}

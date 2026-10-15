@@ -1,0 +1,53 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "authorization-boundary-audit",
+  "version": "1.0.0",
+  "title": "Authorization boundary audit",
+  "summary": "Verify that every privileged action checks who is acting and what they may do in code the actor cannot influence, with no check-then-act gap and no self-approval.",
+  "category": "security",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "skills/agent-security-hardening/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "skills/gateguard/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "Focuses on approvals, promotions and reviews: the places an agent system most often lets a model vouch for itself."
+  },
+  "activation": {
+    "languages": ["common"],
+    "taskTypes": ["review", "design", "debug"],
+    "keywords": ["authorization", "approval", "permission", "privilege", "self-approval", "identity", "forged", "impersonation", "authentication", "replay"],
+    "priority": 72
+  },
+  "inputs": [
+    { "name": "flow", "description": "The privileged flow: approval, promotion, review verdict, tool grant.", "required": true }
+  ],
+  "outputs": [
+    { "name": "findings", "description": "Missing authentication, caller-asserted identity, races and replay gaps with evidence." }
+  ],
+  "workflow": [
+    { "step": "Find where the actor's identity enters the flow. If it arrives as a plain field in the request, it is caller-asserted and therefore not authentication.", "check": "Identity comes from a verified credential or signature." },
+    { "step": "Find the authorization decision and confirm it runs in the same transaction or lock as the action it guards.", "check": "No window exists between check and act." },
+    { "step": "Check separation of duties: the author, reviewer and approver of one item must be different principals, including across different keys of the same principal.", "check": "A principal cannot verify its own work." },
+    { "step": "Check replay and scope: a grant should be bound to one action, one subject and one use, with an expiry.", "check": "Reusing a grant fails." },
+    { "step": "Check the denied path: unknown, expired, revoked and malformed credentials must all deny and be recorded.", "check": "Every denial has a test." }
+  ],
+  "constraints": [
+    "A matching hash or an LLM agreeing is not authorization.",
+    "Report; do not weaken a check to make a flow succeed.",
+    "Advisory only."
+  ],
+  "examples": [
+    { "title": "Trusted verifier list", "situation": "Verification is accepted if verifierId appears in a list of trusted names.", "guidance": "A caller can write any name. Require a signature from a key held only by the verifier." }
+  ],
+  "verification": [
+    "Each finding names the function where identity or authorization is decided.",
+    "Replay, race and self-approval are each considered explicitly."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "audit-approval", "task": { "language": "go", "taskType": "review", "text": "Audit the approval flow for self-approval and a forged identity; check authorization and replay." }, "selected": true },
+    { "id": "debug-permission", "task": { "language": "js", "taskType": "debug", "text": "A permission check passes for an impersonated user; find the authentication gap." }, "selected": true },
+    { "id": "implement-no", "task": { "language": "go", "taskType": "implement", "text": "Add an approval endpoint." }, "selected": false },
+    { "id": "review-no-keyword", "task": { "language": "go", "taskType": "review", "text": "Review the loop bounds." }, "selected": false }
+  ]
+}

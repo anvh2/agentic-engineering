@@ -1,0 +1,54 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "agent-harness-construction",
+  "version": "1.0.0",
+  "title": "Agent harness construction",
+  "summary": "Design an agent's tool surface, step budget and output contract so a small model can use it reliably, with every capability granted by code and observable in traces.",
+  "category": "agent-engineering",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "skills/agent-harness-construction/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "agents/harness-optimizer.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "Adds this project's constraint that local models have small context windows, so tool count and schema size are budgeted."
+  },
+  "activation": {
+    "languages": ["common"],
+    "taskTypes": ["design", "review", "plan", "evaluate"],
+    "keywords": ["agent harness", "tool schema", "tool design", "step budget", "agent tools", "tool permissions", "output contract", "mastra agent", "tool boundary"],
+    "priority": 64
+  },
+  "inputs": [
+    { "name": "agent", "description": "The agent definition and its tools.", "required": true },
+    { "name": "model-limits", "description": "Context window and tool-calling reliability of the target model.", "required": false }
+  ],
+  "outputs": [
+    { "name": "assessment", "description": "Tool surface, budget and contract findings." }
+  ],
+  "workflow": [
+    { "step": "List each tool with its permission class (read, write, execute) and justify why the role needs it.", "check": "No tool is present only because it is convenient." },
+    { "step": "Confirm permissions are enforced by code at the tool, not by the agent's instructions.", "check": "A model that ignores its instructions still cannot exceed its role." },
+    { "step": "Measure the prompt cost of instructions plus tool schemas against the model's context window.", "check": "The budget leaves room for repository content." },
+    { "step": "Check the output contract is a strict schema with a size limit and an explicit unknown/insufficient-evidence state.", "check": "Free-form prose is not parsed for decisions." },
+    { "step": "Check traces: each tool call, step and error is visible per agent and correlated to the workflow run." }
+  ],
+  "constraints": [
+    "Registering an agent must not call a model or mutate a repository.",
+    "No specialist role gains write access automatically.",
+    "Advisory review only."
+  ],
+  "examples": [
+    { "title": "Convenience shell tool", "situation": "A reviewer is given a shell tool to run tests.", "guidance": "Remove it; read-only reviewers get inspection tools, and verification stays with the runtime verifier." }
+  ],
+  "verification": [
+    "Every tool has a class and a reason.",
+    "Prompt cost is stated in bytes or tokens."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "review-tools", "task": { "language": "ts", "taskType": "review", "text": "Review the agent harness tool schema and the tool permissions for the Mastra agent." }, "selected": true },
+    { "id": "design-budget", "task": { "language": "go", "taskType": "design", "text": "Design the step budget and output contract for the new agent tools." }, "selected": true },
+    { "id": "debug-no", "task": { "language": "ts", "taskType": "debug", "text": "The agent harness tool schema throws." }, "selected": false },
+    { "id": "review-no-keyword", "task": { "language": "ts", "taskType": "review", "text": "Review the css grid." }, "selected": false }
+  ]
+}
