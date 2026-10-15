@@ -143,3 +143,27 @@ export function evaluateSkillScenarios(manifests: readonly SkillManifest[]): Sce
 export function activeSkillDigests(entries: readonly KnowledgeEntry[]): ReadonlyMap<string, string> {
   return new Map(entries.filter((e) => e.kind === 'skill' && e.approved).map((e) => [e.id, entryDigest(e)]));
 }
+
+export interface SkillPin {
+  /** Goes into `CodingTask.knowledge`; the runner and the reviewer recompute the digest from the same trusted catalog. */
+  knowledge: { ids: string[]; selectionDigest: string } | undefined;
+  selection: SkillSelection;
+}
+
+/**
+ * The seam between skills and a task contract. Selects promoted skills for the task and resolves them in the runtime's own
+ * catalog to the digest the task pins. The result adds ONLY guidance text: no allowed file, verifier command, tool or approval
+ * can come out of this function, and a skill revoked or edited later makes the pin fail to resolve (the task stays with Claude).
+ */
+export function pinSkillsForTask(
+  manifests: readonly SkillManifest[],
+  catalog: { list(): readonly KnowledgeEntry[]; resolve(request: { language: 'go' | 'js' | 'ts'; ids: readonly string[]; maxBytes?: number }): { digest: string; omitted: readonly string[] } },
+  request: SkillRequest & { language: 'go' | 'js' | 'ts' },
+  options: { budgetBytes?: number; maxSkills?: number } = {},
+): SkillPin {
+  const selection = selectSkills(manifests, activeSkillDigests(catalog.list()), request, options);
+  if (selection.selected.length === 0) return { knowledge: undefined, selection };
+  const resolved = catalog.resolve({ language: request.language, ids: selection.selected });
+  if (resolved.omitted.length) throw new Error(`skills: selection exceeds the catalog budget (${resolved.omitted.join(', ')})`);
+  return { knowledge: { ids: [...selection.selected], selectionDigest: resolved.digest }, selection };
+}
