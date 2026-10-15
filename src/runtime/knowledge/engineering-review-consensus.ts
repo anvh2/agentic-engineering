@@ -49,7 +49,7 @@ export function decideReview(findings:readonly ConsolidatedFinding[],verificatio
  for(const f of findings){
   if(f.status==='advisory')continue;
   const v=byKey.get(f.key);
-  if(!v||v.verifierId===f.reviewerIds[0]&&f.reviewerIds.length===1||v.verdict==='inconclusive')
+  if(!v||f.reviewerIds.includes(v.verifierId)||v.verdict==='inconclusive')
     unresolved.push(f.key);
   else if(v.verdict==='confirmed')blocking.push(f.key);
  }
