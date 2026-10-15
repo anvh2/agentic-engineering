@@ -36,7 +36,10 @@ export function normalizeSessionObservation(event: SessionObservation): Readonly
     || !/^[a-f0-9]{64}$/.test(event.stateDigest)) {
     throw new Error('continuity: invalid runtime observation');
   }
-  const clone = { ...event };
+  // Explicit field projection prevents an already-normalized event's fingerprint
+  // from contaminating its own digest during replay or persistence.
+  const clone = { sessionId:event.sessionId, taskId:event.taskId, seq:event.seq,
+    event:event.event, stateRef:event.stateRef, stateDigest:event.stateDigest };
   return Object.freeze({ ...clone, fingerprint: hash(JSON.stringify(clone)) });
 }
 
