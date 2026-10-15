@@ -111,6 +111,23 @@ export class HookSession {
     this.sessionId = sessionId;
   }
 
+  /**
+   * Rebuilds a session from events that were already accepted and persisted (restart, resume). Every stored event is re-validated
+   * against the policy and the ordering rules, so a corrupted or tampered log is an error here rather than silent state.
+   * Afterwards a replay of any stored event reports `replay: true`, and the caller must not repeat its side effect.
+   */
+  static restore(policy: HookPolicy, sessionId: string, events: readonly unknown[]): HookSession {
+    const session = new HookSession(policy, sessionId);
+    events.forEach((event, index) => {
+      const decision = session.accept(event);
+      if (!decision.accepted || decision.replay) throw new Error(`hook: stored event ${index} is not valid for this session (${decision.reason})`);
+    });
+    return session;
+  }
+
+  /** Exposed for persistence: the next sequence number this session will accept. */
+  get next(): number { return this.nextSeq; }
+
   accept(raw: unknown): HookDecision {
     const base = inspectHook(raw, this.policy);
     if (!base.accepted) return base;

@@ -58,6 +58,8 @@ export type AdrRecord = Readonly<{
   alternatives: readonly string[];
   consequences: string;
   sourceRef: string;
+  /** The accepted record this one replaces, as `ADR-0001@v1`. Part of the digest only when present. */
+  supersedes?: string;
 }>;
 
 export function pinAdr(record: AdrRecord): Readonly<AdrRecord & { digest: string }> {
@@ -65,6 +67,7 @@ export function pinAdr(record: AdrRecord): Readonly<AdrRecord & { digest: string
     || !['proposed','accepted','deprecated','superseded'].includes(record.status)
     || !record.context.trim() || !record.decision.trim() || !record.consequences.trim()
     || !record.sourceRef.trim() || record.alternatives.length > 20
+    || (record.supersedes !== undefined && !/^ADR-[0-9]{4,}@[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(record.supersedes))
     || record.alternatives.some(x=>!x.trim())
     || Buffer.byteLength(JSON.stringify(record),'utf8') > 32_768) {
     throw new Error('continuity: invalid ADR');
@@ -73,6 +76,7 @@ export function pinAdr(record: AdrRecord): Readonly<AdrRecord & { digest: string
     id:record.id,revision:record.revision,status:record.status,
     context:record.context,decision:record.decision,
     alternatives:[...record.alternatives],consequences:record.consequences,sourceRef:record.sourceRef,
+    ...(record.supersedes ? { supersedes: record.supersedes } : {}),
   });
   return Object.freeze({ ...record, alternatives:Object.freeze([...record.alternatives]), digest:hash(canonical) });
 }
