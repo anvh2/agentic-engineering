@@ -2,7 +2,7 @@ import { createTool } from '@mastra/core/tools';
 import { spawn } from 'node:child_process';
 import { relative } from 'node:path';
 import { z } from 'zod';
-import { getRepositoryRoot, resolveWithinRepository, resolveWritablePathWithinRepository } from './repository-tools.ts';
+import { getRepositoryRoot, isSecretPath, resolveWithinRepository, resolveWritablePathWithinRepository } from './repository-tools.ts';
 import { runSandboxedCommand } from '../../runtime/sandbox/sandbox.ts';
 
 /**
@@ -409,10 +409,21 @@ export const gitDiff = createTool({
     const target = await resolveWithinRepository(root, path);
     const scope = relativeGitPath(root, target);
 
-    const result = await runControlledCommand('git', ['diff', '--', scope], {
-      cwd: root,
-      timeoutMs: gitCommandTimeoutMs(),
-    });
-    return { success: result.success, stdout: result.stdout, stderr: result.stderr };
+    if (isSecretPath(scope)) throw new Error(`Path "${path}" holds credentials and cannot be diffed by agent tools.`);
+
+    // List the changed paths first and diff only the ones that are not credential-like, so a modified tracked `.env` can never
+    // put its lines into model context. Literal pathspecs stop a file name from being read as pathspec magic.
+    const listed = await runControlledCommand('git', ['--literal-pathspecs', 'diff', '--name-only', '-z', '--', scope], { cwd: root, timeoutMs: gitCommandTimeoutMs() });
+    if (!listed.success) return { success: false, stdout: '', stderr: listed.stderr };
+    const changed = listed.stdout.split('\0').filter(Boolean);
+    const safe = changed.filter((file) => !isSecretPath(file));
+    const withheld = changed.length - safe.length;
+    if (safe.length > MAX_DIFF_PATHS) return { success: false, stdout: '', stderr: `Too many changed files (${safe.length}) to diff at once; scope with "path".` };
+    const note = withheld > 0 ? `\n[diff of ${withheld} credential-like file(s) withheld]\n` : '';
+    if (safe.length === 0) return { success: true, stdout: note.trimStart(), stderr: '' };
+    const result = await runControlledCommand('git', ['--literal-pathspecs', 'diff', '--', ...safe], { cwd: root, timeoutMs: gitCommandTimeoutMs() });
+    return { success: result.success, stdout: result.stdout + note, stderr: result.stderr };
   },
 });
+
+const MAX_DIFF_PATHS = 400;

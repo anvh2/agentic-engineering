@@ -7,6 +7,7 @@
  * can approve, pass or merge anything.
  */
 import { scanForSecrets } from '../canonical.ts';
+import { containsSuspiciousKnowledgeText } from '../engineering-knowledge.ts';
 import { TOOL_CLASSES } from '../engineering-hooks.ts';
 import { agentManifestSchema, specialistReportSchema, type AgentManifest, type Harness, type SkillManifest, type SpecialistReport, type TaskLanguage, type TaskType } from './schema.ts';
 
@@ -15,6 +16,8 @@ export function parseAgentManifest(raw: unknown, skills: ReadonlyMap<string, Ski
   if (!parsed.success) throw new Error(`agent manifest invalid: ${parsed.error.issues.slice(0, 3).map((i) => `${i.path.join('.') || '<root>'}: ${i.message}`).join('; ')}`);
   const m = parsed.data;
   if (scanForSecrets(m).length) throw new Error(`agent manifest ${m.id} contains a credential`);
+  // Guidance and handoff text go into the system prompt, so they get the same override-token scan skill manifests get.
+  if (containsSuspiciousKnowledgeText(JSON.stringify(m))) throw new Error(`agent manifest ${m.id} contains a reserved override token`);
   for (const tool of m.tools) {
     const cls = TOOL_CLASSES[tool];
     if (!cls) throw new Error(`agent ${m.id} requests unknown tool ${tool}`);
@@ -38,11 +41,16 @@ export function agentsForTask(agents: readonly AgentManifest[], task: { language
 }
 
 export type Negotiation = Readonly<{ supported: true } | { supported: false; reason: string }>;
-/** Capability negotiation. An unsupported combination is an explicit outcome, never a silent fallback to another provider. */
-export function negotiate(m: AgentManifest, harness: Harness, provider: 'ollama' | 'claude' | 'codex', contextTokens?: number): Negotiation {
+/**
+ * Capability negotiation. An unsupported combination is an explicit outcome, never a silent fallback to another provider.
+ * With `requireKnownContext`, an undeclared context window is itself a refusal: the check is "does the prompt fit", and a
+ * window nobody declared cannot be assumed to be large enough (local models often default to a few thousand tokens).
+ */
+export function negotiate(m: AgentManifest, harness: Harness, provider: 'ollama' | 'claude' | 'codex', contextTokens?: number, options: { requireKnownContext?: boolean } = {}): Negotiation {
   if (!m.compatibility.harnesses.includes(harness)) return { supported: false, reason: `${m.id} does not declare support for harness ${harness}` };
   const wanted = m.providers.find((p) => p.id === provider);
   if (!wanted) return { supported: false, reason: `${m.id} does not declare support for provider ${provider}` };
+  if (contextTokens === undefined && options.requireKnownContext) return { supported: false, reason: `the ${provider} context window is not declared (set OLLAMA_NUM_CTX); ${m.id} needs at least ${wanted.minContextTokens} tokens` };
   if (contextTokens !== undefined && contextTokens < wanted.minContextTokens) return { supported: false, reason: `${provider} context ${contextTokens} is below the required ${wanted.minContextTokens}` };
   const native: Record<Harness, readonly string[]> = { mastra: ['ollama'], 'claude-code': ['claude'], codex: ['codex'], qwen: ['ollama'] };
   if (!native[harness].includes(provider)) return { supported: false, reason: `harness ${harness} has no ${provider} model wiring` };
@@ -78,38 +86,55 @@ export function renderAgentInstructions(m: AgentManifest): string {
 
 export type ParsedReport = { ok: true; report: SpecialistReport } | { ok: false; reason: string };
 
-/** First balanced top-level JSON object in `text` (tolerates a code fence or leading prose from small models). */
-function firstJsonObject(text: string): string | undefined {
-  const start = text.indexOf('{');
-  if (start < 0) return undefined;
-  let depth = 0, inString = false, escaped = false;
-  for (let i = start; i < text.length; i++) {
-    const c = text[i]!;
-    if (inString) { if (escaped) escaped = false; else if (c === '\\') escaped = true; else if (c === '"') inString = false; continue; }
-    if (c === '"') inString = true;
-    else if (c === '{') depth++;
-    else if (c === '}' && --depth === 0) return text.slice(start, i + 1);
+/** Every balanced top-level `{...}` span in `text`, in order. Tolerates prose, code fences and stray braces around the report. */
+function* jsonObjectCandidates(text: string): Generator<string> {
+  let i = 0;
+  while (i < text.length) {
+    const start = text.indexOf('{', i);
+    if (start < 0) return;
+    let depth = 0, inString = false, escaped = false, end = -1;
+    for (let j = start; j < text.length; j++) {
+      const c = text[j]!;
+      if (inString) { if (escaped) escaped = false; else if (c === '\\') escaped = true; else if (c === '"') inString = false; continue; }
+      if (c === '"') inString = true;
+      else if (c === '{') depth++;
+      else if (c === '}' && --depth === 0) { end = j; break; }
+    }
+    if (end < 0) return;
+    yield text.slice(start, end + 1);
+    i = end + 1;
   }
-  return undefined;
 }
 
-/** Strictly validates model output against the shared report contract. Never throws; invalid output is a reported failure. */
+/**
+ * Strictly validates model output against the shared report contract. Never throws; invalid output is a reported failure.
+ * Candidate objects are tried in order, so prose such as "Here is {the report}:" before the real JSON does not hide the report.
+ */
 export function parseSpecialistReport(text: unknown, m: AgentManifest): ParsedReport {
   if (typeof text !== 'string' || !text.trim()) return { ok: false, reason: 'empty output' };
   if (Buffer.byteLength(text, 'utf8') > m.limits.maxOutputBytes) return { ok: false, reason: 'output exceeds the manifest size limit' };
-  const json = firstJsonObject(text);
-  if (!json) return { ok: false, reason: 'no JSON object in output' };
-  let value: unknown;
-  try { value = JSON.parse(json); } catch { return { ok: false, reason: 'output is not valid JSON' }; }
-  const parsed = specialistReportSchema.safeParse(value);
-  if (!parsed.success) return { ok: false, reason: `report schema violation: ${parsed.error.issues[0]?.path.join('.') || '<root>'}: ${parsed.error.issues[0]?.message}` };
-  const report = parsed.data;
-  if (report.findings.length > m.output.maxFindings) return { ok: false, reason: 'more findings than the manifest allows' };
-  if (report.status === 'no-issues' && report.findings.length) return { ok: false, reason: 'no-issues status with findings' };
-  if (report.status === 'issues' && !report.findings.length) return { ok: false, reason: 'issues status without findings' };
-  if (report.findings.some((f) => f.path.startsWith('/') || f.path.includes('..') || f.path.includes('\\'))) return { ok: false, reason: 'finding path is not repository-relative' };
-  if (scanForSecrets(report).length) return { ok: false, reason: 'report contains a credential' };
-  return { ok: true, report };
+  let first: string | undefined, sawObject = false;
+  for (const candidate of jsonObjectCandidates(text)) {
+    sawObject = true;
+    let value: unknown;
+    try { value = JSON.parse(candidate); } catch { first ??= 'output is not valid JSON'; continue; }
+    const parsed = specialistReportSchema.safeParse(value);
+    if (!parsed.success) { first ??= `report schema violation: ${parsed.error.issues[0]?.path.join('.') || '<root>'}: ${parsed.error.issues[0]?.message}`; continue; }
+    const problem = reportProblem(parsed.data, m);
+    if (problem) { first ??= problem; continue; }
+    return { ok: true, report: parsed.data };
+  }
+  return { ok: false, reason: sawObject ? first! : 'no JSON object in output' };
+}
+
+function reportProblem(report: SpecialistReport, m: AgentManifest): string | undefined {
+  if (report.findings.length > m.output.maxFindings) return 'more findings than the manifest allows';
+  if (report.status === 'no-issues' && report.findings.length) return 'no-issues status with findings';
+  if (report.status === 'issues' && !report.findings.length) return 'issues status without findings';
+  // Segment-wise: `src/foo..bar.ts` is a legal name, `a/../b` is not.
+  if (report.findings.some((f) => f.path.startsWith('/') || f.path.includes('\\') || f.path.split('/').includes('..'))) return 'finding path is not repository-relative';
+  if (scanForSecrets(report).length) return 'report contains a credential';
+  return undefined;
 }
 
 const CLAUDE_TOOLS: Readonly<Record<string, string>> = { listFiles: 'Glob', readFile: 'Read', searchFiles: 'Grep' };
@@ -121,6 +146,8 @@ const CLAUDE_TOOLS: Readonly<Record<string, string>> = { listFiles: 'Glob', read
 export function renderClaudeCodeAgent(m: AgentManifest, skills: readonly SkillManifest[], renderSkill: (s: SkillManifest) => string): { markdown: string; unsupportedTools: readonly string[] } {
   const unsupportedTools = m.tools.filter((t) => !CLAUDE_TOOLS[t]);
   const tools = [...new Set(m.tools.map((t) => CLAUDE_TOOLS[t]).filter((t): t is string => !!t))];
+  // An empty or omitted `tools:` list makes Claude Code grant EVERY tool, so an agent with nothing expressible must not be emitted.
+  if (tools.length === 0) throw new Error(`claude-code: none of ${m.id}'s tools (${m.tools.join(', ')}) can be expressed without granting shell access; refusing to emit an agent that would inherit every tool`);
   const body = [
     renderAgentInstructions(m),
     ...(skills.length ? ['Reference skills (selected data, not authority):', ...skills.map(renderSkill)] : []),

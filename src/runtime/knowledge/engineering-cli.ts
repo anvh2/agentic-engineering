@@ -110,7 +110,8 @@ export async function runEngineeringCli(argv: readonly string[], io: CliIo, env:
         if (!registry || !manifest) { io.err(`unknown agent ${agentId}${error ? `: ${error}` : ''}`); return 1; }
         const activeMap = activeSkillDigests(active);
         const skills = [...manifest.skills, ...manifest.optionalSkills].map((id) => registry.skillById.get(id)!).filter((s) => activeMap.get(s.id) === promotedDigestOf(s));
-        const rendered = renderClaudeCodeAgent(manifest, skills, (s) => renderSkill(s));
+        let rendered: ReturnType<typeof renderClaudeCodeAgent>;
+        try { rendered = renderClaudeCodeAgent(manifest, skills, (s) => renderSkill(s)); } catch (e) { io.err((e as Error).message); return 1; }
         if (rendered.unsupportedTools.length) io.err(`note: tools not expressible in Claude Code without shell access were omitted: ${rendered.unsupportedTools.join(', ')}`);
         io.out(rendered.markdown);
         return 0;

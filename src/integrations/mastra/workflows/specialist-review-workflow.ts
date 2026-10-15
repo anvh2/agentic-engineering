@@ -177,7 +177,7 @@ export function createSpecialistReviewWorkflow(deps: SpecialistReviewDeps = {}) 
       const refuseKnown = async (...reasons: string[]) => { await publish({ setState }, { phase: 'refused', specialistId: inputData.specialistId, detail: reasons[0] }); return { ...identified, ok: false, reasons }; };
 
       if (!handles(manifest, { language: inputData.language, taskType: inputData.taskType })) return refuseKnown(`out_of_scope: ${manifest.id} does not handle ${inputData.taskType} in ${inputData.language}`);
-      const fit = negotiate(manifest, 'mastra', 'ollama', (deps.contextTokens ?? declaredContextTokens)());
+      const fit = negotiate(manifest, 'mastra', 'ollama', (deps.contextTokens ?? declaredContextTokens)(), { requireKnownContext: true });
       if (!fit.supported) return refuseKnown(`unsupported: ${fit.reason}`);
       const repo = await checkRepository(inputData.repository, (deps.allowedRoots ?? allowedRootsFromEnv)());
       if (!repo.ok) return refuseKnown(`repository_refused: ${repo.reason}`);

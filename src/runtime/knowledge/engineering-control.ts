@@ -150,14 +150,15 @@ export function buildEngineeringReport(input: ReportInput): EngineeringReport {
     const ctx = Number(env.OLLAMA_NUM_CTX);
     agents = registry.agents.map((a) => {
       const pool = [...a.skills, ...a.optionalSkills];
-      const fit = negotiate(a, 'mastra', 'ollama', Number.isSafeInteger(ctx) && ctx > 0 ? ctx : undefined);
+      const fit = negotiate(a, 'mastra', 'ollama', Number.isSafeInteger(ctx) && ctx > 0 ? ctx : undefined, { requireKnownContext: true });
       return { id: a.id, version: a.version, name: a.name, tools: [...a.tools], taskTypes: [...a.taskTypes], languages: [...a.languages], skillPool: pool.length, skillsActive: pool.filter((id) => active.get(id) === promotedDigestOf(registry.skillById.get(id)!)).length, mastraOllama: fit.supported ? 'supported' : fit.reason };
     });
     if (active.size === 0) issues.push({ code: 'no_promoted_skills', level: 'warning', detail: 'No skills are promoted: specialists and workers run without skill guidance. Promotion needs a signed grant.' });
     if (stale.length) issues.push({ code: 'promoted_skill_stale', level: 'warning', detail: `Manifest changed after promotion (not selected until re-promoted): ${stale.join(', ')}` });
     if (orphaned.length) issues.push({ code: 'promoted_skill_orphaned', level: 'warning', detail: `Promoted but absent from the pack: ${orphaned.join(', ')}` });
     for (const a of agents) if (a.skillsActive === 0 && active.size > 0) issues.push({ code: 'agent_without_active_skills', level: 'info', detail: a.id });
-    for (const a of agents) if (a.mastraOllama !== 'supported') issues.push({ code: 'agent_unsupported_on_configured_model', level: 'warning', detail: `${a.id}: ${a.mastraOllama}` });
+    if (!(Number.isSafeInteger(ctx) && ctx > 0)) issues.push({ code: 'model_context_undeclared', level: 'warning', detail: 'OLLAMA_NUM_CTX is not set: specialists are refused on the Mastra harness until the local model\'s context window is declared (they need at least 8192 tokens)' });
+    else for (const a of agents) if (a.mastraOllama !== 'supported') issues.push({ code: 'agent_unsupported_on_configured_model', level: 'warning', detail: `${a.id}: ${a.mastraOllama}` });
   }
 
   const health = skillHealth(input.skillRuns ?? [], input.now);

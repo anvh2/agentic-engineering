@@ -222,3 +222,16 @@ test('the report distinguishes declining and unmeasured skills and carries recom
   assert.ok(report.issues.some((i) => i.code === 'skill_declining'));
   assert.ok(Object.isFrozen(report));
 });
+
+test('an undeclared model context is one clear warning, not twenty, and agents say why they would be refused', async () => {
+  const s = sandbox();
+  try {
+    const report = JSON.parse((await cli(['status', '--json'], s.dir, {})).out) as EngineeringReport;
+    assert.equal(report.issues.filter((i) => i.code === 'model_context_undeclared').length, 1);
+    assert.ok(!report.issues.some((i) => i.code === 'agent_unsupported_on_configured_model'));
+    assert.ok(report.agents.every((a) => /not declared/.test(a.mastraOllama)));
+    const declared = JSON.parse((await cli(['status', '--json'], s.dir, { OLLAMA_NUM_CTX: '16384' })).out) as EngineeringReport;
+    assert.ok(declared.agents.every((a) => a.mastraOllama === 'supported'));
+    assert.ok(!declared.issues.some((i) => i.code === 'model_context_undeclared'));
+  } finally { s.cleanup(); }
+});

@@ -63,6 +63,16 @@ export function skillToCandidate(m: SkillManifest): KnowledgeEntry {
 /** Digest the store records when this exact manifest is promoted. */
 export const promotedDigestOf = (m: SkillManifest): string => entryDigest({ ...skillToCandidate(m), approved: true });
 
+/** Memoizes the rendered size and promoted digest of manifests for the duration of one selection pass (or scenario run). */
+export interface SkillCache { digest(m: SkillManifest): string; size(m: SkillManifest): number }
+export function createSkillCache(): SkillCache {
+  const digests = new Map<SkillManifest, string>(), sizes = new Map<SkillManifest, number>();
+  return {
+    digest: (m) => digests.get(m) ?? (digests.set(m, promotedDigestOf(m)), digests.get(m)!),
+    size: (m) => sizes.get(m) ?? (sizes.set(m, Buffer.byteLength(renderSkill(m), 'utf8')), sizes.get(m)!),
+  };
+}
+
 export interface SkillRequest { language: TaskLanguage; taskType: TaskType; text: string }
 export type SkillOmission = Readonly<{ id: string; reason: 'not-promoted' | 'stale-or-revoked' | 'language' | 'task-type' | 'no-keyword' | 'missing-dependency' | 'budget' | 'limit' }>;
 export interface SkillSelection { selected: readonly string[]; omitted: readonly SkillOmission[]; bytes: number; scores: Readonly<Record<string, number>> }
@@ -101,18 +111,19 @@ export function selectSkills(
   manifests: readonly SkillManifest[],
   active: ReadonlyMap<string, string>,
   request: SkillRequest,
-  options: { budgetBytes?: number; maxSkills?: number; matching?: Matching } = {},
+  options: { budgetBytes?: number; maxSkills?: number; matching?: Matching; cache?: SkillCache } = {},
 ): SkillSelection {
   const budget = options.budgetBytes ?? 4_000, limit = options.maxSkills ?? 6;
   if (!Number.isSafeInteger(budget) || budget < 0 || budget > 64_000 || !Number.isSafeInteger(limit) || limit < 0 || limit > 32) throw new Error('skills: invalid selection budget');
   const haystack = tokens(request.text.slice(0, MAX_TEXT)), matching = options.matching ?? 'stemmed';
+  const cache = options.cache ?? createSkillCache();
   const omitted: SkillOmission[] = [];
   const scores: Record<string, number> = {};
   const eligible: SkillManifest[] = [];
   for (const m of [...manifests].sort((a, b) => a.id.localeCompare(b.id))) {
     const activeDigest = active.get(m.id);
     if (activeDigest === undefined) { omitted.push({ id: m.id, reason: 'not-promoted' }); continue; }
-    if (activeDigest !== promotedDigestOf(m)) { omitted.push({ id: m.id, reason: 'stale-or-revoked' }); continue; }
+    if (activeDigest !== cache.digest(m)) { omitted.push({ id: m.id, reason: 'stale-or-revoked' }); continue; }
     if (!m.activation.languages.includes('common') && !m.activation.languages.includes(request.language)) { omitted.push({ id: m.id, reason: 'language' }); continue; }
     if (!m.activation.taskTypes.includes(request.taskType)) { omitted.push({ id: m.id, reason: 'task-type' }); continue; }
     const hits = m.activation.keywords.filter((k) => mentions(haystack, k, matching)).length;
@@ -122,19 +133,32 @@ export function selectSkills(
   }
   eligible.sort((a, b) => scores[b.id]! - scores[a.id]! || a.id.localeCompare(b.id));
   const byId = new Map(manifests.map((m) => [m.id, m]));
+  const usable = (d: SkillManifest): boolean => active.get(d.id) === cache.digest(d) && (d.activation.languages.includes('common') || d.activation.languages.includes(request.language));
+  /** The skill and everything it transitively builds on, dependencies first; undefined if any link is unusable (or cyclic). */
+  const closureOf = (root: SkillManifest): SkillManifest[] | undefined => {
+    const order: SkillManifest[] = [], done = new Set<string>(), visiting = new Set<string>();
+    const visit = (cur: SkillManifest): boolean => {
+      if (done.has(cur.id)) return true;
+      if (visiting.has(cur.id)) return false;
+      visiting.add(cur.id);
+      for (const id of cur.dependsOn) { const dep = byId.get(id); if (!dep || !usable(dep) || !visit(dep)) return false; }
+      visiting.delete(cur.id); done.add(cur.id); order.push(cur);
+      return true;
+    };
+    return visit(root) ? order : undefined;
+  };
   const chosen: string[] = [];
   let bytes = 0;
-  const size = (m: SkillManifest) => Buffer.byteLength(renderSkill(m), 'utf8');
   for (const m of eligible) {
     if (chosen.includes(m.id)) continue;
-    // A skill is only useful together with what it builds on; take the dependencies too or not at all.
-    const closure = [...m.dependsOn.filter((d) => !chosen.includes(d)), m.id];
-    const missing = closure.find((id) => !byId.has(id) || active.get(id) !== promotedDigestOf(byId.get(id)!) || (byId.get(id)!.activation.languages.includes('common') === false && !byId.get(id)!.activation.languages.includes(request.language)));
-    if (missing) { omitted.push({ id: m.id, reason: 'missing-dependency' }); continue; }
-    const cost = closure.reduce((n, id) => n + size(byId.get(id)!), 0);
-    if (chosen.length + closure.length > limit) { omitted.push({ id: m.id, reason: 'limit' }); continue; }
+    // A skill is only useful together with what it builds on; take all of it (transitively) or none of it.
+    const closure = closureOf(m);
+    if (!closure) { omitted.push({ id: m.id, reason: 'missing-dependency' }); continue; }
+    const fresh = closure.filter((c) => !chosen.includes(c.id));
+    const cost = fresh.reduce((n, c) => n + cache.size(c), 0);
+    if (chosen.length + fresh.length > limit) { omitted.push({ id: m.id, reason: 'limit' }); continue; }
     if (bytes + cost > budget) { omitted.push({ id: m.id, reason: 'budget' }); continue; }
-    chosen.push(...closure);
+    chosen.push(...fresh.map((c) => c.id));
     bytes += cost;
   }
   return Object.freeze({ selected: Object.freeze([...chosen].sort()), omitted: Object.freeze(omitted), bytes, scores: Object.freeze(scores) });
@@ -148,13 +172,14 @@ export interface ScenarioReport { total: number; passed: number; failures: reado
  * one must not.
  */
 export function evaluateSkillScenarios(manifests: readonly SkillManifest[]): ScenarioReport {
-  const active = new Map(manifests.map((m) => [m.id, promotedDigestOf(m)]));
+  const cache = createSkillCache();
+  const active = new Map(manifests.map((m) => [m.id, cache.digest(m)]));
   const failures: { skill: string; scenario: string; expected: boolean; actual: boolean }[] = [];
   let total = 0;
   for (const m of manifests) {
     for (const s of m.scenarios) {
       total++;
-      const actual = selectSkills(manifests, active, { language: s.task.language, taskType: s.task.taskType, text: s.task.text }, { budgetBytes: 64_000, maxSkills: 32 }).selected.includes(m.id);
+      const actual = selectSkills(manifests, active, { language: s.task.language, taskType: s.task.taskType, text: s.task.text }, { budgetBytes: 64_000, maxSkills: 32, cache }).selected.includes(m.id);
       if (actual !== s.selected) failures.push({ skill: m.id, scenario: s.id, expected: s.selected, actual });
     }
   }
