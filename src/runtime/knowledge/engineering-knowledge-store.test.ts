@@ -40,3 +40,15 @@ test('session observations are durable, repeatable and reject conflicting sequen
   await assert.rejects(()=>store.recordOnce({...normalizeSessionObservation(obs),fingerprint:sha('fake')}),/mismatched/);
  } finally {db.close();}
 });
+
+test('curated ECC rules require authorization before activation', async()=>{
+  const db = new DatabaseSync(':memory:');
+  try {
+    const store = new DurableEngineeringKnowledge(db);
+    const candidate = {id:'go-reviewed',revision:'v1',kind:'rule' as const,language:'go' as const,body:'Follow strict gofmt and test boundaries',source:'ECC rules/golang @ pinned SHA',approved:false};
+    await assert.rejects(()=>store.promoteCurated(candidate,deny),/not authorized/);
+    await store.promoteCurated(candidate,authority);
+    assert.match(store.activeCatalog().resolve({language:'go',ids:['go-reviewed']}).text,/gofmt/);
+    await assert.rejects(()=>store.promoteCurated(candidate,authority),/already promoted/);
+  } finally {db.close();}
+});
