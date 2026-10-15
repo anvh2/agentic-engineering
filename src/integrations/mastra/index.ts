@@ -10,6 +10,7 @@ import {
 } from '@mastra/observability';
 import { createControlCenterRoutes } from '../control-center/mastra-routes.ts';
 import { createMetricsRoute } from './metrics-route';
+import { createEngineeringStatusRoute } from './engineering-status-route.ts';
 import { codingWorkerGo, codingWorkerJs } from '../../workers/coding-worker';
 import { registerSpecialists } from './specialist-agents.ts';
 import { specialistReviewWorkflow } from './workflows/specialist-review-workflow.ts';
@@ -24,7 +25,7 @@ export const mastra = new Mastra({
   bundler: {
     externals: ['@duckdb/node-bindings'],
   },
-  server: { apiRoutes: [createMetricsRoute(), ...createControlCenterRoutes()] },
+  server: { apiRoutes: [createMetricsRoute(), createEngineeringStatusRoute(), ...createControlCenterRoutes()] },
   agents: { codingWorkerGo, codingWorkerJs, ...specialists.agents },
   workflows: { codingTaskWorkflow, specialistReviewWorkflow },
   storage: new MastraCompositeStore({

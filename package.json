@@ -24,6 +24,7 @@
     "smoke:codex": "AGENTIC_REAL_PROVIDER_SMOKE=codex node --disable-warning=ExperimentalWarning --test tests/smoke-e2e/codex-scheduler-smoke.test.ts",
     "smoke:codex-http": "node --disable-warning=ExperimentalWarning tests/provider-smoke/run-codex-http-smoke.ts",
     "smoke:gemini-http": "node --disable-warning=ExperimentalWarning tests/provider-smoke/run-gemini-http-smoke.ts",
+    "engineering": "node --disable-warning=ExperimentalWarning scripts/engineering.ts",
     "reliability": "node --disable-warning=ExperimentalWarning tests/reliability/run.ts"
   },
   "keywords": [],
