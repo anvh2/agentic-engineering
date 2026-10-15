@@ -145,11 +145,13 @@ describe('canary cleanup', () => {
       const lib = join(import.meta.dirname, '..', 'provider-smoke', 'canary-fs.ts');
       assert.ok(existsSync(lib), `the module under test exists at ${lib}`);
       for (const how of ['exit', 'sigterm']) {
-        const script = `import { createOwnedDir } from ${JSON.stringify(lib)}; const d = createOwnedDir(${JSON.stringify(parent)}, '.agentic-canary-${how}-'); console.log(d); ${how === 'exit' ? '' : 'setInterval(() => {}, 1000);'}`;
+        const script = `import { existsSync } from 'node:fs'; import { createOwnedDir } from ${JSON.stringify(lib)}; const d = createOwnedDir(${JSON.stringify(parent)}, '.agentic-canary-${how}-'); console.log(d + '\\t' + existsSync(d)); ${how === 'exit' ? '' : 'setInterval(() => {}, 1000);'}`;
         const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', '--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
         try {
-          const dir = (await firstStdoutLine(child)).trim();
-          assert.ok(existsSync(dir), `${how}: created`);
+          // The child reports whether the directory existed when it was created. Checking from the parent would race with the
+          // child's own exit cleanup in `exit` mode (the child may already be gone by then, especially under load).
+          const [dir, existedAtCreation] = (await firstStdoutLine(child)).trim().split('\t') as [string, string];
+          assert.equal(existedAtCreation, 'true', `${how}: created`);
           if (how === 'sigterm') child.kill('SIGTERM');
           await exited(child);
           assert.equal(existsSync(dir), false, `${how}: removed`);
