@@ -28,3 +28,9 @@ test('session store adapter records immutable normalized events',async()=>{
  assert.equal(status,'written');
  assert.equal(written[0],normalizeSessionObservation(input).fingerprint);
 });
+
+test('re-normalizing an already normalized event preserves fingerprint',()=>{
+ const event={sessionId:'s',taskId:'t',seq:3,event:'checkpoint' as const,stateRef:'state-3',stateDigest:sha('state')};
+ const normalized=normalizeSessionObservation(event);
+ assert.equal(normalizeSessionObservation(normalized).fingerprint,normalized.fingerprint);
+});
