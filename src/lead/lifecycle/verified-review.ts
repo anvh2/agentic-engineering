@@ -7,6 +7,7 @@ import type { CommandRunner } from '../../runtime/integration/integrate.ts';
 import { ENGINEERING_CONTEXT_ARTIFACT } from '../../runtime/execution/coding-task-artifacts.ts';
 import { denyAllApprovals, type ApprovalVerifier, type VerifiedApproval } from '../../runtime/execution/design-approval.ts';
 import { expectedEngineeringContext, verifyEngineeringContext } from '../../runtime/execution/engineering-context.ts';
+import { EngineeringKnowledgeCatalog, knowledgeLanguageForFiles } from '../../runtime/knowledge/engineering-knowledge.ts';
 import { capacityFindings, resolveCapacity, type ResolvedCapacity } from '../../runtime/execution/delegation-capacity.ts';
 import { EvidenceError, addedLineSecurityFindings, parseNumstatZ, readGitEvidence } from '../../runtime/review/change-review.ts';
 import type { SchedulerStore } from '../../runtime/scheduler/store.ts';
@@ -91,6 +92,8 @@ export interface VerifiedReviewDeps {
   acknowledgeWarnings?: readonly string[];
   /** Re-verifies an attached approvedDesign against the runtime's approval records (default: deny all, so such a task escalates). */
   approvals?: ApprovalVerifier;
+  /** Independently resolves task-pinned guidance from the trusted catalog. */
+  knowledgeCatalog?: EngineeringKnowledgeCatalog;
 }
 
 const REPAIRABLE_WARNINGS = new Set(['comment_removed', 'too_large']);
@@ -219,7 +222,15 @@ export async function verifyReview(deps: VerifiedReviewDeps, taskId: string): Pr
 
       // The pinned engineering context the worker consumed: self-consistent, and the same one result.json and every attempt name.
       // The expected fingerprint is recomputed from the task contract the scheduler persisted, never from the worker's own artifacts.
-      const expected = expectedEngineeringContext(task.spec.request?.contract, verifiedApproval);
+      const knowledgeContract = task.spec.request?.contract as ({ allowedFiles: string[]; knowledge?: {ids:string[];catalogDigest:string} }) | undefined;
+      let selection;
+      try {
+        const lang = knowledgeContract && knowledgeLanguageForFiles(knowledgeContract.allowedFiles);
+        if (knowledgeContract?.knowledge && lang && deps.knowledgeCatalog?.catalogDigest === knowledgeContract.knowledge.catalogDigest)
+          selection = deps.knowledgeCatalog.resolve({language:lang,ids:knowledgeContract.knowledge.ids});
+        if (selection?.omitted.length) selection = undefined;
+      } catch { selection = undefined; }
+      const expected = knowledgeContract?.knowledge && !selection ? undefined : expectedEngineeringContext(task.spec.request?.contract, verifiedApproval, selection);
       const declared = await declaredContextFingerprint(dir);
       const snapshotRaw = await readFile(join(dir, ENGINEERING_CONTEXT_ARTIFACT), 'utf8').catch(() => undefined);
       if (snapshotRaw === undefined) {

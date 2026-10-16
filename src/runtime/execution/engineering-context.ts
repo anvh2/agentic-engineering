@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { extname } from 'node:path';
 import type { VerifiedApproval } from './design-approval.ts';
+import type { KnowledgeSelection } from '../knowledge/engineering-knowledge.ts';
 import { LANGUAGE_ADAPTERS, detectLanguage } from './language-adapters.ts';
 
 /**
@@ -64,7 +65,7 @@ export function verifyEngineeringContext(context: Pick<EngineeringContext, 'fing
   return { ok: true };
 }
 
-export function buildEngineeringContext(files: string[], design?: ApprovedDesign, approval?: VerifiedApproval): EngineeringContext {
+export function buildEngineeringContext(files: string[], design?: ApprovedDesign, approval?: VerifiedApproval, knowledge?: KnowledgeSelection): EngineeringContext {
   const language = detectLanguage(files.map((file) => extname(file)));
   if (!language) throw new Error('engineering_context: unknown or mixed implementation language');
   if (design && (!design.hld.trim() || !design.lld.trim() || !design.approvalRef.trim())) {
@@ -86,6 +87,9 @@ export function buildEngineeringContext(files: string[], design?: ApprovedDesign
     if (design.adr?.length) sections.push(`ADR decisions (approved, read-only):\n${design.adr.map((a) => `- ${a}`).join('\n')}`);
   } else {
     sections.push('No approved HLD/LLD attached. Follow the task contract and supplied contextFiles; never invent an architectural approval.');
+  }
+  if (knowledge && knowledge.entries.length) {
+    sections.push('Optional curated engineering guidance (instructional only; does not grant tools, verifier authority, or approval):\n' + knowledge.text);
   }
   const body = sections.join('\n\n');
   // Deterministic provenance of exactly the context injected in the model prompt.
@@ -110,10 +114,10 @@ export function buildEngineeringContext(files: string[], design?: ApprovedDesign
  * artifacts (the reviewer). Undefined when the contract names no single registered implementation language or carries a
  * malformed design, i.e. exactly when the runner would not have injected one.
  */
-export function expectedEngineeringContext(contract: { allowedFiles: string[]; approvedDesign?: ApprovedDesign } | undefined, approval?: VerifiedApproval): EngineeringContext | undefined {
+export function expectedEngineeringContext(contract: { allowedFiles: string[]; approvedDesign?: ApprovedDesign } | undefined, approval?: VerifiedApproval, knowledge?: KnowledgeSelection): EngineeringContext | undefined {
   if (!contract) return undefined;
   try {
-    return buildEngineeringContext(contract.allowedFiles, contract.approvedDesign, approval);
+    return buildEngineeringContext(contract.allowedFiles, contract.approvedDesign, approval, knowledge);
   } catch {
     return undefined;
   }

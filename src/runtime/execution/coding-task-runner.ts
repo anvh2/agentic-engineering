@@ -11,6 +11,7 @@ import { runSandboxedCommand, sandboxStatus } from '../sandbox/sandbox.ts';
 import { scrubForWorker } from './worker-feedback.ts';
 import { denyAllApprovals, type ApprovalVerifier } from './design-approval.ts';
 import { buildEngineeringContext, type EngineeringContext } from './engineering-context.ts';
+import { EngineeringKnowledgeCatalog } from '../knowledge/engineering-knowledge.ts';
 import { detectLanguage } from './language-adapters.ts';
 import { CapacityWaitTimeout, capacityFor, modelWaitBudgetMs, permitHolder, type CapacityLease, type ModelCapacity } from '../capacity/model-capacity.ts';
 import { createRepairLoopTracker } from './repair-loop-tracker.ts';
@@ -54,6 +55,8 @@ export const codingTaskSchema = z.object({
     approvalRef: z.string().trim().min(1).max(500),
     adr: z.array(z.string().trim().min(1).max(2000)).max(20).optional(),
   }).optional(),
+  /** Explicit curated knowledge IDs; never inferred from untrusted code or worker prose. */
+  knowledge: z.object({ ids: z.array(z.string()).max(16), catalogDigest: z.string().regex(/^[a-f0-9]{64}$/) }).optional(),
   acceptanceCriteria: z.array(z.string()).default([]),
   /** argv arrays run by the runtime from the repository root, in order; the first failing one is the failure fed back. */
   verificationCommands: z.array(z.array(z.string()).min(1)).min(1),
@@ -163,6 +166,8 @@ export interface RunCodingTaskOptions {
    * task carrying a design that nothing can verify is refused rather than run on an unauthenticated `approvalRef`.
    */
   approvals?: ApprovalVerifier;
+  /** Trusted, runtime-owned catalog; without this a task requesting knowledge fails closed. */
+  knowledgeCatalog?: EngineeringKnowledgeCatalog;
   /** Coding attempts (verification failures), default 3. */
   maxAttempts?: number;
   /** Per model-call wall-clock cap. */
@@ -366,7 +371,13 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
     verifiedApproval = verdict.approval;
   }
   // Pinned ONCE per run: every attempt (and retry) is given this exact snapshot, and its fingerprint is the evidence.
-  const engineeringContext = detectLanguage(task.allowedFiles.map((file) => extname(file))) ? buildEngineeringContext(task.allowedFiles, task.approvedDesign, verifiedApproval) : undefined;
+  const language = detectLanguage(task.allowedFiles.map((file) => extname(file)));
+  if (task.knowledge && !language) throw new Error('knowledge: implementation language is unknown or mixed');
+  if (task.knowledge && !options.knowledgeCatalog) throw new Error('knowledge: no trusted runtime catalog configured');
+  if (task.knowledge && options.knowledgeCatalog!.catalogDigest !== task.knowledge.catalogDigest) throw new Error('knowledge: catalog revision mismatch');
+  const knowledge = task.knowledge ? options.knowledgeCatalog!.resolve({ language: language!, ids: task.knowledge.ids }) : undefined;
+  if (knowledge?.omitted.length) throw new Error('knowledge: explicit selection exceeded context budget');
+  const engineeringContext = language ? buildEngineeringContext(task.allowedFiles, task.approvedDesign, verifiedApproval, knowledge) : undefined;
   const maxAttempts = Math.min(options.maxAttempts ?? 3, worker.provider?.limits?.maxCodingAttempts ?? Number.POSITIVE_INFINITY);
   const maxRuntimeRetries = worker.provider?.limits?.maxRuntimeRetries ?? MAX_RUNTIME_RETRIES;
   const timeoutMs = options.modelTimeoutMs ?? 300_000;

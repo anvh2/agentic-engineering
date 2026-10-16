@@ -15,6 +15,7 @@ import {
 import { persistRun } from './coding-task-artifacts.ts';
 import { createTraceSink, redact, type TraceSink } from './coding-task-trace.ts';
 import { denyAllApprovals, type ApprovalVerifier } from './design-approval.ts';
+import type { EngineeringKnowledgeCatalog } from '../knowledge/engineering-knowledge.ts';
 import { LANGUAGE_ADAPTERS, delegatableLanguage } from './language-adapters.ts';
 
 /**
@@ -284,6 +285,7 @@ export interface DelegateOptions {
   runOptions?: Pick<RunCodingTaskOptions, 'modelTimeoutMs' | 'runtimeRetryDelayMs' | 'signal' | 'runId'>;
   /** Verifies an attached approvedDesign (default: deny all, i.e. fail closed). Used by routing and again by the runner. */
   approvals?: ApprovalVerifier;
+  knowledgeCatalog?: EngineeringKnowledgeCatalog;
 }
 
 /**
@@ -307,6 +309,7 @@ export async function executeDelegation(requestInput: DelegationRequest, options
     modelLabel: options.modelLabel,
     maxAttempts: policy.maxAttempts,
     approvals: options.approvals,
+    knowledgeCatalog: options.knowledgeCatalog,
     trace,
     ...options.runOptions,
   });
