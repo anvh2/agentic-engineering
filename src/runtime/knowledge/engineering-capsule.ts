@@ -36,7 +36,9 @@ export function newCapsule(runId: string): Capsule {
 
 /** Appends one event. Payloads must be canonical-JSON representable, bounded and free of credentials. */
 export function appendCapsuleEvent(c: Capsule, kind: CapsuleKind, payload: unknown): Capsule {
-  const state = verifyCapsule(c);
+  // Appending checks only the link it extends (O(1)); re-hashing the whole chain on every append would be quadratic. Whole-chain
+  // verification happens where authenticity is decided: verifyCapsule, receipt signing and receipt verification.
+  const state = verifyTail(c);
   if (!state.ok) throw new Error(`capsule: refusing to extend invalid capsule (${state.reason})`);
   if (!CAPSULE_KINDS.includes(kind)) throw new Error('capsule: unknown event kind');
   if (c.entries.length >= MAX_ENTRIES) throw new Error('capsule: entry limit reached');
@@ -46,6 +48,16 @@ export function appendCapsuleEvent(c: Capsule, kind: CapsuleKind, payload: unkno
   const material = { seq: c.entries.length, kind, payload, previousHash: c.rootHash };
   const event: CapsuleEvent = Object.freeze({ ...material, hash: entryHash(c.runId, material) });
   return Object.freeze({ ...c, entries: Object.freeze([...c.entries, event]), rootHash: event.hash });
+}
+
+function verifyTail(c: Capsule): { ok: boolean; reason: string } {
+  if (!c || c.schema !== CAPSULE_SCHEMA || typeof c.runId !== 'string' || !RUN_ID.test(c.runId) || !Array.isArray(c.entries)) return { ok: false, reason: 'invalid metadata' };
+  const last = c.entries.at(-1);
+  if (!last) return c.rootHash === null ? { ok: true, reason: 'empty' } : { ok: false, reason: 'root mismatch' };
+  try {
+    if (last.seq !== c.entries.length - 1 || !CAPSULE_KINDS.includes(last.kind) || entryHash(c.runId, last) !== last.hash) return { ok: false, reason: 'entry digest mismatch' };
+  } catch { return { ok: false, reason: 'unhashable entry' }; }
+  return last.hash === c.rootHash ? { ok: true, reason: 'tail verified' } : { ok: false, reason: 'root mismatch' };
 }
 
 export function verifyCapsule(c: Capsule): { ok: boolean; reason: string } {

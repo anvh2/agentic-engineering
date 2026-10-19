@@ -34,7 +34,7 @@ const ROLE_BY_SPECIALIST: Readonly<Record<string, FindingRole>> = Object.freeze(
   'documentation-reviewer': 'docs',
   'performance-optimizer': 'performance',
 });
-export const findingRoleFor = (specialistId: string): FindingRole => ROLE_BY_SPECIALIST[specialistId] ?? 'code';
+export const findingRoleFor = (specialistId: string): FindingRole => (Object.hasOwn(ROLE_BY_SPECIALIST, specialistId) ? ROLE_BY_SPECIALIST[specialistId]! : 'code');
 
 const isWithin = (parent: string, child: string): boolean => {
   const rel = relative(parent, child);

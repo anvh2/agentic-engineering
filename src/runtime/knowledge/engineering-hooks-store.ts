@@ -35,12 +35,17 @@ export class DurableHookLog {
     return rows.map((r) => JSON.parse(r.event_json) as HookEvent);
   }
 
-  /** Decides one event for `sessionId` against `policy` and, if newly accepted, records it atomically. Never throws on bad input. */
+  /**
+   * Decides one event for `sessionId` against `policy` and, if newly accepted, records it atomically. Never throws: lock
+   * contention, a corrupted log or a policy the stored history no longer satisfies all come back as a rejection (fail closed).
+   * The session is rebuilt and re-validated from the stored log on EVERY call. A cached copy would be trusted while its position
+   * matched the log's, which hides in-place tampering of an already stored event; a session is tens of events, so the rebuild is cheap.
+   */
   accept(policy: HookPolicy, sessionId: string, raw: unknown): HookDecision {
-    let session: HookSession;
-    this.db.exec('BEGIN IMMEDIATE');
+    const reject = (reason: string): HookDecision => Object.freeze({ accepted: false, reason: `hook log unusable: ${reason}`, eventFingerprint: '' });
+    try { this.db.exec('BEGIN IMMEDIATE'); } catch (error) { return reject((error as Error).message); }
     try {
-      session = HookSession.restore(policy, sessionId, this.events(sessionId));
+      const session = HookSession.restore(policy, sessionId, this.events(sessionId));
       const decision = session.accept(raw);
       if (decision.accepted && !decision.replay) {
         const event = raw as HookEvent;
@@ -50,9 +55,8 @@ export class DurableHookLog {
       this.db.exec('COMMIT');
       return decision;
     } catch (error) {
-      this.db.exec('ROLLBACK');
-      // A corrupted or policy-incompatible log must stop the session, not be worked around.
-      return Object.freeze({ accepted: false, reason: `hook log unusable: ${(error as Error).message}`, eventFingerprint: '' });
+      try { this.db.exec('ROLLBACK'); } catch { /* the connection is already outside a transaction */ }
+      return reject((error as Error).message);
     }
   }
 }

@@ -55,6 +55,8 @@ export interface ReportInput {
   trials?: readonly Trial[];
   env?: NodeJS.ProcessEnv;
   now: number;
+  /** Set when the knowledge store could not be read; reported as an error instead of failing the whole report. */
+  storeError?: string;
   /** Overrides environment-derived readiness, e.g. with a probe result. */
   providers?: readonly ProviderReadiness[];
 }
@@ -76,10 +78,12 @@ export async function probeOllama(env: NodeJS.ProcessEnv = process.env, fetchImp
   try { host = new URL(base).hostname; } catch { return { id: 'ollama', configured: false, basis: 'probe', detail: 'OLLAMA_BASE_URL is not a valid URL' }; }
   if (!['localhost', '127.0.0.1', '[::1]', '::1'].includes(host)) return { id: 'ollama', configured: true, basis: 'not-checked', detail: `probe skipped: ${host} is not a loopback address` };
   try {
-    const res = await fetchImpl(`${base.replace(/\/$/, '')}/api/tags`, { signal: AbortSignal.timeout(timeoutMs) });
+    // redirect: 'error' keeps the probe on the loopback address: a redirect to another host is a failure, never followed.
+    const res = await fetchImpl(`${base.replace(/\/$/, '')}/api/tags`, { signal: AbortSignal.timeout(timeoutMs), redirect: 'error' });
     const model = env.OLLAMA_MODEL ?? 'qwen3:8b';
     if (!res.ok) return { id: 'ollama', configured: true, basis: 'probe', detail: `endpoint answered HTTP ${res.status}`, model };
-    const body = (await res.json()) as { models?: { name?: string }[] };
+    let body: { models?: { name?: string }[] };
+    try { body = (await res.json()) as { models?: { name?: string }[] }; } catch { return { id: 'ollama', configured: false, basis: 'probe', detail: 'endpoint answered with something that is not Ollama\'s model list', model }; }
     const present = (body.models ?? []).some((m) => m.name === model || m.name?.startsWith(`${model}:`));
     return { id: 'ollama', configured: present, basis: 'probe', detail: present ? 'endpoint reachable and model present' : `endpoint reachable but model ${model} is not installed`, model };
   } catch {
@@ -126,7 +130,7 @@ export function defaultActiveSkills(dbPath: string): ReadonlyMap<string, string>
 
 export function buildEngineeringReport(input: ReportInput): EngineeringReport {
   const env = input.env ?? process.env;
-  const issues: DoctorFinding[] = [];
+  const issues: DoctorFinding[] = input.storeError ? [{ code: 'knowledge_store_unreadable', level: 'error', detail: input.storeError }] : [];
   const active = activeSkillDigests(input.activeEntries);
   const registry = input.registry;
   const stale: string[] = [], orphaned: string[] = [], unpromoted: string[] = [];

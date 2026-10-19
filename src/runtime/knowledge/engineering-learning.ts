@@ -185,8 +185,11 @@ const stats = (g: readonly Outcome[]) => {
 
 function candidateEntry(digest: string, text: string, scope: 'project' | 'global', projectId: string | undefined, roots: readonly string[]): KnowledgeEntry {
   const evidence = sha256Hex(canonicalJson([...roots].sort())).slice(0, 16);
+  // The id includes the scope: the store allows one active row per id, so a project lesson, another project's copy of it and
+  // a global lesson must never share an id (promoting one would block or retire another).
+  const idSeed = scope === 'project' ? sha256Hex(`${projectId}\n${digest}`) : digest;
   return Object.freeze({
-    id: `lesson-${digest.slice(0, 12)}`, revision: `v1-${evidence.slice(0, 8)}`, kind: 'lesson', language: 'common',
+    id: `lesson-${idSeed.slice(0, 12)}`, revision: `v1-${evidence.slice(0, 8)}`, kind: 'lesson', language: 'common',
     body: text.trim().replace(/\s+/g, ' '), source: `learning:${scope} evidence:sha256:${evidence}`, approved: false,
     ...(scope === 'project' && projectId ? { projectId } : {}),
   });
@@ -248,10 +251,18 @@ export function calibrationReport(predictions: readonly { confidence: number; ac
 
 /** One SkillRun per skill pinned in each verified outcome, so skill health is computed from the same evidence. */
 export function skillRunsFromOutcomes(outcomes: readonly Outcome[]): readonly SkillRun[] {
-  return outcomes.flatMap((o) => o.skills.map((s) => ({
-    skillId: s.id, revision: s.revision, taskId: `${o.taskId}:${hashValue(o.lessonDigest).slice(0, 8)}`, projectId: o.projectId,
-    outcome: o.verdict, independentlyVerified: true, at: o.at,
-  })));
+  // One run per (task, skill version): several lessons from one task are one use of the skill, not several. A run is accepted
+  // only if every verified outcome of that task for the skill was accepted.
+  const runs = new Map<string, { skillId: string; revision: string; taskId: string; projectId: string; accepted: boolean; at: number }>();
+  for (const o of outcomes) {
+    for (const s of o.skills) {
+      const key = JSON.stringify([o.projectId, o.taskId, s.id, s.revision]);
+      const run = runs.get(key);
+      if (run) { run.accepted &&= o.verdict === 'accepted'; run.at = Math.max(run.at, o.at); }
+      else runs.set(key, { skillId: s.id, revision: s.revision, taskId: o.taskId, projectId: o.projectId, accepted: o.verdict === 'accepted', at: o.at });
+    }
+  }
+  return [...runs.values()].map((r) => ({ skillId: r.skillId, revision: r.revision, taskId: r.taskId, projectId: r.projectId, outcome: r.accepted ? 'accepted' as const : 'rejected' as const, independentlyVerified: true, at: r.at }));
 }
 
 export type Recommendation = Readonly<{ action: 'revoke-or-rollback' | 'monitor' | 'none'; skillId: string; revision: string; reason: string }>;

@@ -24,11 +24,13 @@ export type HookDecision = Readonly<{ accepted: boolean; reason: string; eventFi
 
 export type ToolClass = 'read' | 'write' | 'execute';
 /** Runtime-owned. Adding a tool here is a code change reviewed with the permission model, not a prompt or manifest edit. */
-export const TOOL_CLASSES: Readonly<Record<string, ToolClass>> = Object.freeze({
+export const TOOL_CLASSES: Readonly<Record<string, ToolClass>> = Object.freeze(Object.assign(Object.create(null) as Record<string, ToolClass>, {
   listFiles: 'read', readFile: 'read', searchFiles: 'read', gitStatus: 'read', gitDiff: 'read',
   writeFile: 'write', applyPatch: 'write',
   runGoFmt: 'execute', runGoTest: 'execute', runJestTest: 'execute', runPrettier: 'execute',
-});
+}));
+/** Own-property lookup only: names such as `constructor` or `toString` are never tools. */
+export const toolClassOf = (tool: string): ToolClass | undefined => (Object.hasOwn(TOOL_CLASSES, tool) ? TOOL_CLASSES[tool] : undefined);
 
 export interface HookPolicy {
   taskId: string;
@@ -76,7 +78,7 @@ export function inspectHook(raw: unknown, policy: HookPolicy): HookDecision {
     if (event.taskId !== policy.taskId) return fail('hook outside task scope');
     if (event.phase === 'PreToolUse' || event.phase === 'PostToolUse') {
       if (!event.tool) return fail('tool event without a tool');
-      const cls = TOOL_CLASSES[event.tool];
+      const cls = toolClassOf(event.tool);
       if (!cls) return fail('unknown tool');
       if (!policy.tools.includes(event.tool)) return fail('tool outside allowlist');
       if (cls === 'write') {

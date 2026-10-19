@@ -8,7 +8,7 @@
  */
 import { scanForSecrets } from '../canonical.ts';
 import { containsSuspiciousKnowledgeText } from '../engineering-knowledge.ts';
-import { TOOL_CLASSES } from '../engineering-hooks.ts';
+import { toolClassOf } from '../engineering-hooks.ts';
 import { agentManifestSchema, specialistReportSchema, type AgentManifest, type Harness, type SkillManifest, type SpecialistReport, type TaskLanguage, type TaskType } from './schema.ts';
 
 export function parseAgentManifest(raw: unknown, skills: ReadonlyMap<string, SkillManifest>): AgentManifest {
@@ -19,7 +19,7 @@ export function parseAgentManifest(raw: unknown, skills: ReadonlyMap<string, Ski
   // Guidance and handoff text go into the system prompt, so they get the same override-token scan skill manifests get.
   if (containsSuspiciousKnowledgeText(JSON.stringify(m))) throw new Error(`agent manifest ${m.id} contains a reserved override token`);
   for (const tool of m.tools) {
-    const cls = TOOL_CLASSES[tool];
+    const cls = toolClassOf(tool);
     if (!cls) throw new Error(`agent ${m.id} requests unknown tool ${tool}`);
     if (cls !== 'read') throw new Error(`agent ${m.id} requests ${cls}-class tool ${tool}; specialists are read-only`);
   }
@@ -144,8 +144,9 @@ const CLAUDE_TOOLS: Readonly<Record<string, string>> = { listFiles: 'Glob', read
  * global configuration. Tools Claude Code cannot express without granting shell access are reported, not silently widened.
  */
 export function renderClaudeCodeAgent(m: AgentManifest, skills: readonly SkillManifest[], renderSkill: (s: SkillManifest) => string): { markdown: string; unsupportedTools: readonly string[] } {
-  const unsupportedTools = m.tools.filter((t) => !CLAUDE_TOOLS[t]);
-  const tools = [...new Set(m.tools.map((t) => CLAUDE_TOOLS[t]).filter((t): t is string => !!t))];
+  const claudeTool = (t: string): string | undefined => (Object.hasOwn(CLAUDE_TOOLS, t) ? CLAUDE_TOOLS[t] : undefined);
+  const unsupportedTools = m.tools.filter((t) => !claudeTool(t));
+  const tools = [...new Set(m.tools.map(claudeTool).filter((t): t is string => !!t))];
   // An empty or omitted `tools:` list makes Claude Code grant EVERY tool, so an agent with nothing expressible must not be emitted.
   if (tools.length === 0) throw new Error(`claude-code: none of ${m.id}'s tools (${m.tools.join(', ')}) can be expressed without granting shell access; refusing to emit an agent that would inherit every tool`);
   const body = [

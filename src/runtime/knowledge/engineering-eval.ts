@@ -231,8 +231,12 @@ export interface ComparisonPolicy {
   minAcceptedRateGain: number;
   /** Maximum tolerated cost-per-accepted ratio (integrated / baseline). */
   maxCostRatio: number;
-  /** Maximum tolerated growth of injected context, as a ratio. */
+  /** Maximum tolerated growth of injected context, as a ratio of the baseline (applies when the baseline injects any context). */
   maxContextRatio: number;
+  /** Absolute cap on injected context bytes per task. This is what bounds a baseline of zero, where a ratio is undefined. */
+  maxContextBytes: number;
+  /** Largest tolerated DROP in accepted rate. 0 means any regression rejects, whatever else improved. */
+  maxAcceptedRateDrop: number;
 }
 export interface ArmComparison {
   providerId: string;
@@ -253,7 +257,8 @@ export interface ArmComparison {
  * Only observations present in BOTH arms are compared, so an arm that dropped hard fixtures cannot look better.
  */
 export function compareArms(trials: readonly Trial[], policy: ComparisonPolicy, options: { k?: number } = {}): readonly ArmComparison[] {
-  if (!Number.isSafeInteger(policy.minPairs) || policy.minPairs < 1 || !nonNegative(policy.minAcceptedRateGain) || !nonNegative(policy.maxCostRatio) || !nonNegative(policy.maxContextRatio)) throw new Error('eval: invalid comparison policy');
+  if (!Number.isSafeInteger(policy.minPairs) || policy.minPairs < 1 || !nonNegative(policy.minAcceptedRateGain) || !nonNegative(policy.maxCostRatio) || !nonNegative(policy.maxContextRatio)
+    || !nonNegative(policy.maxContextBytes) || !nonNegative(policy.maxAcceptedRateDrop) || policy.maxAcceptedRateDrop > 1) throw new Error('eval: invalid comparison policy');
   const slot = (t: Trial) => JSON.stringify([t.fixtureId, t.fixtureCommit, t.repetition]);
   const providers = [...new Set(trials.map((t) => t.providerId))].sort();
   return Object.freeze(providers.map((providerId) => {
@@ -269,15 +274,26 @@ export function compareArms(trials: readonly Trial[], policy: ComparisonPolicy, 
     if (paired.length < policy.minPairs) { verdict = 'insufficient-evidence'; reasons.push(`only ${paired.length} paired observations, need ${policy.minPairs}`); }
     const rateDelta = paired.length ? i.acceptedRate - b.acceptedRate : 0;
     const firstDelta = paired.length ? i.firstAttemptRate - b.firstAttemptRate : 0;
-    const costRatio = paired.length && b.costPerAcceptedUsd !== null && i.costPerAcceptedUsd !== null && b.costPerAcceptedUsd > 0 ? i.costPerAcceptedUsd / b.costPerAcceptedUsd : null;
+    const bothCosts = b.costPerAcceptedUsd !== null && i.costPerAcceptedUsd !== null;
+    const costRatio = paired.length && bothCosts && b.costPerAcceptedUsd! > 0 ? i.costPerAcceptedUsd! / b.costPerAcceptedUsd! : null;
     const ctxRatio = paired.length && b.averageContextBytes > 0 ? i.averageContextBytes / b.averageContextBytes : null;
     if (paired.length >= policy.minPairs) {
       if (i.securityViolations > b.securityViolations) reasons.push('security violations increased');
       if (i.falsePasses > b.falsePasses) reasons.push('false passes increased');
-      if (costRatio !== null && costRatio > policy.maxCostRatio) reasons.push(`cost per accepted task grew ${costRatio.toFixed(2)}x`);
+      // A gain elsewhere never buys back a regression in overall acceptance.
+      if (rateDelta < -policy.maxAcceptedRateDrop) reasons.push(`accepted rate fell by ${(-rateDelta).toFixed(3)}`);
       if (ctxRatio !== null && ctxRatio > policy.maxContextRatio) reasons.push(`context grew ${ctxRatio.toFixed(2)}x`);
-      if (!reasons.length && rateDelta < policy.minAcceptedRateGain && firstDelta < policy.minAcceptedRateGain) reasons.push('no predeclared effectiveness metric improved');
-      if (reasons.length) verdict = 'reject';
+      if (i.averageContextBytes > policy.maxContextBytes) reasons.push(`context of ${Math.round(i.averageContextBytes)} bytes per task exceeds the cap of ${policy.maxContextBytes}`);
+      if (bothCosts) {
+        if (costRatio !== null && costRatio > policy.maxCostRatio) reasons.push(`cost per accepted task grew ${costRatio.toFixed(2)}x`);
+        if (b.costPerAcceptedUsd === 0 && i.costPerAcceptedUsd! > 0) reasons.push('cost per accepted task grew from zero');
+      } else if (!reasons.length) {
+        // Unknown cost is not zero cost: an arm whose spend cannot be compared has not shown it is affordable.
+        verdict = 'insufficient-evidence';
+        reasons.push('cost per accepted task is unmeasured in at least one arm, so the cost gate cannot be evaluated');
+      }
+      if (!reasons.length && verdict === 'adopt' && rateDelta < policy.minAcceptedRateGain && firstDelta < policy.minAcceptedRateGain) reasons.push('no predeclared effectiveness metric improved');
+      if (reasons.length && verdict !== 'insufficient-evidence') verdict = 'reject';
     }
     return Object.freeze({ providerId, pairs: paired.length, baseline: b, integrated: i, acceptedRateDelta: rateDelta, firstAttemptRateDelta: firstDelta, costRatio, contextRatio: ctxRatio, verdict, reasons: Object.freeze(reasons) });
   }));
@@ -300,6 +316,13 @@ function goPackageAllowed(p: string): boolean {
   const base = p.endsWith('/...') ? p.slice(0, -4) : p;
   return /^[A-Za-z0-9_.\/-]+$/.test(base) && !base.startsWith('/') && base.split('/').every((part) => part !== '' && part !== '..');
 }
+/** A repo-relative `.go` file, or a directory (`.`, `./pkg`, `pkg/sub`): no absolute path, no `..`, no odd characters. */
+function gofmtPathAllowed(p: string): boolean {
+  if (p.startsWith('/') || p.split('/').includes('..') || !/^[A-Za-z0-9_.\/-]+$/.test(p)) return false;
+  const last = p.split('/').filter(Boolean).at(-1) ?? '';
+  return last === '.' || last.endsWith('.go') || !last.includes('.');
+}
+
 export function validateFixtureCommand(language: 'go' | 'js', argv: readonly string[]): string | undefined {
   const adapter = LANGUAGE_ADAPTERS[language];
   if (!adapter.enabled || !Array.isArray(argv) || argv.length < 2 || argv.some((a) => typeof a !== 'string' || a === '' || /[\u0000\n\r]/.test(a))) return 'invalid argv';
@@ -322,7 +345,14 @@ export function validateFixtureCommand(language: 'go' | 'js', argv: readonly str
     if (!pkgs.length || !pkgs.every(goPackageAllowed)) return 'go package path is not allowed';
     return undefined;
   }
-  return argv[0] === 'gofmt' ? undefined : 'unsupported go verifier';
+  if (argv[0] === 'gofmt') {
+    // Check-only: -w would rewrite files, so only list (-l), diff (-d) and simplify (-s) are allowed, on repo-relative .go paths.
+    const flags = argv.slice(1).filter((x) => x.startsWith('-')), paths = argv.slice(1).filter((x) => !x.startsWith('-'));
+    if (flags.some((f) => !['-l', '-d', '-s'].includes(f))) return 'gofmt flag is not allow-listed (check-only: -l, -d, -s)';
+    if (!paths.length || paths.some((p) => !gofmtPathAllowed(p))) return 'gofmt needs repo-relative .go files or directories';
+    return undefined;
+  }
+  return 'unsupported go verifier';
 }
 
 export function validateFixtures(fixtures: readonly EvalFixture[]): void {

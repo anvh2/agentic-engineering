@@ -108,7 +108,7 @@ test('provider routing needs authorization, sample size, zero security violation
   assert.throws(() => chooseEvidenceBackedProvider(scores, { ...base, minimumTrials: 0 }), /invalid/);
 });
 
-const policy: ComparisonPolicy = { minPairs: 4, minAcceptedRateGain: 0.2, maxCostRatio: 1.25, maxContextRatio: 3 };
+const policy: ComparisonPolicy = { minPairs: 4, minAcceptedRateGain: 0.2, maxCostRatio: 1.25, maxContextRatio: 3, maxContextBytes: 16_384, maxAcceptedRateDrop: 0 };
 const pairs = (baselineOk: boolean[], integratedOk: boolean[], extra: (arm: 'baseline' | 'integrated') => Partial<TrialPayload> = () => ({})) =>
   ingest(...baselineOk.flatMap((ok, repetition) => [
     { arm: 'baseline' as const, repetition, verifierPassed: ok, contextBytes: 1000, ...extra('baseline') },
@@ -163,6 +163,7 @@ test('verifier argv validation mirrors the runtime ceiling', () => {
   for (const argv of [['npx', 'jest', 'a.test.js'], ['npx', '--no-install', 'jest', '--config=x.js', 'a.test.js'], ['npx', '--no-install', 'jest'], ['npx', '--no-install', 'jest', '../a.test.js'],
     ['npx', '--install', 'evil'], ['node', 'a.js']]) reject('js', argv);
   assert.equal(validateFixtureCommand('go', ['go', 'test', '-run=TestX', '-count=1', './pkg']), undefined);
-  assert.equal(validateFixtureCommand('go', ['gofmt', '-l']), undefined);
+  for (const argv of [['gofmt', '-l', '.'], ['gofmt', '-l', './pkg'], ['gofmt', '-d', '-s', 'pkg/a.go']]) assert.equal(validateFixtureCommand('go', argv), undefined, argv.join(' '));
+  for (const argv of [['gofmt', '-l'], ['gofmt', '-w', 'a.go'], ['gofmt', '-l', '/etc'], ['gofmt', '-l', '../x'], ['gofmt', '-l', 'a.txt'], ['gofmt', '-l', 'a;b.go']]) reject('go', argv);
   assert.ok(validateFixtureCommand('js', ['npx', '--no-install', 'jest', 'a.test.js\nrm']));
 });

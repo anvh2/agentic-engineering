@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import {
@@ -79,7 +79,16 @@ test('candidates are deterministic regardless of input order and carry their evi
   const a = proposeCandidates(outcomes), b = proposeCandidates([...outcomes].reverse());
   assert.deepEqual(a.map((c) => c.entry), b.map((c) => c.entry), 'same revision and source for the same evidence set');
   assert.equal(a[0]!.evidenceRoots.length, 6);
-  assert.equal(a[0]!.entry.id, `lesson-${lessonDigestOf(LESSON).slice(0, 12)}`);
+  // A project lesson's id is scoped to its project; only a global lesson's id is the bare digest.
+  const idSeed = a[0]!.scope === 'project' ? createHash('sha256').update(`${a[0]!.projectIds[0]}\n${lessonDigestOf(LESSON)}`).digest('hex') : lessonDigestOf(LESSON);
+  assert.equal(a[0]!.entry.id, `lesson-${idSeed.slice(0, 12)}`);
+});
+
+test('the same lesson from two projects gets two distinct candidate ids, so promoting one can never block or retire the other', () => {
+  const out = proposeCandidates([...many(5, { projectId: 'proj-a' }), ...many(5, { projectId: 'proj-b' })]);
+  const projectIds = out.filter((c) => c.scope === 'project').map((c) => c.entry.id);
+  assert.equal(projectIds.length, 2);
+  assert.equal(new Set(out.map((c) => c.entry.id)).size, out.length, 'no two candidates share an id');
 });
 
 test('project isolation: one project\'s evidence never yields another project\'s candidate, and a single project never yields a global one', () => {

@@ -110,9 +110,17 @@ export class DurableDecisionLog {
 
   /** Accepted decisions as worker/reviewer context. Proposed, superseded and deprecated records never appear. */
   acceptedContext(): Readonly<{ text: string; digest: string }> {
+    const latest = this.latestStatuses();
     const rows = this.db.prepare('SELECT id, revision, record_json FROM engineering_decisions ORDER BY id, revision').all() as unknown as Row[];
-    const accepted = rows.filter((r) => this.statusOf(r.id, r.revision) === 'accepted').map((r) => ({ ...(JSON.parse(r.record_json) as AdrRecord), status: 'accepted' as const }));
+    const accepted = rows.filter((r) => latest.get(`${r.id}@${r.revision}`) === 'accepted').map((r) => ({ ...(JSON.parse(r.record_json) as AdrRecord), status: 'accepted' as const }));
     return acceptedAdrContext(accepted);
+  }
+
+  /** Current status of every revision from ONE query (the newest event per revision), not one query per row. */
+  private latestStatuses(): Map<string, Status> {
+    const rows = this.db.prepare(`SELECT e.id, e.revision, e.event FROM engineering_decision_events e
+      WHERE e.seq = (SELECT MAX(seq) FROM engineering_decision_events WHERE id = e.id AND revision = e.revision)`).all() as unknown as { id: string; revision: string; event: string }[];
+    return new Map(rows.map((r) => [`${r.id}@${r.revision}`, r.event as Status]));
   }
 
   /** Links an ACCEPTED revision to a task for traceability. This confers no approval and no permission of any kind. */
@@ -145,8 +153,8 @@ export class DurableDecisionLog {
   }
 
   private acceptedRevision(id: string): string | undefined {
-    const rows = this.db.prepare('SELECT DISTINCT revision FROM engineering_decision_events WHERE id=?').all(id) as unknown as { revision: string }[];
-    return rows.map((r) => r.revision).find((rev) => this.statusOf(id, rev) === 'accepted');
+    const prefix = `${id}@`;
+    return [...this.latestStatuses()].find(([key, status]) => key.startsWith(prefix) && status === 'accepted')?.[0].slice(prefix.length);
   }
 
   private row(id: string, revision: string): Row | undefined {
