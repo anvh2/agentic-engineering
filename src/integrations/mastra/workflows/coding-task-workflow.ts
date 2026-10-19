@@ -95,7 +95,7 @@ export interface CodingTaskWorkflowDeps {
   providers?: ProviderRegistry;
   /** The operator's allow-list, read at run time (default: AGENTIC_ALLOW_PROVIDERS of THIS process, i.e. the Mastra server's). */
   allowProviders?: () => readonly string[];
-  runOptions?: Pick<RunCodingTaskOptions, 'modelTimeoutMs' | 'runtimeRetryDelayMs'>;
+  runOptions?: Pick<RunCodingTaskOptions, 'modelTimeoutMs' | 'runtimeRetryDelayMs' | 'modelLabel'>;
   /**
    * Verifies an attached approvedDesign against the runtime's durable approval records. Default: deny all. The workflow input
    * is reachable by any local caller of the Mastra API, so a design in it is never trusted on its own `approvalRef`.
