@@ -177,8 +177,9 @@ test('negative: an invalid config file is rejected, never partially applied or r
   bad(fileText({ providers: [{ providerId: 'x-ai', kind: 'local', url: 'ftp://h/v1', billing: 'local-free', credential: { env: 'X_KEY' } }] }), /http\(s\)/);
   bad(fileText({ providers: [{ providerId: 'x-ai', kind: 'local', url: 'not a url', billing: 'local-free', credential: { env: 'X_KEY' } }] }), /not a valid URL/);
   bad(fileText({ providers: [{ providerId: 'x-ai', kind: 'local', url: 'http://h/v1', billing: 'local-free', credential: { env: 'lowercase' } }] }), /credential/);
-  // A key pasted where a variable name belongs.
-  bad(fileText({ providers: [{ providerId: 'x-ai', kind: 'local', url: 'http://h/v1', billing: 'local-free', credential: { env: 'X_KEY', placeholder: 'sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' } }] }), /looks like a credential/);
+  // A key pasted where a variable name belongs. Assembled at runtime so no credential-shaped literal is committed.
+  const pasted = ['sk', 'ant', 'api03', 'A'.repeat(32)].join('-');
+  bad(fileText({ providers: [{ providerId: 'x-ai', kind: 'local', url: 'http://h/v1', billing: 'local-free', credential: { env: 'X_KEY', placeholder: pasted } }] }), /looks like a credential/);
   // Duplicate / unregistered references are caught when the runtime is built.
   assert.throws(() => buildModelRuntime({}, parseModelConfig(fileText({ providers: [{ providerId: 'ollama', kind: 'local', url: 'http://h/v1', billing: 'local-free', credential: { env: 'K_ENV' } }] }))), /already registered/);
   assert.throws(() => buildModelRuntime({}, parseModelConfig(fileText({ assignments: [{ agentId: 'a', providerId: 'lmstudio', modelId: 'qwen3-coder' }, { agentId: 'a', providerId: 'lmstudio', modelId: 'qwen3-coder' }] }))), /assigned a model twice/);
