@@ -1,7 +1,10 @@
 import { createStep, createWorkflow } from '@mastra/core/workflows';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { findProjectRoot } from '../../../core/paths.ts';
+import type { MeetingRecord } from '../../../runtime/collaboration/record.ts';
+import { renderMeetingRecord } from '../../../lead/collaboration/record-markdown.ts';
 import { loadPackRegistry, type PackRegistry } from '../../../runtime/knowledge/packs/loader.ts';
 import type { ProviderReadiness } from '../../../runtime/knowledge/engineering-control.ts';
 import { COUNCIL_LIMITS } from '../../../runtime/council/contract.ts';
@@ -161,6 +164,10 @@ export function createEngineeringCouncilWorkflow(deps: CouncilWorkflowDeps = {})
       const sidecar = loadSidecar(d.workdir, inputData.meetingId);
       const rec = sidecar ? recordCouncil(d, sidecar) : null;
       if (!sidecar || !rec) return { ...base, status: 'refused' as const, outcome: null, reasons: ['record_unavailable: the meeting has no closed session to record'] };
+      // The M9/M10 renderer is the one source for the generic meeting view (turn log, objections, usage); the council record adds only
+      // what the engine does not know: structured positions, verified evidence, call accounting.
+      const dir = join(d.workdir, 'council', rec.meetingId);
+      writeFileSync(join(dir, 'meeting-record.md'), renderMeetingRecord(JSON.parse(readFileSync(join(dir, 'meeting-record.json'), 'utf8')) as MeetingRecord));
       const synth = rec.synthesis?.synthesis as { decision?: string } | undefined;
       return {
         ...base, status: 'recorded' as const, outcome: rec.outcome, reasons: [rec.reason],

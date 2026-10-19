@@ -34,6 +34,8 @@ export interface SpecialistResult {
   runId: string;
   traceId: string | null;
   inferenceMs: number;
+  /** The agent that answered (a Mastra agent id), when the invoker knows it. */
+  agentId?: string | null;
 }
 
 export interface SpecialistInvoker {
@@ -110,7 +112,7 @@ export class CouncilParticipant implements Participant {
         this.o.log?.(`${seat.specialistId}: ${phase} (round ${ctx.round}, attempt ${attempt})`);
         result = await this.o.invoker.invoke(call);
       } catch (err) {
-        this.o.journal.append({ ...entry, runId: null, traceId: null, outcome: 'error', reason: String((err as Error)?.message ?? err).slice(0, 300), inferenceMs: 0, inputTokens: null, outputTokens: null, toolCalls: [], steps: null, replyBytes: 0, replySha256: null });
+        this.o.journal.append({ ...entry, agentId: null, runId: null, traceId: null, outcome: 'error', reason: String((err as Error)?.message ?? err).slice(0, 300), inferenceMs: 0, inputTokens: null, outputTokens: null, toolCalls: [], steps: null, replyBytes: 0, replySha256: null });
         throw err; // a provider error, timeout or abort is the coordinator's to classify: failed meeting, or suspended on abort
       }
       inferenceMs += result.inferenceMs;
@@ -118,7 +120,7 @@ export class CouncilParticipant implements Participant {
       output = output === null || result.outputTokens === null ? null : output + result.outputTokens;
 
       const checked = this.check(phase, result.text, ctx);
-      this.o.journal.append({ ...entry, runId: result.runId, traceId: result.traceId, outcome: checked.ok ? 'accepted' : 'invalid', reason: checked.ok ? null : checked.reason, inferenceMs: result.inferenceMs, inputTokens: result.inputTokens, outputTokens: result.outputTokens, toolCalls: result.toolCalls, steps: result.steps, replyBytes: Buffer.byteLength(result.text ?? '', 'utf8'), replySha256: result.text ? sha(result.text) : null });
+      this.o.journal.append({ ...entry, agentId: result.agentId ?? null, runId: result.runId, traceId: result.traceId, outcome: checked.ok ? 'accepted' : 'invalid', reason: checked.ok ? null : checked.reason, inferenceMs: result.inferenceMs, inputTokens: result.inputTokens, outputTokens: result.outputTokens, toolCalls: result.toolCalls, steps: result.steps, replyBytes: Buffer.byteLength(result.text ?? '', 'utf8'), replySha256: result.text ? sha(result.text) : null });
       if (checked.ok) {
         return {
           ...checked.reply,

@@ -5,6 +5,8 @@ import { REPOSITORY_ROOT_CONTEXT_KEY } from '../../../workers/tools/repository-t
 
 /** The slice of a Mastra Agent the council uses, so a test can hand in a scripted one. */
 export interface CouncilAgentLike {
+  /** The Mastra agent id (`specialist-<id>` live, `council-scripted-<id>` offline); recorded so a record names the agent that answered. */
+  id?: string;
   generate(prompt: string, options: Record<string, unknown>): Promise<{ text?: string; steps?: readonly unknown[]; toolCalls?: readonly unknown[]; toolResults?: readonly unknown[]; usage?: Record<string, unknown>; totalUsage?: Record<string, unknown>; traceId?: string; runId?: string }>;
 }
 
@@ -68,6 +70,7 @@ export function createMastraInvoker(options: MastraInvokerOptions): SpecialistIn
         toolCalls: toolCounts(result),
         inputTokens: num(usage.inputTokens ?? usage.promptTokens),
         outputTokens: num(usage.outputTokens ?? usage.completionTokens),
+        agentId: typeof agent.id === 'string' ? agent.id : null,
         runId: result.runId ?? `${options.workflowRunId}:${call.seat.specialistId}:r${call.round}a${call.attempt}`,
         traceId: result.traceId ?? null,
         inferenceMs: Date.now() - started,

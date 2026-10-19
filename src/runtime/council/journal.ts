@@ -22,6 +22,8 @@ export interface CallEntry {
   attempt: number;
   provider: string;
   model: string;
+  /** Mastra agent id that answered (null when the call failed before an agent answered). */
+  agentId: string | null;
   runId: string | null;
   traceId: string | null;
   outcome: 'accepted' | 'invalid' | 'error';

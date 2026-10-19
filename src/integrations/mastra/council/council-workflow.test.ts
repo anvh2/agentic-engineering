@@ -6,6 +6,11 @@ import { test } from 'node:test';
 import { Mastra } from '@mastra/core/mastra';
 import { findProjectRoot } from '../../../core/paths.ts';
 import { councilRecordIntact, type CouncilRecord } from '../../../runtime/council/record.ts';
+import { CollaborationStore } from '../../../runtime/collaboration/store.ts';
+import { recordIntact, type MeetingRecord } from '../../../runtime/collaboration/record.ts';
+import { councilDirectory } from '../../../runtime/council/panel.ts';
+import { councilDbPath, loadSidecar } from '../../../runtime/council/run.ts';
+import { SchedulerStore } from '../../../runtime/scheduler/store.ts';
 import { loadPackRegistry } from '../../../runtime/knowledge/packs/loader.ts';
 import { createEngineeringCouncilWorkflow, type CouncilWorkflowDeps, type CouncilWorkflowInput, type CouncilWorkflowResult } from './council-workflow.ts';
 import { createScriptedCouncilAgents } from './scripted.ts';
@@ -88,5 +93,60 @@ test('re-running a closed meeting returns its record and makes no model call', a
     const second = h.record('again');
     assert.equal(second.accounting.modelCalls, first.accounting.modelCalls, 'no new call');
     assert.equal(second.workflowRuns.length, 2, 'the second workflow run is evidenced, not hidden');
+  } finally { h.done(); }
+});
+
+test('three Mastra specialist agents take turns in the EXISTING meeting engine: its events, turn order, fencing and chair rule are the record', async () => {
+  const h = harness();
+  try {
+    const r = await h.run({ meetingId: 'engine' });
+    assert.equal(r.result!.status, 'recorded');
+    const sidecar = loadSidecar(h.workdir, 'engine')!;
+    const scheduler = new SchedulerStore(councilDbPath(h.workdir));
+    try {
+      const store = new CollaborationStore(scheduler, councilDirectory(sidecar.panel, sidecar.model));
+      // Replaying the thread re-verifies the hash chain (store.thread throws `corrupt` otherwise).
+      const { thread, session } = store.session(sidecar.sessionId);
+      const types = store.events(sidecar.threadId).map((e) => e.type);
+      const count = (t: string) => types.filter((x) => x === t).length;
+      assert.equal(count('session.claimed'), 1, 'one coordinator claimed the session (MeetingCoordinator fencing)');
+      assert.equal(count('turn.reserved'), 7, 'every turn was reserved and charged by the store');
+      assert.equal(count('message.posted'), 7);
+      assert.equal(count('session.concluded'), 1);
+      assert.equal(session.outcome!.outcome, 'decided');
+      assert.equal(session.limits.maxRounds, 3);
+
+      const msgs = thread.messages.filter((m) => m.sessionId === session.id);
+      const r1 = msgs.filter((m) => m.round === 1);
+      assert.deepEqual(r1.map((m) => m.kind), ['proposal', 'proposal', 'proposal']);
+      assert.equal(new Set(r1.map((m) => m.author.id)).size, 3, 'three distinct participants proposed');
+      assert.deepEqual(r1.map((m) => m.turn), [0, 1, 2], 'in the store\'s turn order');
+      for (const m of msgs.filter((x) => x.round === 2)) {
+        assert.ok(m.kind === 'objection' || m.kind === 'support');
+        const parent = thread.byId.get(m.parentId!)!;
+        assert.equal(parent.kind, 'proposal');
+        assert.notEqual(parent.author.id, m.author.id, 'a critique targets another member\'s proposal');
+      }
+      const decision = msgs.find((m) => m.kind === 'decision')!;
+      assert.equal(decision.round, 3);
+      assert.equal(decision.author.id, session.chair, 'only the chair recorded the decision (store rule)');
+      for (const m of msgs) assert.equal(m.invocation!.provider, 'scripted');
+
+      // The engine's own record is the meeting record the council record points at, unchanged.
+      const engineRecord = store.record(session.id)!;
+      assert.ok(recordIntact(engineRecord));
+      const written = JSON.parse(readFileSync(join(h.workdir, 'council', 'engine', 'meeting-record.json'), 'utf8')) as MeetingRecord;
+      assert.equal(written.recordHash, engineRecord.recordHash);
+      const rec = h.record('engine');
+      assert.equal(rec.integrity.meetingRecordHash, engineRecord.recordHash);
+      assert.match(readFileSync(join(h.workdir, 'council', 'engine', 'meeting-record.md'), 'utf8'), /^# Meeting record: Engineering council engine/, 'rendered by the existing M10 renderer');
+
+      // Three distinct Mastra agents answered, one per seat, and they are the registered ones.
+      const agentBySeat = new Map(rec.calls.map((c) => [c.specialistId, c.agentId]));
+      assert.deepEqual([...agentBySeat.values()].sort(), ['council-scripted-architect', 'council-scripted-reliability-reviewer', 'council-scripted-security-reviewer']);
+
+      // Engine rules still bind the specialists after the meeting: nothing can be posted into a closed session.
+      assert.throws(() => store.post({ threadId: sidecar.threadId, authorId: sidecar.panel[1]!.participantId, kind: 'decision', body: 'x', decision: { outcome: 'accept', proposalIds: ['m1'], rationale: 'r' }, idempotencyKey: 'late-decision' }), /recorded only as a turn in a meeting session/);
+    } finally { scheduler.close(); }
   } finally { h.done(); }
 });

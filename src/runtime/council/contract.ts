@@ -10,6 +10,7 @@
  * council can adopt an ADR, change a file, approve or merge: the decision is a record and a human adopts it.
  */
 import { z } from 'zod';
+import { jsonObjectCandidates } from '../knowledge/packs/agents.ts';
 
 export const COUNCIL_RECORD_SCHEMA = 'agentic.council-record/1';
 
@@ -82,26 +83,6 @@ export type Synthesis = z.output<typeof synthesisSchema>;
 
 export type ParsedReply<T> = { ok: true; value: T } | { ok: false; reason: string };
 
-/** Every balanced top-level `{...}` span, in order; tolerates prose, code fences, <think> blocks and stray braces. */
-function* objectCandidates(source: string): Generator<string> {
-  let i = 0;
-  while (i < source.length) {
-    const start = source.indexOf('{', i);
-    if (start < 0) return;
-    let depth = 0, inString = false, escaped = false, end = -1;
-    for (let j = start; j < source.length; j++) {
-      const c = source[j]!;
-      if (inString) { if (escaped) escaped = false; else if (c === '\\') escaped = true; else if (c === '"') inString = false; continue; }
-      if (c === '"') inString = true;
-      else if (c === '{') depth++;
-      else if (c === '}' && --depth === 0) { end = j; break; }
-    }
-    if (end < 0) return;
-    yield source.slice(start, end + 1);
-    i = end + 1;
-  }
-}
-
 /** Strict parse of a model reply. Never throws. The first schema violation is reported so a re-ask can name it. */
 export function parseCouncilReply<T>(raw: unknown, schema: z.ZodType<T>, maxBytes = 16_000): ParsedReply<T> {
   if (typeof raw !== 'string' || !raw.trim()) return { ok: false, reason: 'empty output' };
@@ -109,7 +90,7 @@ export function parseCouncilReply<T>(raw: unknown, schema: z.ZodType<T>, maxByte
   const source = raw.replace(/<think>[\s\S]*?<\/think>/g, '');
   let first: string | undefined;
   let sawObject = false;
-  for (const candidate of objectCandidates(source)) {
+  for (const candidate of jsonObjectCandidates(source)) {
     sawObject = true;
     let value: unknown;
     try { value = JSON.parse(candidate); } catch { first ??= 'output is not valid JSON'; continue; }

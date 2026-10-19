@@ -111,6 +111,7 @@ export interface CouncilTurn {
   messageId: string | null;
   attempt: number;
   at: number | null;
+  agentId: string | null;
   runId: string | null;
   traceId: string | null;
   inputTokens: number | 'UNKNOWN' | null;
@@ -170,7 +171,7 @@ export function buildCouncilRecord(input: {
     const call = callAt.get(`${t.participant}|${t.round}|${t.turn}`);
     const inv = msg?.invocation ?? null;
     return {
-      participantId: t.participant, specialistId: spec(t.participant), outcome: t.outcome, kind: t.kind, messageId: t.messageId, attempt: t.attempt, at: msg?.at ?? null,
+      participantId: t.participant, specialistId: spec(t.participant), outcome: t.outcome, kind: t.kind, messageId: t.messageId, attempt: t.attempt, at: msg?.at ?? null, agentId: call?.agentId ?? null,
       runId: inv?.runId ?? call?.runId ?? null, traceId: inv?.traceId ?? call?.traceId ?? null,
       inputTokens: inv ? inv.usage.inputTokens : null, outputTokens: inv ? inv.usage.outputTokens : null, inferenceMs: inv ? inv.inferenceMs : null, reason: t.reason,
     };
@@ -242,7 +243,7 @@ export function renderCouncilRecord(r: CouncilRecord): string {
   for (const round of r.rounds) {
     out.push(`## Round ${round.round}: ${round.phase}`, '');
     for (const t of round.turns) {
-      out.push(`- ${t.specialistId} — ${t.outcome}${t.kind ? ` ${t.kind}` : ''}${t.messageId ? ` ${t.messageId}` : ''}${t.at ? ` at ${iso(t.at)}` : ''}${t.runId ? ` run ${t.runId}` : ''}${t.traceId ? ` trace ${t.traceId}` : ''}${t.reason ? ` — ${one(t.reason)}` : ''}`);
+      out.push(`- ${t.specialistId} — ${t.outcome}${t.kind ? ` ${t.kind}` : ''}${t.messageId ? ` ${t.messageId}` : ''}${t.at ? ` at ${iso(t.at)}` : ''}${t.agentId ? ` agent ${t.agentId}` : ''}${t.runId ? ` run ${t.runId}` : ''}${t.traceId ? ` trace ${t.traceId}` : ''}${t.reason ? ` — ${one(t.reason)}` : ''}`);
       const p = r.proposals.find((x) => x.messageId === t.messageId);
       if (p) { const v = p.proposal as { position?: string; rationale?: string; risks?: { risk: string }[]; evidence?: string[]; unknowns?: string[] }; out.push(`  - position: ${one(v.position)}`, `  - rationale: ${one(v.rationale)}`, `  - risks: ${(v.risks ?? []).map((x) => one(x.risk)).join('; ') || 'none stated'}`, `  - evidence cited: ${renderEvidence(p.evidence, p.fileToolCallsThisTurn)}`, `  - unknowns: ${(v.unknowns ?? []).join('; ') || 'none stated'}`); }
       const c = r.critiques.find((x) => x.messageId === t.messageId);
