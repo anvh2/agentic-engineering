@@ -187,7 +187,8 @@ function candidateEntry(digest: string, text: string, scope: 'project' | 'global
   const evidence = sha256Hex(canonicalJson([...roots].sort())).slice(0, 16);
   // The id includes the scope: the store allows one active row per id, so a project lesson, another project's copy of it and
   // a global lesson must never share an id (promoting one would block or retire another).
-  const idSeed = scope === 'project' ? sha256Hex(`${projectId}\n${digest}`) : digest;
+  // Domain-separated seeds: the same text under two scopes, or under two projects, can never produce the same id.
+  const idSeed = scope === 'project' ? sha256Hex(`lesson-id/project/v1\n${projectId}\n${digest}`) : sha256Hex(`lesson-id/global/v1\n${digest}`);
   return Object.freeze({
     id: `lesson-${idSeed.slice(0, 12)}`, revision: `v1-${evidence.slice(0, 8)}`, kind: 'lesson', language: 'common',
     body: text.trim().replace(/\s+/g, ' '), source: `learning:${scope} evidence:sha256:${evidence}`, approved: false,

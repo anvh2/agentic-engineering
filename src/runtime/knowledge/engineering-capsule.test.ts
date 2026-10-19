@@ -80,3 +80,13 @@ test('appending refuses credentials, oversized payloads, unknown kinds, unrepres
   assert.throws(() => appendCapsuleEvent({ ...build(), rootHash: 'f'.repeat(64) }, 'tool', {}), /invalid capsule/);
   assert.throws(() => newCapsule('../etc'), /run id/);
 });
+
+test('F-26 appending checks the link it extends; whole-chain tampering is still caught where authenticity is decided', () => {
+  const c = appendCapsuleEvent(appendCapsuleEvent(newCapsule('run-tail'), 'task', { id: 't' }), 'tool', { n: 1 });
+  const badTail: Capsule = { ...c, entries: [c.entries[0]!, { ...c.entries[1]!, payload: { n: 2 } as never }] };
+  assert.throws(() => appendCapsuleEvent(badTail, 'review', { ok: true }), /refusing to extend invalid capsule/);
+  const badRoot: Capsule = { ...c, rootHash: 'f'.repeat(64) };
+  assert.throws(() => appendCapsuleEvent(badRoot, 'review', { ok: true }), /refusing to extend invalid capsule/);
+  const badMiddle: Capsule = { ...c, entries: [{ ...c.entries[0]!, payload: { id: 'forged' } as never }, c.entries[1]!] };
+  assert.equal(verifyCapsule(badMiddle).ok, false, 'full verification still sees a rewritten earlier entry');
+});

@@ -1,3 +1,4 @@
+import { findingRoleFor } from './review.ts';
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, readFileSync } from 'node:fs';
@@ -355,4 +356,13 @@ test('Claude Code rendering refuses an agent with no expressible tools instead o
   assert.match(ok.markdown, /^tools: .+$/m);
   assert.doesNotMatch(ok.markdown, /^tools: *$/m);
   for (const a of registry.agents) assert.doesNotThrow(() => renderClaudeCodeAgent(a, [], renderSkill), a.id);
+});
+
+test('F-27 prototype keys are not tools, roles or Claude tool names', () => {
+  assert.equal(findingRoleFor('constructor'), 'code');
+  assert.equal(findingRoleFor('toString'), 'code');
+  const m = { ...agent('go-reviewer'), tools: ['constructor'] } as never;
+  assert.throws(() => parseAgentManifest(m, new Map()), /unknown tool constructor/);
+  const base = agent('go-reviewer');
+  assert.throws(() => renderClaudeCodeAgent({ ...base, tools: ['toString', 'constructor'] } as never, [], renderSkill), /refusing to emit an agent that would inherit every tool/);
 });

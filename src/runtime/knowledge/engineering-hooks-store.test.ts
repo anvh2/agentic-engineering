@@ -92,3 +92,15 @@ test('HookSession.restore refuses an invalid stored history', () => {
   assert.throws(() => HookSession.restore(policy, 's1', [e(0, 'SessionStart'), e(0, 'SessionStart')]), /not valid for this session/, 'a duplicated stored event is corruption, not a replay');
   assert.equal(HookSession.restore(policy, 's1', [e(0, 'SessionStart'), e(1, 'PreToolUse', write)]).next, 2);
 });
+
+test('F-22 a lock the store cannot take is a rejection and not an exception, and the log stays usable afterwards', () => {
+  const db = new DatabaseSync(':memory:');
+  const log = new DurableHookLog(db);
+  db.exec('BEGIN'); // an enclosing transaction makes BEGIN IMMEDIATE fail
+  const blocked = log.accept(policy, 's1', e(0, 'SessionStart'));
+  assert.equal(blocked.accepted, false);
+  assert.match(blocked.reason, /hook log unusable/);
+  db.exec('ROLLBACK');
+  assert.equal(log.accept(policy, 's1', e(0, 'SessionStart')).accepted, true);
+  assert.equal(log.events('s1').length, 1);
+});

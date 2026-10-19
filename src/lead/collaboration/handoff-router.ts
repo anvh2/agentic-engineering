@@ -4,7 +4,7 @@
  *
  * Trust model (see docs/operations/agent-handoff-router.md):
  *  - A comment is DATA. Only fixed header lines are parsed; the body is never interpreted, echoed or executed.
- *  - Author authentication is the GitHub account (owner/member/collaborator or an explicit login allowlist). The `FROM:` header is
+ *  - Author authentication is the GitHub account, against an explicit login allow-list only. The `FROM:` header is
  *    a CLAIM: when several agents post through one account it cannot distinguish them, so no decision here treats it as approval.
  *  - The router only acknowledges transport (PONG) and queues review requests. It never approves, passes, merges or runs anything.
  *  - Router output is labelled ROUTER_GENERATED and addressed FROM `Router-Bridge`; it can never be mistaken for a reviewer's message.
@@ -73,9 +73,12 @@ export interface RouterContext {
   handled: ReadonlySet<string>;
 }
 
-const TRUSTED_ASSOCIATIONS: readonly string[] = ['OWNER', 'MEMBER', 'COLLABORATOR'];
-
-export const isTrustedAuthor = (c: GhComment, allowedLogins: readonly string[]): boolean => allowedLogins.includes(c.login) || TRUSTED_ASSOCIATIONS.includes(c.association);
+/**
+ * Trust is the explicit login allow-list and nothing else. Repository association (OWNER/MEMBER/COLLABORATOR) is deliberately NOT
+ * enough: in a repository with several collaborators it would let any of them queue requests or forge an "answer" that suppresses a
+ * real message. The workflow may use association as a cheap pre-filter, but the router decides on logins.
+ */
+export const isTrustedAuthor = (c: GhComment, allowedLogins: readonly string[]): boolean => allowedLogins.includes(c.login);
 
 /** Pure. Loop guard first, then authentication, then validation, then idempotency, then the (small) set of permitted reactions. */
 export function decide(comment: GhComment, ctx: RouterContext): Decision {

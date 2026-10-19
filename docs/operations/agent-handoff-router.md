@@ -19,7 +19,7 @@ Code: `src/lead/collaboration/handoff-router.ts` (pure logic + store), `scripts/
 
 1. Protocol line `AGENT_HANDOFF_V1`, bounded size, strict header grammar, no duplicate headers, `HEAD_SHA` is 40 hex or `LOCAL_ONLY`.
 2. Loop guard: anything `ROUTER_GENERATED`, from `Router-Bridge`, or of type `ROUTER_ACK` is ignored.
-3. Author authentication: the GitHub login must be on the allow-list or have `OWNER`/`MEMBER`/`COLLABORATOR` association.
+3. Author authentication: the GitHub login must be on the explicit allow-list. Repository association (`OWNER`/`MEMBER`/`COLLABORATOR`) is **not** sufficient: in a repository with several collaborators it would let any of them queue requests or forge an "answer" that suppresses a real message. The workflow uses association only as a cheap pre-filter.
 4. `FROM` and `TO` must be known agent ids.
 5. Idempotency: a message id already answered in the PR history (by a trusted author's router reply, `PONG`, `ROUTER_ACK` or `REVIEW_RESPONSE`) or recorded in the cursor is skipped.
 6. Only then the reaction table: `PING` → router `PONG`; review request to the reviewer → queue + `ROUTER_ACK`; message to the lead → inbox; anything else → recorded.

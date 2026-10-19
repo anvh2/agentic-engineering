@@ -167,3 +167,22 @@ test('verifier argv validation mirrors the runtime ceiling', () => {
   for (const argv of [['gofmt', '-l'], ['gofmt', '-w', 'a.go'], ['gofmt', '-l', '/etc'], ['gofmt', '-l', '../x'], ['gofmt', '-l', 'a.txt'], ['gofmt', '-l', 'a;b.go']]) reject('go', argv);
   assert.ok(validateFixtureCommand('js', ['npx', '--no-install', 'jest', 'a.test.js\nrm']));
 });
+
+test('F-23 a gain elsewhere never buys back a drop in accepted rate, and a zero-context baseline is bounded by the absolute cap', () => {
+  const [dropped] = compareArms(pairs([true, true, true, true], [true, true, true, false]), policy);
+  assert.equal(dropped!.verdict, 'reject');
+  assert.ok(dropped!.reasons.some((r) => /accepted rate fell/.test(r)), JSON.stringify(dropped!.reasons));
+  const [huge] = compareArms(pairs([false, false, true, false], [true, true, true, true], (arm) => ({ contextBytes: arm === 'baseline' ? 0 : 50_000 })), policy);
+  assert.equal(huge!.verdict, 'reject');
+  assert.ok(huge!.reasons.some((r) => /exceeds the cap/.test(r)), JSON.stringify(huge!.reasons));
+  assert.throws(() => compareArms(pairs([true], [true]), { ...policy, maxContextBytes: -1 }), /invalid comparison policy/);
+});
+
+test('F-24 unmeasured cost is not zero cost: an otherwise good arm is insufficient-evidence, not adopted', () => {
+  const [unknownCost] = compareArms(pairs([false, false, true, false], [true, true, true, false], (arm) => (arm === 'integrated' ? { costUsd: null } : { costUsd: 0.01 })), policy);
+  assert.equal(unknownCost!.verdict, 'insufficient-evidence');
+  assert.ok(unknownCost!.reasons.some((r) => /unmeasured/.test(r)), JSON.stringify(unknownCost!.reasons));
+  const [grew] = compareArms(pairs([false, false, true, false], [true, true, true, false], (arm) => (arm === 'integrated' ? { costUsd: 0.02 } : { costUsd: 0 })), policy);
+  assert.equal(grew!.verdict, 'reject');
+  assert.ok(grew!.reasons.some((r) => /grew from zero/.test(r)), JSON.stringify(grew!.reasons));
+});

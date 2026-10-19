@@ -12,8 +12,8 @@ Severity is the severity the issue would have had in production use.
 | Severity | Total | Fixed | Mitigated | Open |
 | --- | --- | --- | --- | --- |
 | CRITICAL | 1 | 1 | 0 | 0 |
-| HIGH | 11 | 11 | 0 | 0 |
-| MEDIUM | 7 | 7 | 0 | 0 |
+| HIGH | 12 | 12 | 0 | 0 |
+| MEDIUM | 12 | 11 | 1 | 0 |
 | LOW | 1 | 1 | 0 | 0 |
 
 No CRITICAL or HIGH finding is open. The items in "Not complete" below are scope and verification gaps, not code defects, and are
@@ -124,6 +124,46 @@ listed so that no reader mistakes them for done.
 ### F-20 LOW: documentation overstated capability
 - **Evidence:** `docs/engineering/mastra-specialist-catalog.md` described registration as sufficient; `docs/plans/ecc-selective-integration.md` was marked "not implemented".
 - **Correction:** both rewritten against what exists; deferred and unmeasured items are labelled.
+
+## Second-pass findings (this session, SHA-bound peer review on PR #53)
+
+Found by re-reading the hardening that was uncommitted at the start of the session and by the independent review of `9a5ebfe`
+(`chatgpt-scoped-20261019-001`). Each FIXED item below has a test that was run against the pre-fix code (`ed1e1a0`) and failed there.
+
+### F-21 HIGH: prototype keys were resolvable as tools
+- **Evidence:** `TOOL_CLASSES[tool]` and the role and Claude-tool lookups used plain object indexing, so `constructor` / `toString` could resolve to a truthy inherited value.
+- **Correction:** null-prototype table and own-property lookups (`toolClassOf`, `findingRoleFor`, `claudeTool`). **Verification:** `engineering-hooks.test.ts` (F-21), `packs.test.ts` (F-27). Both fail on `ed1e1a0`.
+
+### F-22 MEDIUM: a hook-log lock failure threw instead of failing closed
+- **Correction:** `BEGIN IMMEDIATE` and `ROLLBACK` failures become a rejection. **Verification:** `engineering-hooks-store.test.ts` (F-22), fails on `ed1e1a0`.
+
+### F-23 HIGH: an arm could be adopted while its accepted rate fell, or with unbounded context
+- **Correction:** `maxAcceptedRateDrop` regression gate; absolute `maxContextBytes` cap (a ratio is undefined for a zero baseline). **Verification:** `engineering-eval.test.ts` (F-23), fails on `ed1e1a0`.
+
+### F-24 MEDIUM: unmeasured cost was treated as acceptable
+- **Correction:** cost unknown in either arm is `insufficient-evidence`; growth from zero is a rejection. **Verification:** `engineering-eval.test.ts` (F-24), fails on `ed1e1a0`.
+
+### F-25 MEDIUM: the Ollama readiness probe could follow a redirect or throw on a non-Ollama body
+- **Correction:** `redirect: 'error'`; a body that is not Ollama's model list is reported. **Verification:** `engineering-doctor.test.ts` (F-25), fails on `ed1e1a0`.
+
+### F-26 LOW (behaviour-preserving): capsule append re-hashed the whole chain on every append
+- **Correction:** appends check only the link they extend; whole-chain verification stays where authenticity is decided (verify, sign, verify receipt). The test guards the optimization's safety and **passes on the old code by design**, so this is not a security fix.
+
+### F-27 MEDIUM: see F-21 (same root cause in the agent-manifest and renderer paths).
+
+### F-28 MEDIUM: the comment router trusted any repository collaborator
+- **Source:** independent review point 4. **Evidence:** `isTrustedAuthor` accepted `OWNER`/`MEMBER`/`COLLABORATOR` association in addition to the allow-list, so another collaborator could queue requests or forge a PONG that marks a real message answered.
+- **Correction:** trust is the explicit login allow-list only. **Verification:** `handoff-router.test.ts` (F-28).
+
+### F-29 MEDIUM: `gofmt` argv was unrestricted at the lifecycle and integration boundaries
+- **Source:** independent review point 2; confirmed. `commandPolicyProblems` allowed any `gofmt` argv for task-supplied `verificationCommands`, and the integration allow-list admitted bare `gofmt`. Writes were confined to a throwaway `git archive` export, so the repository was not at risk, but `-w`/`-r` could rewrite the tree being verified between commands.
+- **Correction:** one shared check-only policy (`src/runtime/execution/gofmt-policy.ts`: `-l -d -s -e`, repo-relative `.go` files or directories) used by the evaluation validator, `commandPolicyProblems` and the integration allow-list. Formatting that modifies files stays in the sandboxed `runGoFmt` worker tool, which does not use this path. **Verification:** `src/lead/lifecycle/store.test.ts`, `engineering-eval.test.ts`.
+
+### F-30 LOW: lesson ids lacked domain separation
+- **Correction:** `lesson-id/project/v1` and `lesson-id/global/v1` seeds; the project seed includes the project id, which is a validated slug and is not recoverable from the truncated hash. **Verification:** `engineering-learning.test.ts` (two projects, same lesson, distinct ids; stable within a scope).
+
+### Trust boundary of the durable hook log (documented, not closed)
+Removing the session cache means every `accept` rebuilds and re-validates the session from the stored log inside `BEGIN IMMEDIATE`. That defeats stale process-local state and in-place edits that go through the SQL layer. It does **not** protect against an adversary who can bypass the append-only triggers or rewrite the database file itself. Closing that needs signed or chained rows; it is out of scope for this PR. Do not reintroduce a cache without a benchmark showing a need.
 
 ## Not complete (scope and verification gaps)
 

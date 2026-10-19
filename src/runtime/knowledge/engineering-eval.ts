@@ -12,6 +12,7 @@
  * Concepts adapted from ECC's `agent-eval` skill and `scripts/lib/eval-harness` (MIT, affaan-m/ECC at
  * b92f181b3b748d1abbc2afd94af6aa7d8c8fca29): pinned fixtures, repeated trials, pass@k vs pass^k, receipts; reimplemented.
  */
+import { gofmtArgvProblem } from '../execution/gofmt-policy.ts';
 import { LANGUAGE_ADAPTERS } from '../execution/language-adapters.ts';
 import { JS_VERIFY_FLAGS } from '../execution/delegation.ts';
 import { SHA256_PATTERN, scanForSecrets } from './canonical.ts';
@@ -316,13 +317,6 @@ function goPackageAllowed(p: string): boolean {
   const base = p.endsWith('/...') ? p.slice(0, -4) : p;
   return /^[A-Za-z0-9_.\/-]+$/.test(base) && !base.startsWith('/') && base.split('/').every((part) => part !== '' && part !== '..');
 }
-/** A repo-relative `.go` file, or a directory (`.`, `./pkg`, `pkg/sub`): no absolute path, no `..`, no odd characters. */
-function gofmtPathAllowed(p: string): boolean {
-  if (p.startsWith('/') || p.split('/').includes('..') || !/^[A-Za-z0-9_.\/-]+$/.test(p)) return false;
-  const last = p.split('/').filter(Boolean).at(-1) ?? '';
-  return last === '.' || last.endsWith('.go') || !last.includes('.');
-}
-
 export function validateFixtureCommand(language: 'go' | 'js', argv: readonly string[]): string | undefined {
   const adapter = LANGUAGE_ADAPTERS[language];
   if (!adapter.enabled || !Array.isArray(argv) || argv.length < 2 || argv.some((a) => typeof a !== 'string' || a === '' || /[\u0000\n\r]/.test(a))) return 'invalid argv';
@@ -345,13 +339,7 @@ export function validateFixtureCommand(language: 'go' | 'js', argv: readonly str
     if (!pkgs.length || !pkgs.every(goPackageAllowed)) return 'go package path is not allowed';
     return undefined;
   }
-  if (argv[0] === 'gofmt') {
-    // Check-only: -w would rewrite files, so only list (-l), diff (-d) and simplify (-s) are allowed, on repo-relative .go paths.
-    const flags = argv.slice(1).filter((x) => x.startsWith('-')), paths = argv.slice(1).filter((x) => !x.startsWith('-'));
-    if (flags.some((f) => !['-l', '-d', '-s'].includes(f))) return 'gofmt flag is not allow-listed (check-only: -l, -d, -s)';
-    if (!paths.length || paths.some((p) => !gofmtPathAllowed(p))) return 'gofmt needs repo-relative .go files or directories';
-    return undefined;
-  }
+  if (argv[0] === 'gofmt') return gofmtArgvProblem(argv);
   return 'unsupported go verifier';
 }
 

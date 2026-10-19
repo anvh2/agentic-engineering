@@ -1,3 +1,4 @@
+import { toolClassOf } from './engineering-hooks.ts';
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { HookSession, TOOL_CLASSES, compactSession, inspectHook, type HookPolicy } from './engineering-hooks.ts';
@@ -80,4 +81,14 @@ test('compaction preserves verified and unverified task status without truncatio
   assert.throws(() => compactSession({ ...data, pendingSteps: ['x'.repeat(5000)] }, 512), /truncate/);
   assert.throws(() => compactSession({ ...data, completedSteps: ['key ghp_' + 'a'.repeat(36)] }), /credential/);
   assert.throws(() => compactSession({ ...data, checkpointDigest: 'short' }), /checkpoint/);
+});
+
+test('F-21 prototype keys are never tools, even when an allow-list names them', () => {
+  for (const tool of ['constructor', 'toString', 'hasOwnProperty', '__proto__']) {
+    assert.equal(toolClassOf(tool), undefined, tool);
+    const decision = inspectHook({ ...pre, tool }, { ...policy, tools: [tool] });
+    assert.equal(decision.accepted, false, tool);
+  }
+  assert.equal(inspectHook({ ...pre, tool: 'constructor' }, { ...policy, tools: ['constructor'] }).reason, 'unknown tool');
+  assert.equal(toolClassOf('writeFile'), 'write');
 });
