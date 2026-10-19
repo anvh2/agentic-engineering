@@ -15,19 +15,24 @@ import { codingWorkerGo, codingWorkerJs } from '../../workers/coding-worker';
 import { registerSpecialists } from './specialist-agents.ts';
 import { specialistReviewWorkflow } from './workflows/specialist-review-workflow.ts';
 import { codingTaskWorkflow } from './workflows/coding-task-workflow';
+import { councilRegistration, councilStartupLine, createCouncilStatusRoute } from './council/register.ts';
 
 // Registration only constructs agents; it makes no model call and touches no repository. A pack that cannot load registers no
 // specialists and records why, instead of preventing the coding workers from registering.
 export const specialists = registerSpecialists();
 if (specialists.error) console.warn(`[specialists] not registered: ${specialists.error}`);
 
+// Engineering council (M11.x): scripted stand-in agents + the workflow. No model call and no network at registration.
+const council = councilRegistration(specialists);
+console.info(await councilStartupLine(specialists));
+
 export const mastra = new Mastra({
   bundler: {
     externals: ['@duckdb/node-bindings'],
   },
-  server: { apiRoutes: [createMetricsRoute(), createEngineeringStatusRoute(), ...createControlCenterRoutes()] },
-  agents: { codingWorkerGo, codingWorkerJs, ...specialists.agents },
-  workflows: { codingTaskWorkflow, specialistReviewWorkflow },
+  server: { apiRoutes: [createMetricsRoute(), createEngineeringStatusRoute(), createCouncilStatusRoute(specialists), ...createControlCenterRoutes()] },
+  agents: { codingWorkerGo, codingWorkerJs, ...specialists.agents, ...council.agents },
+  workflows: { codingTaskWorkflow, specialistReviewWorkflow, engineeringCouncilWorkflow: council.workflow },
   storage: new MastraCompositeStore({
     id: 'composite-storage',
     default: new LibSQLStore({

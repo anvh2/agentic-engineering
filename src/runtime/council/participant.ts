@@ -130,6 +130,9 @@ export class CouncilParticipant implements Participant {
     if (mine.length >= maxCalls) throw new CouncilBudgetExhausted(`${this.id}: model-call ceiling reached (${mine.length}/${maxCalls})`);
     let tokens = 0;
     for (const e of mine) {
+      // A call lost to an interruption or a provider error returned no reply, so it has no usage to verify; it still counts as a
+      // call above, and the record reports total tokens as UNKNOWN because of it. Only replies must report usage.
+      if (e.outcome === 'error') continue;
       if (e.inputTokens === null || e.outputTokens === null) throw new CouncilBudgetExhausted(`${this.id}: an earlier call reported no token usage, so the ${maxTokens}-token ceiling cannot be verified; refusing further calls`);
       tokens += e.inputTokens + e.outputTokens;
     }
