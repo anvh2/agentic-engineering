@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { tempDir } from '../../src/runtime/scheduler/test-helpers.ts';
 import { SmokeCancellationUnconfirmed, runSchedulerSmoke } from '../provider-smoke/scheduler-smoke.ts';
+import { readPid } from '../../src/workers/providers/__testing__/pidfile.ts';
 
 const FAKE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'workers', 'providers', '__testing__', 'fake-codex.mjs');
 const RIGHT = 'package smoke\n\n// Double returns n multiplied by two.\nfunc Double(n int) int {\n\treturn n * 2\n}\n';
@@ -63,8 +64,8 @@ function hanging(mode: 'hang' | 'term-ok-hang', extra: { termGraceMs: number; ca
   });
   run.catch(() => {});
   const pid = async () => {
-    await waitFor(() => existsSync(pidfile), 'the (mock) Codex CLI to be running');
-    return Number(readFileSync(pidfile, 'utf8'));
+    await waitFor(() => readPid(pidfile) !== undefined, 'the (mock) Codex CLI to be running');
+    return readPid(pidfile)!;
   };
   return { emitter, logs, exits, outDir, run, pid };
 }

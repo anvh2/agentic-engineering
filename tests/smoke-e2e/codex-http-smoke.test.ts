@@ -10,6 +10,7 @@ import { capacityFor } from '../../src/runtime/capacity/model-capacity.ts';
 import { tempDir } from '../../src/runtime/scheduler/test-helpers.ts';
 import { HTTP_SMOKE_LIMITS, HTTP_SMOKE_OPT_IN_ENV, checkHttpSmokeAuthorization } from '../provider-smoke/http-smoke-guards.ts';
 import { SmokeCancellationUnconfirmed, TASK_ID, runSchedulerSmoke, type SmokeOptions } from '../provider-smoke/scheduler-smoke.ts';
+import { readPid } from '../../src/workers/providers/__testing__/pidfile.ts';
 
 /**
  * The full HTTP execution path with a FAKE Codex CLI (no network, no account, no model):
@@ -67,8 +68,8 @@ function hanging(extra: Parameters<typeof smoke>[0] = {}) {
   const run = s.run();
   run.catch(() => {});
   const pid = async () => {
-    await waitFor(() => existsSync(pidfile), 'the (fake) Codex CLI to be running under the Mastra server');
-    return Number(readFileSync(pidfile, 'utf8'));
+    await waitFor(() => readPid(pidfile) !== undefined, 'the (fake) Codex CLI to be running under the Mastra server');
+    return readPid(pidfile)!;
   };
   return { ...s, emitter, exits, logs, run, pid };
 }

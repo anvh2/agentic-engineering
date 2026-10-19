@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 // A stand-in for the Codex CLI used by tests. It never touches the network or any account. Behavior comes from FAKE_* env
 // vars (the adapter forwards only what its config's `env` names). It records its argv and environment keys for assertions.
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+// Publish the pid atomically (write + rename): a reader that polls for the file's EXISTENCE must never see it empty, because
+// Number('') is 0 and process.kill(0, 0) succeeds (it addresses the caller's own process group).
+const publishPid = (file) => { const tmp = `${file}.${process.pid}.tmp`; writeFileSync(tmp, String(process.pid)); renameSync(tmp, file); };
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 
@@ -30,10 +33,10 @@ if (args[0] === '--version') {
   const event = (e) => console.log(JSON.stringify(e));
   if (mode === 'hang') {
     process.on('SIGTERM', () => {}); // ignores the polite request
-    if (process.env.FAKE_PIDFILE) writeFileSync(process.env.FAKE_PIDFILE, String(process.pid));
+    if (process.env.FAKE_PIDFILE) publishPid(process.env.FAKE_PIDFILE);
     setInterval(() => {}, 1000);
   } else if (mode === 'term-ok-hang') {
-    if (process.env.FAKE_PIDFILE) writeFileSync(process.env.FAKE_PIDFILE, String(process.pid));
+    if (process.env.FAKE_PIDFILE) publishPid(process.env.FAKE_PIDFILE);
     setInterval(() => {}, 1000);
   } else if (mode === 'fail') {
     console.error('Error: unauthorized token sk-abcdefghijklmnop1234');

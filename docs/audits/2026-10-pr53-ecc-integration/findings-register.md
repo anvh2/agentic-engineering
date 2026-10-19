@@ -13,7 +13,7 @@ Severity is the severity the issue would have had in production use.
 | --- | --- | --- | --- | --- |
 | CRITICAL | 1 | 1 | 0 | 0 |
 | HIGH | 12 | 12 | 0 | 0 |
-| MEDIUM | 12 | 11 | 1 | 0 |
+| MEDIUM | 13 | 12 | 1 | 0 |
 | LOW | 1 | 1 | 0 | 0 |
 
 No CRITICAL or HIGH finding is open. The items in "Not complete" below are scope and verification gaps, not code defects, and are
@@ -161,6 +161,13 @@ Found by re-reading the hardening that was uncommitted at the start of the sessi
 
 ### F-30 LOW: lesson ids lacked domain separation
 - **Correction:** `lesson-id/project/v1` and `lesson-id/global/v1` seeds; the project seed includes the project id, which is a validated slug and is not recoverable from the truncated hash. **Verification:** `engineering-learning.test.ts` (two projects, same lesson, distinct ids; stable within a scope).
+
+### F-31 MEDIUM: macOS CI failed on a cancellation test because of a non-atomic pid file (test-harness race)
+- **Source:** independent CI inspection of `9a5ebfe` (`chatgpt-ci-shard1-20261019-001`): shard 1/4, `gemini-scheduler.test.ts` "cancellation (lead cancel)", `timed out waiting for: the CLI to be dead`; the adjacent scheduler-stop test passed locally and in CI.
+- **Evidence (reproduced, not assumed):** the fake CLIs wrote their pid with `writeFileSync`, which truncates before it writes. The tests waited for the file to *exist* and then read it. An empty read gives `Number('') === 0`, and `process.kill(0, 0)` signals the caller's own process group, so `alive(0)` is true forever: the early `assert.ok(alive(pid))` passes vacuously and the later wait times out. With the exact primitive, 12 of 400 first reads (3%) were empty; with write-then-rename, 0 of 400. This matches the CI signature; the CI log itself does not print the pid, so the link between this race and that one CI run is inference, not observation.
+- **Not a product regression, checked:** the cancellation product code was not changed; both scheduler test files ran 6 times in parallel under mutual load afterwards with 27/27 passing in every run.
+- **Correction:** both fakes publish the pid atomically (write to a temp name, rename); every reader waits for a complete pid (`readPid`) and uses a strict `isAlive` that refuses pids 0, 1, negative and non-integer. No timeout or assertion was loosened.
+- **Verification:** `src/workers/providers/__testing__/pidfile.test.ts` (helper contract; atomic publication, probabilistic against the old fakes: it failed in 2 of 3 runs against `d9320ec`, deterministic against the fix).
 
 ### Trust boundary of the durable hook log (documented, not closed)
 Removing the session cache means every `accept` rebuilds and re-validates the session from the stored log inside `BEGIN IMMEDIATE`. That defeats stale process-local state and in-place edits that go through the SQL layer. It does **not** protect against an adversary who can bypass the append-only triggers or rewrite the database file itself. Closing that needs signed or chained rows; it is out of scope for this PR. Do not reintroduce a cache without a benchmark showing a need.

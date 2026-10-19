@@ -11,6 +11,7 @@ import { tempDir } from '../../src/runtime/scheduler/test-helpers.ts';
 import { GEMINI_FREE_TIER_MODEL, GEMINI_HTTP_SMOKE_OPT_IN_VALUE, GEMINI_RETIRED_FOR_NEW_USERS, GEMINI_SMOKE_BUDGET, GEMINI_SMOKE_MAX_FORWARDED_REQUESTS, HTTP_SMOKE_LIMITS, checkGeminiSmokeModel, HTTP_SMOKE_OPT_IN_ENV, HTTP_SMOKE_OPT_IN_VALUE, checkHttpSmokeAuthorization } from '../provider-smoke/http-smoke-guards.ts';
 import { guardVerdict, startModelGuard } from '../provider-smoke/gemini-model-guard.ts';
 import { SmokeCancellationUnconfirmed, TASK_ID, runSchedulerSmoke, type SmokeOptions } from '../provider-smoke/scheduler-smoke.ts';
+import { readPid } from '../../src/workers/providers/__testing__/pidfile.ts';
 
 /**
  * The full HTTP execution path with a FAKE Gemini CLI (no network, no account, no model):
@@ -69,8 +70,8 @@ function hanging(extra: Parameters<typeof smoke>[0] = {}) {
   const run = s.run();
   run.catch(() => {});
   const pid = async () => {
-    await waitFor(() => existsSync(pidfile), 'the (fake) Gemini CLI to be running under the Mastra server');
-    return Number(readFileSync(pidfile, 'utf8'));
+    await waitFor(() => readPid(pidfile) !== undefined, 'the (fake) Gemini CLI to be running under the Mastra server');
+    return readPid(pidfile)!;
   };
   return { ...s, emitter, exits, logs, run, pid, pidfile };
 }

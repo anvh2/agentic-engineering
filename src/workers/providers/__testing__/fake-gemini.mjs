@@ -2,7 +2,10 @@
 // A stand-in for the Gemini CLI used by tests. It never touches the network or any account. Behavior comes from FAKE_* env
 // vars (the adapter forwards only what its config's `env` names). It records its argv, working directory, environment keys and
 // the run-private settings/policy files it was handed (they are deleted after the call, so the test reads them from here).
-import { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+// Publish the pid atomically (write + rename): a reader that polls for the file's EXISTENCE must never see it empty, because
+// Number('') is 0 and process.kill(0, 0) succeeds (it addresses the caller's own process group).
+const publishPid = (file) => { const tmp = `${file}.${process.pid}.tmp`; writeFileSync(tmp, String(process.pid)); renameSync(tmp, file); };
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 
@@ -58,11 +61,11 @@ if (args[0] === '--version') {
   if (mode === 'hang') {
     process.on('SIGTERM', () => {}); // ignores the polite request
     if (startDelay > 0) await new Promise((r) => setTimeout(r, startDelay));
-    if (process.env.FAKE_PIDFILE) writeFileSync(process.env.FAKE_PIDFILE, String(process.pid));
+    if (process.env.FAKE_PIDFILE) publishPid(process.env.FAKE_PIDFILE);
     setInterval(() => {}, 1000);
   } else if (mode === 'term-ok-hang') {
     if (startDelay > 0) await new Promise((r) => setTimeout(r, startDelay));
-    if (process.env.FAKE_PIDFILE) writeFileSync(process.env.FAKE_PIDFILE, String(process.pid));
+    if (process.env.FAKE_PIDFILE) publishPid(process.env.FAKE_PIDFILE);
     setInterval(() => {}, 1000);
   } else if (mode === 'fail') {
     console.error('Error: unauthorized token sk-abcdefghijklmnop1234');
