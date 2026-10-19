@@ -2,7 +2,7 @@
 
 - **Repository / PR:** `anvh2/agentic-engineering`, PR #53 (Draft, base `master`), branch `research/ecc-selective-integration`
 - **Session:** 2026-10-19, Engineering Lead role held by Claude (Sonnet), independent peer reviewer ChatGPT via PR comments
-- **Report is about:** the commits listed in section 9. Values marked **PENDING** are not yet verified and must not be read as results.
+- **Status: PARTIAL.** The final-regression gate is **not met** (section 8). This report must not be read as a completion claim.
 - **Smoke tests:** DEFERRED (no live Ollama, no live Mastra Studio, no paid API was contacted).
 
 ## 1. What is real, what is scripted, what is not implemented
@@ -87,12 +87,12 @@ The local poller (`npm run pr-router -- poll`) makes one `gh api` call per inter
 | Execution traceability | 100% | **100%** of scenarios have run ids, tool traces and verifier exit codes (A, B1, B2) or comment ids (C) |
 | Explicit terminal/blocked states | 100% | **100%**: `REVIEW_PENDING` x2, `ESCALATED/coding_attempts_exhausted`, C `AWAITING_REVIEW` |
 | Unauthorized mutations | 0 | **0 observed**: changed files were exactly the allowed file or none; source checkout clean in all runs |
-| Credential exposure | 0 | **PENDING**: no credential was handled; final diff audit not yet run |
+| Credential exposure | 0 | **0 observed.** Scan of every line added versus `master` found 2 pattern hits, both fixtures in `repository-tools-secret-files.test.ts` that exist to prove secret files are unreadable (a fake `sk_live_...` string and a PEM header around it) |
 | Unbounded retries | 0 | **0**: B2 stopped at 3 attempts; worst-case bound across layers is documented (ADR: 18 inferences) |
 | Fabricated verification successes | 0 | **0**: every PASS came from a real `go test` exit code recorded by the runtime |
 | Durable recovery | demonstrated or clearly failed | **Demonstrated** by existing reliability scenarios (2/2); **not** demonstrated by the new scenarios |
 | Independent review | at least 1 real cycle | **1 cycle completed**, re-review pending |
-| Final regression | pass at final SHA | **PENDING** (section 8) |
+| Final regression | pass at final SHA | **NOT MET** (section 8): two full runs on `9a4f71d`, each with a failure in a real-Codex smoke test, under heavy external load |
 | Human message forwarding | 0 | **0** messages were relayed between the agents by the human |
 
 ## 7. Findings produced by this session
@@ -107,8 +107,13 @@ Registered in `docs/audits/2026-10-pr53-ecc-integration/findings-register.md` as
 | Full `npm test` at `09dba01` (router commit) | 1406 tests, 1406 pass, 0 fail, 0 skipped, 813.8 s |
 | Autonomy demonstration (3 tests) | 3 of 3 pass on `09c7252` |
 | Reliability scenarios `interrupted-run`, `stale-lease` | 2 of 2 pass |
-| Full `npm test` at the final SHA | **PENDING** |
-| GitHub CI at the final SHA | **PENDING** (`d9320ec`: success on all four macOS shards; `7076c90` and later were still running when this was written) |
+| Full `npm test` at `9a4f71d`, **run 1** | 1429 tests, 1428 pass, **1 fail**: `tests/smoke-e2e/m87-credential-isolation.test.ts` "control" case (its `go test` probe inside the real Codex workspace-write sandbox returned false) |
+| Full `npm test` at `9a4f71d`, **run 2** | **Did not finish** by the time this was written (about 38 minutes). It already contains **1 fail**: `tests/smoke-e2e/m86-recovery.test.ts` server-crash case (`restartedServerPid` missing, i.e. the harness did not restart the real Mastra server). No pass/fail totals exist for this run. |
+| Isolated reruns of those two files | M8.7 file: 14 of 14 pass (16:08Z). The "control" case alone: 0 failures in 25 runs on pre-session `ed1e1a0` and 0 in 25 on `9a4f71d`, 1 failure in 12 other isolated runs (the first after idle). M8.6 file: **inconclusive**, no summary within 280 s under load. |
+| Environment during the runs | Load average 34 to 62 on the host. Other Claude sessions (B on issue #54, C on a model registry, announced in comments 6271017159 and 6271036767) were running their own test suites and a `mastra dev` server on the same machine. This is a plausible cause of timing failures in tests that spawn real servers and CLIs; **it is not proven**, and the root cause of either failure is not identified. I did not change either test or its harness. |
+| GitHub CI at `9a4f71d` | success: typecheck and all four macOS test shards (the real-Codex smoke tests are probably not run there; not verified) |
+
+**Gate decision:** a full green regression at the final SHA was not obtained, so no `READY_FOR_REVIEW` marker is posted. The honest state is `PARTIAL_CHECKPOINTED`.
 
 ## 9. Consolidation
 
@@ -122,3 +127,6 @@ Registered in `docs/audits/2026-10-pr53-ecc-integration/findings-register.md` as
 - The retry layers multiply (up to 18 model invocations per task for the local default); deferred, documented in the ADR.
 - `integrate.ts` uses the shared `gofmt` policy but has no direct test of its own.
 - The event-driven bridge is untested on GitHub itself because it cannot run before it is merged.
+- The router ignores messages with sender ids or types it does not know (it failed closed on the OWNERSHIP_NOTICE messages from Sessions B and C). Extending the protocol is a design decision, not done.
+- Two real-Codex smoke tests failed intermittently in full runs on a loaded machine; cause unidentified (see section 8). A clean full run on a quiet machine is still required.
+- `go-test` compatibility probe in the canary discards its output (`>/dev/null 2>&1`), so a failure carries no diagnostics. Recording its stderr is a worthwhile follow-up.
