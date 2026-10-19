@@ -118,6 +118,26 @@ Examples:
 - Defer **live provider and Mastra smoke tests** until the user-approved final validation phase, while running typecheck, unit, deterministic integration and security tests during development.
 - Treat this ADR as **proposed** until Claude reviews implementation details. Do not silently rewrite existing APIs based solely on these illustrative interfaces.
 
+## Lifecycle, retry, cancellation and idempotency ownership (peer discussion, 2026-10-19)
+
+Outcome of the time-boxed discussion `architecture-discussion-20261019-001`. This section records ownership **as implemented in PR #53**;
+it changes no behaviour. Positions are advisory until a human accepts this ADR.
+
+| Concern | Owner | Evidence |
+| --- | --- | --- |
+| Persistent task state, leases, fencing epochs, reconciliation after a crash | Durable scheduler (`src/runtime/scheduler/`) | `store.ts` transitions with `expectFrom` + fence; `scheduler.ts` `recover()`; reliability scenarios `stale-lease`, `interrupted-run` |
+| Task-level re-claim (a new attempt at the whole task after a lost lease) | Scheduler, bounded by `maxClaims` (default 3, max 10); a paid provider's task is never requeued on the operator's behalf | `scheduler/types.ts:78`, `scheduler.ts:483` |
+| Coding retries (fresh-context attempts, default 3) and the single runtime retry (`MAX_RUNTIME_RETRIES = 1`) | Coding runner; a provider's limits can only lower these | `execution/coding-task-runner.ts:209,381-382,451` |
+| PASS/FAIL | Runtime verifier only | `coding-task-runner.ts`, `docs/architecture/runtime.md` |
+| Typed composition, specialist invocation, traces | Mastra workflows. **No Mastra step retries are configured.** The coding workflow has no retry of its own. The specialist workflow has one bounded loop: a *read-only* specialist gets at most one retry (`attempts <= 2`, set by the manifest's `onInvalidOutput: retry-once`) and only for an unparseable reply; a provider error, timeout or cancel returns immediately | `coding-task-workflow.ts:32`, `specialist-review-workflow.ts:27,231`; source-invariant tests in both `*.test.ts` |
+| At-most-once mutation per workflow run, including Mastra re-executing a "running" step on boot | Workflow run marker (`claimExecution`, exclusive create) plus the scheduler's recorded run id | `coding-task-workflow.ts:150-165`, `scheduler.ts:284` |
+| Cancellation | Scheduler/lead records `CANCELLED` first (durable truth), then asks the executor to stop the run; the runner owns process-group termination and permit release | `lead/cancel.ts:25-37`, `gemini-scheduler.test.ts` cancellation tests |
+
+**Unresolved trade-off (deferred, not implemented here):** the retry layers multiply. For the free local default the worst case is
+`maxClaims (3) x coding attempts (3) x (1 + runtime retry 1) = 18` model invocations for one task, because a re-claim after a lost lease starts
+a fresh attempt budget. A single budget spanning claims would be tighter but needs the attempt count persisted in the scheduler store, which is
+a schema change requiring a migration; it is therefore not done in this PR. Paid providers are already excluded from re-claim.
+
 ## Consequences
 
 **Benefits:** clear vocabulary; model-agnostic agents; portable skills; accurate per-agent Mastra monitoring; easier routing, benchmarking and migration; fewer accidental privilege assumptions.

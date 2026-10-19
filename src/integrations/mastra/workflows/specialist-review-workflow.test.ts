@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { findProjectRoot } from '../../../core/paths.ts';
 import { loadPackRegistry, type PackRegistry } from '../../../runtime/knowledge/packs/loader.ts';
@@ -311,4 +311,15 @@ test('the workflow module can be constructed with no pack loaded until it runs (
     const r = await (await workflow.createRun()).start({ inputData: input({ repository: h.fixture.root }) as never });
     assert.equal((r as { result?: SpecialistReviewResult }).result!.status, 'REFUSED');
   } finally { await h.done(); }
+});
+
+test('the specialist workflow has no Mastra step retries; its single bounded loop is manifest-derived, covers invalid output only, and a provider failure returns at once', async () => {
+  const src = await readFile(new URL('./specialist-review-workflow.ts', import.meta.url), 'utf8');
+  for (const forbidden of [/^\s+retries\s*:/m, /retryConfig/, /^\s*(while|do) *[({]/m]) assert.doesNotMatch(src, forbidden, `workflow must not contain ${forbidden}`);
+  assert.equal((src.match(/for \(let attempt/g) ?? []).length, 1, 'exactly one retry loop exists');
+  assert.match(src, /const attempts = manifest\.escalation\.onInvalidOutput === 'retry-once' \? 2 : 1;/, 'the bound comes from the manifest and cannot exceed 2');
+  // The provider-error path sits inside the loop and returns immediately, so only an unparseable reply can trigger the second attempt.
+  const loop = src.slice(src.indexOf('for (let attempt'));
+  assert.ok(loop.indexOf("const status: ReviewStatus = abortSignal?.aborted ? 'CANCELED' : timeout.signal.aborted ? 'TIMEOUT' : 'PROVIDER_ERROR'") < loop.indexOf('parseSpecialistReport('));
+  assert.match(loop.slice(0, loop.indexOf('parseSpecialistReport(')), /return ended\(status/);
 });
