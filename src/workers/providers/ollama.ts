@@ -1,7 +1,7 @@
 import type { Agent } from '@mastra/core/agent';
 import type { WorkerLike } from '../../runtime/execution/coding-task-runner.ts';
 import type { ProviderAvailability, ProviderDescriptor, TaskType } from '../../runtime/execution/worker-provider.ts';
-import { ollamaSettings } from '../../runtime/models/index.ts';
+import { OLLAMA_PROVIDER_ID, bindingOf, ollamaSettings } from '../../runtime/models/index.ts';
 import { asStreamingWorker } from '../streaming-worker.ts';
 import type { WorkerProvider } from './provider.ts';
 
@@ -26,8 +26,9 @@ export function ollamaDescriptor(env: NodeJS.ProcessEnv = process.env): Provider
   };
 }
 
-export async function probeOllama(env: NodeJS.ProcessEnv = process.env, fetchImpl: typeof fetch = fetch): Promise<ProviderAvailability> {
-  const { baseUrl: base, modelId: model } = ollamaSettings(env);
+export async function probeOllama(env: NodeJS.ProcessEnv = process.env, fetchImpl: typeof fetch = fetch, modelId?: string): Promise<ProviderAvailability> {
+  const { baseUrl: base, modelId: defaultModel } = ollamaSettings(env);
+  const model = modelId ?? defaultModel;
   try {
     const res = await fetchImpl(`${base}/api/tags`, { signal: AbortSignal.timeout(3_000) });
     if (!res.ok) return { state: 'unavailable', detail: `Ollama at ${base} answered HTTP ${res.status}` };
@@ -38,12 +39,21 @@ export async function probeOllama(env: NodeJS.ProcessEnv = process.env, fetchImp
   }
 }
 
-/** Wraps a Mastra coding agent as a provider. `providerRequest` is the contract's per-call context; the Mastra agent has no use for it and never sees it. */
+/**
+ * Wraps a Mastra coding agent as a provider. `providerRequest` is the contract's per-call context; the Mastra agent has no use for it and never sees it.
+ * The model named in the identity (and probed) is the one the agent is bound to, so a worker assigned another Ollama model is
+ * labelled and probed as that model. This provider's capacity permit and probe are Ollama-specific, so an agent bound to any
+ * other provider is refused here rather than run under a label that would be wrong.
+ */
 export function createOllamaProvider(agent: Pick<Agent, 'stream'>, defaults: Record<string, unknown> = {}, env: NodeJS.ProcessEnv = process.env): WorkerProvider {
+  const binding = bindingOf(agent);
+  if (binding && binding.providerId !== OLLAMA_PROVIDER_ID) throw new Error(`the ${OLLAMA_PROVIDER_ID} worker provider cannot run agent ${binding.agentId}: it is bound to provider ${binding.providerId}`);
+  const base = ollamaDescriptor(env);
+  const descriptor: ProviderDescriptor = binding ? { ...base, identity: { ...base.identity, model: binding.modelId } } : base;
   const inner: WorkerLike = asStreamingWorker(agent, defaults);
   return {
-    provider: ollamaDescriptor(env),
-    probe: () => probeOllama(env),
+    provider: descriptor,
+    probe: () => probeOllama(env, fetch, binding?.modelId),
     generate: (prompt, options) => {
       const { providerRequest: _providerRequest, ...agentOptions } = options;
       return inner.generate(prompt, agentOptions);

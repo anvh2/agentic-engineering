@@ -5,6 +5,7 @@ import { loadPackRegistry } from '../../runtime/knowledge/packs/loader.ts';
 import { renderAgentInstructions } from '../../runtime/knowledge/packs/agents.ts';
 import { AGENT_ROLES, ModelRegistry, ModelResolutionError, ModelResolver, bindingOf, type ModelEntry, type ModelRef } from '../../runtime/models/index.ts';
 import { codingWorkerGo, codingWorkerJs, createCodingWorker } from '../../workers/coding-worker.ts';
+import { createOllamaProvider } from '../../workers/providers/ollama.ts';
 import { createMastraSpecialist, registerSpecialists, resolveSpecialistModel, specialistRegistryKey } from './specialist-agents.ts';
 import { fakeModelServer } from './__testing__/fake-model-server.ts';
 
@@ -164,4 +165,27 @@ test('a specialist manifest never selects a model: manifests carry no model fiel
   const moved = resolveSpecialistModel(manifest('go-reviewer'), resolverFor(url, { 'specialist-go-reviewer': local('qwen3:14b') }));
   assert.deepEqual([base.binding.modelId, moved.binding.modelId], ['qwen3:8b', 'qwen3:14b']);
   assert.equal(base.binding.agentId, moved.binding.agentId);
+});
+
+test('the ollama worker provider labels and probes the model its agent is bound to, and refuses an agent bound to another provider', async () => {
+  const url = 'http://127.0.0.1:1/v1';
+  const moved = createCodingWorker('go', 'writeFile', resolverFor(url, { 'coding-worker-go': local('qwen3:14b') }));
+  const provider = createOllamaProvider(moved, {}, { OLLAMA_MODEL: 'qwen3:8b' });
+  assert.equal(provider.provider.identity.id, 'ollama');
+  assert.equal(provider.provider.identity.model, 'qwen3:14b', 'the run is labelled with the bound model, not the environment default');
+  const probed: string[] = [];
+  const fakeFetch = (async (input: unknown) => { probed.push(String(input)); return new Response(JSON.stringify({ models: [{ name: 'qwen3:14b' }] }), { status: 200 }); }) as typeof fetch;
+  const { probeOllama } = await import('../../workers/providers/ollama.ts');
+  assert.equal((await probeOllama({ OLLAMA_MODEL: 'qwen3:8b' }, fakeFetch, 'qwen3:14b')).state, 'available');
+  assert.equal((await probeOllama({ OLLAMA_MODEL: 'qwen3:8b' }, fakeFetch)).state, 'unavailable', 'without a bound model the environment default is probed');
+
+  const lmstudio = { providerId: 'lmstudio', kind: 'local' as const, url: 'http://127.0.0.1:2/v1', billing: 'local-free' as const, credential: { env: 'LMSTUDIO_API_KEY', placeholder: 'lm' }, availability: ok };
+  const other = createCodingWorker('go', 'writeFile', (() => {
+    const registry = new ModelRegistry().addProvider({ ...lmstudio }).addProvider({ ...lmstudio, providerId: 'ollama', url })
+      .addModel({ providerId: 'lmstudio', modelId: 'qwen3-coder', capabilities: caps, availability: ok, roles: AGENT_ROLES })
+      .addModel({ providerId: 'ollama', modelId: 'qwen3:8b', capabilities: caps, availability: ok, roles: AGENT_ROLES });
+    return new ModelResolver(registry, { defaults: { 'coding-worker': local('qwen3:8b'), specialist: local('qwen3:8b') }, assignments: { 'coding-worker-go': { providerId: 'lmstudio', modelId: 'qwen3-coder' } } });
+  })());
+  assert.equal(bindingOf(other)!.providerId, 'lmstudio');
+  assert.throws(() => createOllamaProvider(other), /cannot run agent coding-worker-go: it is bound to provider lmstudio/);
 });
