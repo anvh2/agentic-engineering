@@ -5,7 +5,8 @@
  * results in a different model being chosen on the caller's behalf. Candidates are only ever
  *   1. the model explicitly assigned to the agent id, else
  *   2. the configured default for the agent's role (which the constructor guarantees is a local, free model).
- * A model on a provider that is not 'local-free' therefore runs only when an operator assigned it to that exact agent.
+ * A model on a provider that is not 'local-free' therefore runs only when an operator assigned it to that exact agent. The
+ * policy is copied when the resolver is built, so it cannot be altered afterwards to bypass the default check.
  */
 import type { AgentRole, ModelCapabilities, ModelRef, ModelRegistry, ProviderConfig } from './registry.ts';
 import { AGENT_ROLES, ModelConfigError } from './registry.ts';
@@ -15,7 +16,6 @@ export type ModelResolutionCode =
   | 'unknown_provider'
   | 'unknown_model'
   | 'unauthorized_model'
-  | 'paid_requires_assignment'
   | 'provider_unavailable'
   | 'model_unavailable'
   | 'capability_unsupported'
@@ -78,7 +78,8 @@ export interface ModelPolicy {
 
 export class ModelResolver {
   private readonly registry: ModelRegistry;
-  private readonly policy: ModelPolicy;
+  private readonly defaults: Readonly<Record<AgentRole, ModelRef>>;
+  private readonly assignments: Readonly<Record<string, ModelRef>>;
   private readonly env: NodeJS.ProcessEnv;
 
   constructor(registry: ModelRegistry, policy: ModelPolicy, env: NodeJS.ProcessEnv = process.env) {
@@ -90,14 +91,15 @@ export class ModelResolver {
       if (provider.billing !== 'local-free') throw new ModelConfigError(`default model for role ${role} is on provider ${provider.providerId} (${provider.billing}); a paid model can only be assigned to a named agent, never be a default`);
     }
     this.registry = registry;
-    this.policy = policy;
+    this.defaults = Object.freeze({ ...policy.defaults });
+    this.assignments = Object.freeze({ ...policy.assignments });
     this.env = env;
   }
 
   resolve(request: AgentModelRequest): ResolvedModel {
     const { agentId, role } = request;
-    const assigned = Object.hasOwn(this.policy.assignments ?? {}, agentId) ? this.policy.assignments![agentId] : undefined;
-    const ref = assigned ?? this.policy.defaults[role];
+    const assigned = Object.hasOwn(this.assignments, agentId) ? this.assignments[agentId] : undefined;
+    const ref = assigned ?? this.defaults[role];
     const source = assigned ? 'assignment' : 'role-default';
     if (!ref) throw new ModelResolutionError('no_assignment', agentId, `no model is assigned to ${agentId} and role ${role} has no default`);
 
@@ -108,7 +110,6 @@ export class ModelResolver {
 
     if (!model.roles.includes(role)) throw new ModelResolutionError('unauthorized_model', agentId, `model ${ref.providerId}/${ref.modelId} is not authorized for role ${role}`);
     if (model.agents && !model.agents.includes(agentId)) throw new ModelResolutionError('unauthorized_model', agentId, `model ${ref.providerId}/${ref.modelId} is not authorized for agent ${agentId}`);
-    if (provider.billing !== 'local-free' && source !== 'assignment') throw new ModelResolutionError('paid_requires_assignment', agentId, `provider ${provider.providerId} is ${provider.billing}; it can only be used when assigned to the agent explicitly`);
 
     if (provider.availability.state !== 'available') throw new ModelResolutionError('provider_unavailable', agentId, `provider ${provider.providerId} is unavailable: ${provider.availability.reason}`);
     if (model.availability.state !== 'available') throw new ModelResolutionError('model_unavailable', agentId, `model ${ref.providerId}/${ref.modelId} is unavailable: ${model.availability.reason}`);

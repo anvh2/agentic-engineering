@@ -122,6 +122,16 @@ test('a paid provider can never be a default, and is used only when assigned to 
   refuses(() => new ModelResolver(r, { defaults, assignments: { x: { providerId: 'cloudco', modelId: 'big' } } }, {}).resolve(spec('x')), 'credential_missing', /CLOUDCO_API_KEY/);
 });
 
+test('the policy is copied at construction: changing it afterwards cannot turn a paid model into a default', () => {
+  const r = registry((reg) => reg.addModel({ providerId: 'cloudco', modelId: 'big', capabilities: full, availability: ok, roles: ['specialist'] }));
+  const policy = { defaults: { ...defaults }, assignments: {} as Record<string, { providerId: string; modelId: string }> };
+  const resolver = new ModelResolver(r, policy, { CLOUDCO_API_KEY: 'test-value' });
+  policy.defaults.specialist = { providerId: 'cloudco', modelId: 'big' };
+  policy.assignments['specialist-security-reviewer'] = { providerId: 'cloudco', modelId: 'big' };
+  assert.equal(resolver.resolve(spec('specialist-security-reviewer')).binding.providerId, 'ollama');
+  assert.equal(resolver.resolve(spec('specialist-security-reviewer')).source, 'role-default');
+});
+
 test('a default that is not registered is a configuration error at construction, not a late surprise', () => {
   assert.throws(() => new ModelResolver(registry(), { defaults: { ...defaults, specialist: { providerId: 'ollama', modelId: 'missing' } } }), ModelConfigError);
   assert.throws(() => new ModelResolver(registry(), { defaults: { 'coding-worker': defaults['coding-worker'] } as never }), /no default model configured for role specialist/);
