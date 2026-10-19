@@ -52,8 +52,8 @@ export type Proposal = z.output<typeof proposalSchema>;
 export const critiqueSchema = z
   .object({
     stance: z.enum(['object', 'support']),
-    /** Message id of ONE proposal written by another seat. */
-    targetProposalId: z.string().trim().min(1).max(64),
+    /** The specialist id of ONE other member (listed in the prompt). The runtime resolves it to that member's proposal; a model never has to emit an opaque message id. */
+    targetMember: z.string().trim().min(1).max(64),
     critique: text(1_400),
     evidence: z.array(repoPath).max(8).default([]),
     concessions: z.array(text(300)).max(4).default([]),
@@ -64,7 +64,8 @@ export type Critique = z.output<typeof critiqueSchema>;
 export const synthesisSchema = z
   .object({
     outcome: z.enum(['accept', 'reject', 'defer']),
-    adoptedProposalId: z.string().trim().min(1).max(64),
+    /** The specialist id of the member whose proposal is adopted (one of the three, listed in the prompt). */
+    adoptedFrom: z.string().trim().min(1).max(64),
     /** The proposed engineering decision, as a statement a human can adopt or reject as an ADR. */
     decision: text(800),
     rationale: text(1_400),

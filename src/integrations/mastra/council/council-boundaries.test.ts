@@ -141,7 +141,8 @@ test('registration: the council agents are read-only, no model call is made to r
   const ok = await councilReadiness({ specialists, env: {} });
   assert.equal(ok.scripted.ready, true);
   assert.equal(ok.live.ready, false);
-  assert.match(ok.live.reasons.join(), /context window is not declared/);
+  assert.match(ok.live.reasons.join(), /model_context_undeclared/);
+  assert.equal(ok.live.reasons.filter((r) => /context/.test(r)).length, 1, 'said once, not once per seat');
   assert.match(ok.live.reasons.join(), /live_not_enabled/);
   assert.match(ok.live.reasons.join(), /model_not_checked/);
 

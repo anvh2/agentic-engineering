@@ -161,7 +161,7 @@ export async function conveneCouncil(deps: CouncilDeps, sidecar: CouncilSidecar,
   const names = new Map(sidecar.panel.map((s) => [s.participantId, s.name]));
   const participants = sidecar.panel.map((seat) => new CouncilParticipant({
     meetingId: sidecar.meetingId, seat, provider: sidecar.model.provider, model: sidecar.model.model, question: sidecar.question, focusPaths: sidecar.focusPaths, names,
-    invoker: options.invoker, journal, maxModelCalls: sidecar.limits.maxModelCallsPerSeat, maxTokens: sidecar.limits.maxTokensPerSeat, now: deps.now, log: deps.log,
+    panel: sidecar.panel, invoker: options.invoker, journal, maxModelCalls: sidecar.limits.maxModelCallsPerSeat, maxTokens: sidecar.limits.maxTokensPerSeat, callTimeoutMs: sidecar.limits.callTimeoutMs, now: deps.now, log: deps.log,
   }));
   const handle = openStore(deps, sidecar);
   try {

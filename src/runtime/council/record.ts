@@ -1,3 +1,5 @@
+import { realpathSync, statSync } from 'node:fs';
+import { resolve, sep } from 'node:path';
 import type { MeetingRecord } from '../collaboration/record.ts';
 import type { ThreadState } from '../collaboration/replay.ts';
 import type { MessageView, SessionOutcome, SessionState } from '../collaboration/types.ts';
@@ -52,8 +54,8 @@ export interface CouncilRecord {
   outcome: SessionOutcome;
   reason: string;
   rounds: readonly { round: number; phase: CouncilPhase; turns: readonly CouncilTurn[] }[];
-  proposals: readonly { messageId: string; specialistId: string; at: number; proposal: unknown }[];
-  critiques: readonly { messageId: string; specialistId: string; at: number; stance: 'object' | 'support'; targetMessageId: string; targetSpecialistId: string | null; critique: unknown }[];
+  proposals: readonly { messageId: string; specialistId: string; at: number; proposal: unknown; evidence: readonly EvidenceCheck[]; fileToolCallsThisTurn: number | null }[];
+  critiques: readonly { messageId: string; specialistId: string; at: number; stance: 'object' | 'support'; targetMessageId: string; targetSpecialistId: string | null; critique: unknown; evidence: readonly EvidenceCheck[]; fileToolCallsThisTurn: number | null }[];
   synthesis: null | { messageId: string; specialistId: string; at: number; synthesis: unknown; recorded: { outcome: string; adoptedProposalId: string; contested: boolean; overruledObjections: readonly string[]; authority: 'none' } };
   disagreements: {
     /** Objections the members raised, with whether their author withdrew them. Derived from the event stream. */
@@ -80,6 +82,25 @@ export interface CouncilRecord {
   timestamps: { openedAt: number; firstMessageAt: number | null; lastMessageAt: number | null; recordedAt: number };
   integrity: { meetingRecordHash: string; throughSeq: number; throughHash: string; recordHash: string };
   limitations: readonly string[];
+}
+
+export interface EvidenceCheck {
+  /** Repository-relative path the member cited. */
+  path: string;
+  /** Whether it is a file inside the repository now. A cited path that does not exist is a fabricated citation. */
+  exists: boolean;
+}
+
+/** Deterministic and read-only: realpath containment, no content read. */
+export function checkEvidence(repository: string, paths: readonly string[]): EvidenceCheck[] {
+  let root: string;
+  try { root = realpathSync(repository); } catch { return paths.map((path) => ({ path, exists: false })); }
+  return paths.map((path) => {
+    try {
+      const full = realpathSync(resolve(root, path));
+      return { path, exists: (full === root || full.startsWith(root + sep)) && statSync(full).isFile() };
+    } catch { return { path, exists: false }; }
+  });
 }
 
 export interface CouncilTurn {
@@ -122,10 +143,19 @@ export function buildCouncilRecord(input: {
   const mine = thread.messages.filter((m) => m.sessionId === session.id);
   const messageOf = new Map(mine.map((m) => [m.id, m]));
 
-  const proposals = mine.filter((m) => m.kind === 'proposal').map((m) => ({ messageId: m.id, specialistId: spec(m.author.id), at: m.at, proposal: parseBody(m, proposalSchema).value ?? { unparsed: m.body } }));
+  const callAt = new Map<string, CallEntry>();
+  for (const c of calls) if (c.outcome === 'accepted') callAt.set(`${c.participantId}|${c.round}|${c.turn}`, c);
+  const FILE_TOOLS = new Set(['readFile', 'searchFiles', 'listFiles']);
+  /** File-inspection tool calls in the accepted call that produced this message; null when no call is on record (e.g. a resumed record). */
+  const fileCalls = (m: MessageView): number | null => {
+    const c = callAt.get(`${m.author.id}|${m.round}|${m.turn}`);
+    return c ? c.toolCalls.filter((t) => FILE_TOOLS.has(t.tool)).reduce((n, t) => n + t.count, 0) : null;
+  };
+  const cited = (m: MessageView): EvidenceCheck[] => checkEvidence(sidecar.repository, m.evidence.filter((e) => e.kind === 'file').map((e) => e.ref));
+  const proposals = mine.filter((m) => m.kind === 'proposal').map((m) => ({ messageId: m.id, specialistId: spec(m.author.id), at: m.at, proposal: parseBody(m, proposalSchema).value ?? { unparsed: m.body }, evidence: cited(m), fileToolCallsThisTurn: fileCalls(m) }));
   const critiques = mine.filter((m) => m.kind === 'objection' || m.kind === 'support').map((m) => ({
     messageId: m.id, specialistId: spec(m.author.id), at: m.at, stance: (m.kind === 'objection' ? 'object' : 'support') as 'object' | 'support', targetMessageId: m.parentId!,
-    targetSpecialistId: messageOf.get(m.parentId!) ? spec(messageOf.get(m.parentId!)!.author.id) : null, critique: parseBody(m, critiqueSchema).value ?? { unparsed: m.body },
+    targetSpecialistId: messageOf.get(m.parentId!) ? spec(messageOf.get(m.parentId!)!.author.id) : null, critique: parseBody(m, critiqueSchema).value ?? { unparsed: m.body }, evidence: cited(m), fileToolCallsThisTurn: fileCalls(m),
   }));
   const decisionMsg = mine.find((m) => m.kind === 'decision');
   const decisionRec = decisionMsg ? meeting.decisions.find((d) => d.id === decisionMsg.id) : undefined;
@@ -135,8 +165,6 @@ export function buildCouncilRecord(input: {
     recorded: { outcome: decisionRec.outcome, adoptedProposalId: decisionRec.proposalIds[0]!, contested: decisionRec.contested, overruledObjections: decisionRec.overruledObjections, authority: decisionRec.authority },
   } : null;
 
-  const callAt = new Map<string, CallEntry>();
-  for (const c of calls) if (c.outcome === 'accepted') callAt.set(`${c.participantId}|${c.round}|${c.turn}`, c);
   const turnRows: CouncilTurn[] = session.turns.map((t) => {
     const msg = t.messageId ? messageOf.get(t.messageId) : undefined;
     const call = callAt.get(`${t.participant}|${t.round}|${t.turn}`);
@@ -189,6 +217,12 @@ export function councilRecordIntact(record: CouncilRecord): boolean {
 }
 
 const iso = (ms: number | null) => (ms === null ? '-' : new Date(ms).toISOString());
+const renderEvidence = (ev: readonly EvidenceCheck[], toolCalls: number | null): string => {
+  if (!ev.length) return `none cited${toolCalls === 0 ? '; no file tool was used this turn' : ''}`;
+  const listed = ev.map((e) => `${e.path} [${e.exists ? 'exists' : 'NOT FOUND'}]`).join(', ');
+  const used = toolCalls === null ? 'file-tool use not on record' : toolCalls === 0 ? 'NO file tool was used this turn: the cited files were NOT read by this call' : `${toolCalls} file-tool call(s) this turn`;
+  return `${listed}; ${used}`;
+};
 const one = (s: unknown) => String(s ?? '').replace(/\s+/g, ' ').trim();
 const list = (items: readonly unknown[] | undefined, none: string) => (items && items.length ? items.map((i) => `  - ${one(i)}`) : [`  - ${none}`]);
 
@@ -210,9 +244,9 @@ export function renderCouncilRecord(r: CouncilRecord): string {
     for (const t of round.turns) {
       out.push(`- ${t.specialistId} — ${t.outcome}${t.kind ? ` ${t.kind}` : ''}${t.messageId ? ` ${t.messageId}` : ''}${t.at ? ` at ${iso(t.at)}` : ''}${t.runId ? ` run ${t.runId}` : ''}${t.traceId ? ` trace ${t.traceId}` : ''}${t.reason ? ` — ${one(t.reason)}` : ''}`);
       const p = r.proposals.find((x) => x.messageId === t.messageId);
-      if (p) { const v = p.proposal as { position?: string; rationale?: string; risks?: { risk: string }[]; evidence?: string[]; unknowns?: string[] }; out.push(`  - position: ${one(v.position)}`, `  - rationale: ${one(v.rationale)}`, `  - risks: ${(v.risks ?? []).map((x) => one(x.risk)).join('; ') || 'none stated'}`, `  - evidence read: ${(v.evidence ?? []).join(', ') || 'none cited'}`, `  - unknowns: ${(v.unknowns ?? []).join('; ') || 'none stated'}`); }
+      if (p) { const v = p.proposal as { position?: string; rationale?: string; risks?: { risk: string }[]; evidence?: string[]; unknowns?: string[] }; out.push(`  - position: ${one(v.position)}`, `  - rationale: ${one(v.rationale)}`, `  - risks: ${(v.risks ?? []).map((x) => one(x.risk)).join('; ') || 'none stated'}`, `  - evidence cited: ${renderEvidence(p.evidence, p.fileToolCallsThisTurn)}`, `  - unknowns: ${(v.unknowns ?? []).join('; ') || 'none stated'}`); }
       const c = r.critiques.find((x) => x.messageId === t.messageId);
-      if (c) { const v = c.critique as { critique?: string; evidence?: string[]; concessions?: string[] }; out.push(`  - ${c.stance === 'object' ? 'OBJECTS to' : 'supports'} ${c.targetMessageId} (${c.targetSpecialistId ?? '?'}): ${one(v.critique)}`, `  - evidence: ${(v.evidence ?? []).join(', ') || 'none cited'}`, ...(v.concessions?.length ? [`  - concedes: ${v.concessions.map(one).join('; ')}`] : [])); }
+      if (c) { const v = c.critique as { critique?: string; evidence?: string[]; concessions?: string[] }; out.push(`  - ${c.stance === 'object' ? 'OBJECTS to' : 'supports'} ${c.targetMessageId} (${c.targetSpecialistId ?? '?'}): ${one(v.critique)}`, `  - evidence cited: ${renderEvidence(c.evidence, c.fileToolCallsThisTurn)}`, ...(v.concessions?.length ? [`  - concedes: ${v.concessions.map(one).join('; ')}`] : [])); }
     }
     out.push('');
   }

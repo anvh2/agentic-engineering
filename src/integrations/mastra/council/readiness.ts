@@ -43,7 +43,13 @@ export async function councilReadiness(input: ReadinessInput): Promise<CouncilRe
   const livePanel = registry ? resolvePanel({ registry, language: 'ts', contextTokens: ctx }) : scriptedPanel;
 
   const scriptedReasons: string[] = [...(scriptedPanel.ok ? [] : scriptedPanel.reasons), ...panelMissing.map((id) => `not_registered_in_mastra: ${id}`)];
-  const liveReasons: string[] = [...(livePanel.ok ? [] : livePanel.reasons), ...panelMissing.map((id) => `not_registered_in_mastra: ${id}`)];
+  // The same undeclared-context refusal comes back once per seat; say it once, with the fix.
+  const undeclared = (r: string) => /context window is not declared/.test(r);
+  const liveFromPanel = livePanel.ok ? [] : livePanel.reasons.filter((r) => !undeclared(r));
+  const liveReasons: string[] = [
+    ...(ctx === undefined && registry ? ['model_context_undeclared: set OLLAMA_NUM_CTX to the local model\'s context window (the council needs at least 8192 tokens); an undeclared window is refused, never guessed'] : []),
+    ...liveFromPanel, ...panelMissing.map((id) => `not_registered_in_mastra: ${id}`),
+  ];
   if (env.AGENTIC_COUNCIL_LIVE !== '1') liveReasons.push('live_not_enabled: set AGENTIC_COUNCIL_LIVE=1 in the environment of the process that runs the council');
   let probe: ProviderReadiness | 'not-run' = 'not-run';
   if (input.probe) {

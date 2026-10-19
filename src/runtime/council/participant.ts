@@ -55,10 +55,14 @@ export interface CouncilParticipantOptions {
   question: string;
   focusPaths: readonly string[];
   names: ReadonlyMap<string, string>;
+  /** Every seat of the panel, so a named member can be resolved to that member's proposal. */
+  panel: readonly PanelSeat[];
   invoker: SpecialistInvoker;
   journal: CallJournal;
   maxModelCalls?: number;
   maxTokens?: number;
+  /** Wall-clock cap of one model call. The coordinator's turn timeout still bounds the whole turn, re-ask included. */
+  callTimeoutMs?: number;
   now?: () => number;
   log?: (line: string) => void;
 }
@@ -86,8 +90,10 @@ export class CouncilParticipant implements Participant {
 
     const maxCalls = this.o.maxModelCalls ?? COUNCIL_LIMITS.maxModelCallsPerSeat;
     const maxTokens = this.o.maxTokens ?? COUNCIL_LIMITS.maxTokensPerSeat;
-    const instructions = councilInstructions(seat, phase);
-    const basePrompt = buildCouncilPrompt({ meetingId: this.o.meetingId, seat, phase, question: this.o.question, focusPaths: this.o.focusPaths, transcript: ctx.transcript, names: this.o.names });
+    const members = this.o.panel.map((s) => s.specialistId);
+    const specialistOf = new Map(this.o.panel.map((s) => [s.participantId, s.specialistId]));
+    const instructions = councilInstructions(seat, phase, members);
+    const basePrompt = buildCouncilPrompt({ meetingId: this.o.meetingId, seat, phase, question: this.o.question, focusPaths: this.o.focusPaths, transcript: ctx.transcript, names: this.o.names, specialistOf });
     const now = this.o.now ?? Date.now;
 
     let prompt = basePrompt;
@@ -96,7 +102,8 @@ export class CouncilParticipant implements Participant {
     let output: number | null = 0;
     for (let attempt = 1; attempt <= 1 + COUNCIL_LIMITS.maxReasks; attempt++) {
       this.checkBudget(maxCalls, maxTokens);
-      const call: SpecialistCall = { meetingId: this.o.meetingId, seat, phase, round: ctx.round, turn: ctx.turn, attempt, instructions, prompt, signal };
+      const callSignal = this.o.callTimeoutMs ? AbortSignal.any([signal, AbortSignal.timeout(this.o.callTimeoutMs)]) : signal;
+      const call: SpecialistCall = { meetingId: this.o.meetingId, seat, phase, round: ctx.round, turn: ctx.turn, attempt, instructions, prompt, signal: callSignal };
       const entry = { at: now(), meetingId: this.o.meetingId, participantId: this.id, specialistId: seat.specialistId, phase, round: ctx.round, turn: ctx.turn, attempt, provider: this.o.provider, model: this.o.model };
       let result;
       try {
@@ -146,24 +153,30 @@ export class CouncilParticipant implements Participant {
       if (!p.ok) return p;
       return { ok: true, reply: { kind: 'proposal', body: JSON.stringify(p.value), evidence: files(p.value.evidence) } };
     }
+    const proposalBy = (specialistId: string) => {
+      const seat = this.o.panel.find((p) => p.specialistId === specialistId);
+      return seat ? proposals.find((m) => m.author.id === seat.participantId) : undefined;
+    };
     if (phase === 'critique') {
       const c = parseCouncilReply(raw, critiqueSchema);
       if (!c.ok) return c;
-      const target = proposals.find((m) => m.id === c.value.targetProposalId);
-      if (!target) return { ok: false, reason: `targetProposalId ${JSON.stringify(c.value.targetProposalId)} is not a proposal in this meeting (valid: ${proposals.filter((m) => m.author.id !== this.id).map((m) => m.id).join(', ')})` };
-      if (target.author.id === this.id) return { ok: false, reason: 'you may not critique your own proposal; target another member\'s proposal' };
+      const others = this.o.panel.filter((p) => p.participantId !== this.id).map((p) => p.specialistId);
+      if (c.value.targetMember === this.o.seat.specialistId) return { ok: false, reason: `you may not critique your own proposal; targetMember must be one of: ${others.join(', ')}` };
+      const target = proposalBy(c.value.targetMember);
+      if (!target) return { ok: false, reason: `targetMember ${JSON.stringify(c.value.targetMember)} is not a member with a proposal (valid: ${others.join(', ')})` };
       return { ok: true, reply: { kind: c.value.stance === 'object' ? 'objection' : 'support', body: JSON.stringify(c.value), parentId: target.id, evidence: files(c.value.evidence) } };
     }
     const s = parseCouncilReply(raw, synthesisSchema);
     if (!s.ok) return s;
-    if (!proposals.some((m) => m.id === s.value.adoptedProposalId)) return { ok: false, reason: `adoptedProposalId ${JSON.stringify(s.value.adoptedProposalId)} is not a proposal in this meeting (valid: ${proposals.map((m) => m.id).join(', ')})` };
+    const adopted = proposalBy(s.value.adoptedFrom);
+    if (!adopted) return { ok: false, reason: `adoptedFrom ${JSON.stringify(s.value.adoptedFrom)} is not a member with a proposal (valid: ${this.o.panel.map((p) => p.specialistId).join(', ')})` };
     return {
       ok: true,
       reply: {
         kind: 'decision',
         body: JSON.stringify(s.value),
         // Owners are the human operator: actions are for the human who adopts or rejects the proposal, never for another agent.
-        decision: { outcome: s.value.outcome, proposalIds: [s.value.adoptedProposalId], rationale: s.value.rationale, actionItems: s.value.actionItems.map((description) => ({ owner: COUNCIL_OPERATOR_ID, description })) },
+        decision: { outcome: s.value.outcome, proposalIds: [adopted.id], rationale: s.value.rationale, actionItems: s.value.actionItems.map((description) => ({ owner: COUNCIL_OPERATOR_ID, description })) },
       },
     };
   }

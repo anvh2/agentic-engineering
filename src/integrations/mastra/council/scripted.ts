@@ -26,7 +26,7 @@ const AGENTS = 'src/integrations/mastra/specialist-agents.ts';
 const COORD = 'src/runtime/collaboration/coordinator.ts';
 
 type Phase = 'proposal' | 'critique' | 'synthesis';
-interface Seen { phase: Phase; seat: string; hasToolResult: boolean; proposals: { id: string; who: string }[] }
+interface Seen { phase: Phase; seat: string; hasToolResult: boolean; /** The members the prompt offers as targets (critique) or candidates (synthesis). */ members: string[] }
 
 function read(prompt: unknown[]): Seen {
   const messages = prompt as { role: string; content: unknown }[];
@@ -34,9 +34,10 @@ function read(prompt: unknown[]): Seen {
   const user = messages.filter((m) => m.role === 'user').map(flat).join('\n');
   const head = /COUNCIL \S+ \| PHASE: (proposal|critique|synthesis) \| SEAT: ([a-z-]+)/.exec(user);
   if (!head) throw new Error('scripted council model: the prompt does not name a phase and seat');
-  // Prompt text reaches the model JSON-escaped inside content parts; message ids appear as `[m1] Name (proposal`.
-  const proposals = [...user.matchAll(/\[(m\d+)\] ([A-Za-z ]+?) \(proposal/g)].map((m) => ({ id: m[1]!, who: m[2]!.trim() }));
-  return { phase: head[1] as Phase, seat: head[2]!, hasToolResult: messages.some((m) => m.role === 'tool'), proposals };
+  // The prompt names the allowed members: `targetMember must be one of: a, b.` / `adoptedFrom must be one of: a, b, c)`.
+  const offered = /(?:targetMember must be one of|adoptedFrom must be one of): ([a-z, -]+)[.)]/.exec(user);
+  const members = offered ? offered[1]!.split(',').map((x) => x.trim()).filter(Boolean) : [];
+  return { phase: head[1] as Phase, seat: head[2]!, hasToolResult: messages.some((m) => m.role === 'tool'), members };
 }
 
 const PROPOSAL: Record<string, { read: string; body: Record<string, unknown> }> = {
@@ -72,29 +73,28 @@ const PROPOSAL: Record<string, { read: string; body: Record<string, unknown> }> 
   },
 };
 
-function critique(seat: string, proposals: { id: string; who: string }[]): Record<string, unknown> {
-  const of = (who: string) => proposals.find((p) => p.who.toLowerCase().includes(who))?.id ?? proposals[0]!.id;
+function critique(seat: string, members: string[]): Record<string, unknown> {
+  const of = (who: string) => members.find((m) => m.includes(who)) ?? members[0]!;
   if (seat === 'architect') return {
-    stance: 'object', targetProposalId: of('security'),
+    stance: 'object', targetMember: of('security'),
     critique: 'Forbidding the re-ask turns one malformed JSON reply into a failed review and pushes a side-effect-free call through a lease cycle. The workflow\'s loop is already capped by the manifest at two attempts, so the claim that it is control flow nobody can see overstates it.',
     evidence: [WORKFLOW], concessions: ['The re-ask does re-send prompt text; it should be counted.'],
   };
   if (seat === 'security-reviewer') return {
-    stance: 'object', targetProposalId: of('architect'),
+    stance: 'object', targetMember: of('architect'),
     critique: 'The bound lives in a manifest field and an in-process loop. Nothing in the workflow persists the count, so a restart can grant the specialist another attempt; "bounded" is only true within one process.',
     evidence: [WORKFLOW, AGENTS], concessions: [],
   };
   return {
-    stance: 'support', targetProposalId: of('architect'),
+    stance: 'support', targetMember: of('architect'),
     critique: 'Checked the workflow: the loop is capped at two attempts and a specialist has no write tool, so the re-ask cannot repeat a side effect. My remaining concern, a durable count, is compatible with this position.',
     evidence: [WORKFLOW], concessions: ['The in-process counter does not survive a restart; that is the open point.'],
   };
 }
 
-function synthesis(proposals: { id: string; who: string }[]): Record<string, unknown> {
-  const architect = proposals.find((p) => p.who.toLowerCase().includes('architect'))?.id ?? proposals[0]!.id;
+function synthesis(members: string[]): Record<string, unknown> {
   return {
-    outcome: 'accept', adoptedProposalId: architect,
+    outcome: 'accept', adoptedFrom: members.find((m) => m.includes('architect')) ?? members[0]!,
     decision: 'Keep the single manifest-bounded re-ask for read-only specialists in the Mastra workflow, add no Mastra step retries, and record every model call in an append-only journal so the budget survives a restart.',
     rationale: 'It removes no safety property, because a specialist cannot mutate anything, and avoids a second lease cycle. The Security Reviewer\'s and the Reliability Reviewer\'s shared point is accepted: the count must not live only in memory.',
     disagreements: [
@@ -122,8 +122,8 @@ export function scriptedCouncilModel() {
         if (!seen.hasToolResult) return { content: [{ type: 'tool-call', toolCallId: `read-${seen.seat}`, toolName: 'readFile', input: JSON.stringify({ path: script.read }) }], finishReason: 'tool-calls', usage: { inputTokens: 30, outputTokens: 10, totalTokens: 40 }, warnings: [] };
         return json(script.body);
       }
-      if (seen.phase === 'critique') return json(critique(seen.seat, seen.proposals.filter((p) => !p.who.toLowerCase().includes(seen.seat.split('-')[0]!))));
-      return json(synthesis(seen.proposals));
+      if (seen.phase === 'critique') return json(critique(seen.seat, seen.members));
+      return json(synthesis(seen.members));
     },
     async doStream() { throw new Error('streaming is not scripted'); },
   };

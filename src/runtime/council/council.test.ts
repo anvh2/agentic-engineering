@@ -17,7 +17,11 @@ const root = findProjectRoot()!;
 const registry = loadPackRegistry(root);
 
 const proposalOf = (who: string) => JSON.stringify({ position: `${who} position`, rationale: `${who} rationale`, risks: [{ risk: `${who} risk` }], evidence: ['README.md'], unknowns: [] });
-const ids = (prompt: string) => [...prompt.matchAll(/\[(m\d+)\] ([A-Za-z ]+?) \(proposal/g)].map((m) => ({ id: m[1]!, who: m[2]!.trim() }));
+/** The members a prompt offers as targets (critique) or candidates (synthesis). */
+const members = (prompt: string): string[] => {
+  const m = /(?:targetMember must be one of|adoptedFrom must be one of): ([a-z, -]+)[.)]/.exec(prompt);
+  return m ? m[1]!.split(',').map((x) => x.trim()).filter(Boolean) : [];
+};
 
 /** A well-behaved spy: records every call, answers each phase with a valid reply. `override` can break any call. */
 function spy(override: (call: SpecialistCall, n: number) => Partial<SpecialistResult> | 'abort' | undefined = () => undefined) {
@@ -27,10 +31,10 @@ function spy(override: (call: SpecialistCall, n: number) => Partial<SpecialistRe
       calls.push(call);
       const o = override(call, calls.length);
       if (o === 'abort') throw new Error('aborted');
-      const seen = ids(call.prompt);
+      const seen = members(call.prompt);
       const text = call.phase === 'proposal' ? proposalOf(call.seat.specialistId)
-        : call.phase === 'critique' ? JSON.stringify({ stance: call.seat.chair ? 'object' : 'support', targetProposalId: seen[0]!.id, critique: `critique by ${call.seat.specialistId}`, evidence: [], concessions: [] })
-          : JSON.stringify({ outcome: 'accept', adoptedProposalId: seen[0]!.id, decision: 'adopt it', rationale: 'because', disagreements: [], uncertainties: ['u'], actionItems: [] });
+        : call.phase === 'critique' ? JSON.stringify({ stance: call.seat.chair ? 'object' : 'support', targetMember: seen[0]!, critique: `critique by ${call.seat.specialistId}`, evidence: [], concessions: [] })
+          : JSON.stringify({ outcome: 'accept', adoptedFrom: seen[0]!, decision: 'adopt it', rationale: 'because', disagreements: [], uncertainties: ['u'], actionItems: [] });
       return { text, steps: 1, toolCalls: [], inputTokens: 10, outputTokens: 5, runId: `run-${calls.length}`, traceId: `trace-${calls.length}`, inferenceMs: 1, ...o };
     },
   };
@@ -65,19 +69,20 @@ test('round 1 is blind: no proposal prompt contains any other member\'s text; la
     const r2 = s.calls.filter((c) => c.phase === 'critique');
     for (const c of r2) {
       assert.ok(!c.prompt.includes(`${c.seat.specialistId} position`), 'a member does not get its own proposal back to critique');
-      assert.equal(ids(c.prompt).length, 2, 'exactly the two other proposals are on offer');
+      assert.equal(members(c.prompt).length, 2, 'exactly the two other members are on offer');
+      assert.ok(!members(c.prompt).includes(c.seat.specialistId));
     }
     const r3 = s.calls.filter((c) => c.phase === 'synthesis');
     assert.equal(r3.length, 1);
     assert.equal(r3[0]!.seat.chair, true);
-    assert.equal(ids(r3[0]!.prompt).length, 3);
+    assert.equal(members(r3[0]!.prompt).length, 3);
   } finally { t.done(); }
 });
 
 test('the proposal prompt is built from the question alone: even a transcript handed to the builder is ignored', () => {
   const seat = resolvePanel({ registry, language: 'ts', contextTokens: 32_000 });
   assert.ok(seat.ok);
-  const p = buildCouncilPrompt({ meetingId: 'x', seat: seat.seats[0]!, phase: 'proposal', question: 'Q?', focusPaths: [], transcript: [{ id: 'm1', sessionId: 's', body: 'LEAKED', kind: 'proposal', author: { id: 'a' } } as never], names: new Map() });
+  const p = buildCouncilPrompt({ meetingId: 'x', seat: seat.seats[0]!, phase: 'proposal', question: 'Q?', focusPaths: [], transcript: [{ id: 'm1', sessionId: 's', body: 'LEAKED', kind: 'proposal', author: { id: 'a' } } as never], names: new Map(), specialistOf: new Map() });
   assert.ok(!p.includes('LEAKED'));
 });
 
@@ -202,11 +207,11 @@ test('malformed replies: one re-ask is allowed and counted; a second malformed r
   } finally { broken.done(); }
 });
 
-test('a critique of an unknown proposal, of oneself, and a synthesis adopting a non-proposal are each refused by the same bounded re-ask', async () => {
+test('a critique of an unknown member, of oneself, and a synthesis adopting an unknown member are each refused by the same bounded re-ask', async () => {
   for (const [label, mutate, expected] of [
-    ['unknown target', (c: SpecialistCall) => (c.phase === 'critique' && c.seat.chair ? { text: JSON.stringify({ stance: 'object', targetProposalId: 'm99', critique: 'x', evidence: [], concessions: [] }) } : undefined), /targetProposalId "m99" is not a proposal/],
-    ['self target', (c: SpecialistCall) => (c.phase === 'critique' && c.seat.chair ? { text: JSON.stringify({ stance: 'object', targetProposalId: 'm1', critique: 'x', evidence: [], concessions: [] }) } : undefined), /may not critique your own/],
-    ['non-proposal adopted', (c: SpecialistCall) => (c.phase === 'synthesis' ? { text: JSON.stringify({ outcome: 'accept', adoptedProposalId: 'm5', decision: 'd', rationale: 'r', disagreements: [], uncertainties: [], actionItems: [] }) } : undefined), /adoptedProposalId "m5" is not a proposal/],
+    ['unknown member', (c: SpecialistCall) => (c.phase === 'critique' && c.seat.chair ? { text: JSON.stringify({ stance: 'object', targetMember: 'nobody', critique: 'x', evidence: [], concessions: [] }) } : undefined), /targetMember "nobody" is not a member with a proposal/],
+    ['self target', (c: SpecialistCall) => (c.phase === 'critique' && c.seat.chair ? { text: JSON.stringify({ stance: 'object', targetMember: 'architect', critique: 'x', evidence: [], concessions: [] }) } : undefined), /may not critique your own/],
+    ['unknown member adopted', (c: SpecialistCall) => (c.phase === 'synthesis' ? { text: JSON.stringify({ outcome: 'accept', adoptedFrom: 'nobody-here', decision: 'd', rationale: 'r', disagreements: [], uncertainties: [], actionItems: [] }) } : undefined), /adoptedFrom "nobody-here" is not a member with a proposal/],
   ] as const) {
     const t = setup();
     try {
@@ -334,12 +339,50 @@ test('with no objection raised the record says so and invents no disagreement', 
   try {
     const s = spy((c) => {
       if (c.phase !== 'critique') return undefined;
-      return { text: JSON.stringify({ stance: 'support', targetProposalId: ids(c.prompt)[0]!.id, critique: 'checked, sound', evidence: [], concessions: [] }) };
+      return { text: JSON.stringify({ stance: 'support', targetMember: members(c.prompt)[0]!, critique: 'checked, sound', evidence: [], concessions: [] }) };
     });
     const { record } = await t.meet(s.invoker);
     const rec = record();
     assert.equal(rec.disagreements.raised, false);
     assert.equal(rec.synthesis!.recorded.contested, false);
     assert.match(readFileSync(join(t.workdir, 'council', 'm', 'record.md'), 'utf8'), /No member raised an objection in this meeting\. None is invented here\./);
+  } finally { t.done(); }
+});
+
+// ---- evidence and timeouts --------------------------------------------------------------------------------------------
+
+test('cited evidence is verified, not trusted: a missing path is NOT FOUND, and a turn that used no file tool says its citations were not read', async () => {
+  const t = setup();
+  try {
+    const s = spy((c) => (c.phase === 'proposal'
+      ? {
+        text: JSON.stringify({ position: 'p', rationale: 'r', risks: [], evidence: ['README.md', 'does/not/exist.ts'], unknowns: [] }),
+        toolCalls: c.seat.specialistId === 'architect' ? [{ tool: 'readFile', count: 2 }, { tool: 'gitStatus', count: 1 }] : [],
+      }
+      : undefined));
+    const { record } = await t.meet(s.invoker);
+    const rec = record();
+    const architect = rec.proposals.find((p) => p.specialistId === 'architect')!;
+    const security = rec.proposals.find((p) => p.specialistId === 'security-reviewer')!;
+    assert.deepEqual(architect.evidence, [{ path: 'README.md', exists: true }, { path: 'does/not/exist.ts', exists: false }]);
+    assert.equal(architect.fileToolCallsThisTurn, 2, 'gitStatus is not a file-inspection call');
+    assert.equal(security.fileToolCallsThisTurn, 0);
+    const md = readFileSync(join(t.workdir, 'council', 'm', 'record.md'), 'utf8');
+    assert.match(md, /does\/not\/exist\.ts \[NOT FOUND\]/);
+    assert.match(md, /NO file tool was used this turn: the cited files were NOT read by this call/);
+    assert.match(md, /2 file-tool call\(s\) this turn/);
+  } finally { t.done(); }
+});
+
+test('a call that outlives its per-call timeout is aborted and fails the meeting closed with a journal entry', async () => {
+  const t = setup();
+  try {
+    const hang: SpecialistInvoker = { invoke: (call) => new Promise((_, reject) => call.signal.addEventListener('abort', () => reject(new Error('call timed out')), { once: true })) };
+    const { result, record } = await t.meet(hang, { limits: { callTimeoutMs: 50 } });
+    assert.equal((result as { outcome: string }).outcome, 'failed');
+    const rec = record();
+    assert.match(rec.reason, /call timed out/);
+    assert.equal(rec.accounting.failedCalls, 1);
+    assert.equal(rec.proposals.length, 0);
   } finally { t.done(); }
 });
