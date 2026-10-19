@@ -1,6 +1,7 @@
 import type { Agent } from '@mastra/core/agent';
 import type { WorkerLike } from '../../runtime/execution/coding-task-runner.ts';
 import type { ProviderAvailability, ProviderDescriptor, TaskType } from '../../runtime/execution/worker-provider.ts';
+import { ollamaSettings } from '../../runtime/models/index.ts';
 import { asStreamingWorker } from '../streaming-worker.ts';
 import type { WorkerProvider } from './provider.ts';
 
@@ -12,7 +13,7 @@ import type { WorkerProvider } from './provider.ts';
 
 export function ollamaDescriptor(env: NodeJS.ProcessEnv = process.env): ProviderDescriptor {
   return {
-    identity: { id: 'ollama', kind: 'local', model: env.OLLAMA_MODEL ?? 'qwen3:8b' },
+    identity: { id: 'ollama', kind: 'local', model: ollamaSettings(env).modelId },
     capabilities: {
       taskTypes: ['go', 'js'] satisfies TaskType[],
       editsFiles: 'via-runtime-tools',
@@ -26,8 +27,7 @@ export function ollamaDescriptor(env: NodeJS.ProcessEnv = process.env): Provider
 }
 
 export async function probeOllama(env: NodeJS.ProcessEnv = process.env, fetchImpl: typeof fetch = fetch): Promise<ProviderAvailability> {
-  const base = (env.OLLAMA_BASE_URL ?? 'http://localhost:11434').replace(/\/$/, '');
-  const model = env.OLLAMA_MODEL ?? 'qwen3:8b';
+  const { baseUrl: base, modelId: model } = ollamaSettings(env);
   try {
     const res = await fetchImpl(`${base}/api/tags`, { signal: AbortSignal.timeout(3_000) });
     if (!res.ok) return { state: 'unavailable', detail: `Ollama at ${base} answered HTTP ${res.status}` };

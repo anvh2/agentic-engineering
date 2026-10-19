@@ -17,6 +17,7 @@ import { phaseOf, type CodingPhase, type PhaseUpdate } from '../../../runtime/ex
 import { runtimeMetrics } from '../../../observability/metrics.ts';
 import { createTraceSink } from '../../../runtime/execution/coding-task-trace.ts';
 import { knowledgeDbPath, loadActiveCatalog } from '../../../runtime/knowledge/engineering-control.ts';
+import { bindingMetadata, bindingOf, ollamaSettings } from '../../../runtime/models/index.ts';
 
 /**
  * coding-task-workflow: the Engineering Lead's door to the local coding worker, and the orchestration /
@@ -61,6 +62,8 @@ export const codingTaskResultSchema = z.object({
   taskId: z.string(),
   /** Provider that ran (or was refused) the task; 'ollama' unless the request named another. */
   provider: z.string().optional(),
+  /** Agent, provider and model the default worker was bound to (separate ids; no credential). Absent when a named provider ran the task. */
+  model: z.object({ agentId: z.string(), role: z.enum(['coding-worker', 'specialist']), providerId: z.string(), modelId: z.string() }).optional(),
   /** PASS | ESCALATED_TO_CLAUDE | RUNTIME_FAILURE | KEPT_BY_CLAUDE. Decided by the runtime verifier, never by the worker. */
   status: z.enum(['PASS', 'ESCALATED_TO_CLAUDE', 'RUNTIME_FAILURE', 'KEPT_BY_CLAUDE']),
   phase: phaseSchema,
@@ -260,12 +263,11 @@ export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
       // Worker follows the language of the allowed files (the gate already guaranteed they are all one language).
       const agentId = workerAgentIdFor(languageOf(request.contract.allowedFiles));
       const fallbackAgent = agentId === 'codingWorkerJs' ? codingWorkerJs : codingWorkerGo;
+      const defaultAgent = providerWorker || deps.resolveWorker ? undefined : ((mastra?.getAgent(agentId) as typeof fallbackAgent | undefined) ?? fallbackAgent);
+      const binding = bindingOf(defaultAgent);
       const worker = providerWorker ?? (deps.resolveWorker
         ? deps.resolveWorker({ mastra, tracingContext })
-        : createOllamaProvider(
-            (mastra?.getAgent(agentId) as typeof fallbackAgent | undefined) ?? fallbackAgent,
-            tracingContext ? { tracingContext } : {},
-          ));
+        : createOllamaProvider(defaultAgent!, tracingContext ? { tracingContext } : {}));
 
       // Runner events -> Studio phase updates, in order. Observability only; never decides anything.
       let current = state;
@@ -278,6 +280,8 @@ export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
         },
       });
 
+      if (binding) trace.emit('model_bound', bindingMetadata(binding));
+
       const result = await executeDelegation(request, {
         repoRoot: inputData.repository,
         worker,
@@ -285,11 +289,11 @@ export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
         trace,
         approvals: deps.approvals,
         knowledgeCatalog: catalogFor(!!request.contract.knowledge),
-        modelLabel: providerWorker ? undefined : (process.env.OLLAMA_MODEL ?? 'qwen3:8b'), // a provider labels itself (provider:model)
+        modelLabel: providerWorker ? undefined : (binding?.modelId ?? ollamaSettings().modelId), // a provider labels itself (provider:model)
         runOptions: { modelTimeoutMs: 900_000, ...deps.runOptions, signal: abortSignal, runId }, // the run's own id owns its model permits
       });
       await chain;
-      return { ...summarize(result), provider: requestedProvider };
+      return { ...summarize(result), provider: requestedProvider, ...(binding ? { model: binding } : {}) };
     },
   });
 

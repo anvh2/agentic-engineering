@@ -13,6 +13,7 @@ import { dirname } from 'node:path';
 export type TraceEventType =
   | 'task_started'
   | 'attempt_started'
+  | 'model_bound'
   | 'model_started'
   | 'model_finished'
   | 'provider_unresponsive'

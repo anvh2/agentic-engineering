@@ -20,6 +20,7 @@ import { codingTaskWorkflow } from './workflows/coding-task-workflow';
 // specialists and records why, instead of preventing the coding workers from registering.
 export const specialists = registerSpecialists();
 if (specialists.error) console.warn(`[specialists] not registered: ${specialists.error}`);
+for (const r of specialists.refused) console.warn(`[specialists] ${r.id} not registered: ${r.reason}`);
 
 export const mastra = new Mastra({
   bundler: {

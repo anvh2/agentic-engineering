@@ -8,7 +8,8 @@ import { handles, negotiate, parseSpecialistReport } from '../../../runtime/know
 import { buildFindingStatements, checkRepository, composeReviewPrompt, REVIEW_STATUSES, type FindingSigner, type ReviewStatus } from '../../../runtime/knowledge/packs/review.ts';
 import { PACK_ID, specialistReportSchema, TASK_LANGUAGES, TASK_TYPES, type AgentManifest } from '../../../runtime/knowledge/packs/schema.ts';
 import { REPOSITORY_ROOT_CONTEXT_KEY } from '../../../workers/tools/repository-tools.ts';
-import { createMastraSpecialist, declaredContextTokens, locatePackRoot, specialistRegistryKey } from '../specialist-agents.ts';
+import { createMastraSpecialist, locatePackRoot, resolveSpecialistModel, specialistRegistryKey } from '../specialist-agents.ts';
+import { bindingMetadata, bindingOf, ModelConfigError, ModelResolutionError, modelResolverFromEnv, type ModelBinding, type ModelResolver, type ResolvedModel } from '../../../runtime/models/index.ts';
 import { findProjectRoot } from '../../../core/paths.ts';
 import { defaultActiveSkills, knowledgeDbPath } from '../../../runtime/knowledge/engineering-control.ts';
 import { join } from 'node:path';
@@ -42,6 +43,8 @@ export const specialistReviewInputSchema = z.object({
 export type SpecialistReviewInput = z.input<typeof specialistReviewInputSchema>;
 
 const statusSchema = z.enum(REVIEW_STATUSES);
+/** Who ran on what: agent identity, provider and model are three separate facts. No credential is ever part of it. */
+const modelBindingSchema = z.object({ agentId: z.string(), role: z.enum(['coding-worker', 'specialist']), providerId: z.string(), modelId: z.string() });
 const skillsSchema = z.object({ selected: z.array(z.string()), omitted: z.array(z.object({ id: z.string(), reason: z.string() })), digest: z.string().nullable() });
 const usageSchema = z.object({ inputTokens: z.number().nullable(), outputTokens: z.number().nullable(), totalTokens: z.number().nullable() });
 const toolCallsSchema = z.array(z.object({ tool: z.string(), count: z.number() }));
@@ -53,6 +56,8 @@ export const specialistReviewResultSchema = z.object({
   reviewId: z.string(),
   manifestVersion: z.string().nullable(),
   manifestDigest: z.string().nullable(),
+  /** The agent/provider/model this review ran on; null when it was refused before a model was resolved. */
+  model: modelBindingSchema.nullable(),
   reasons: z.array(z.string()),
   report: specialistReportSchema.nullable(),
   skills: skillsSchema,
@@ -75,6 +80,7 @@ const prepareOutputSchema = z.object({
   reviewId: z.string(),
   manifestVersion: z.string().nullable(),
   manifestDigest: z.string().nullable(),
+  model: modelBindingSchema.nullable(),
   root: z.string().nullable(),
   prompt: z.string().nullable(),
   skills: skillsSchema,
@@ -88,6 +94,7 @@ const runOutputSchema = z.object({
   reviewId: z.string(),
   manifestVersion: z.string().nullable(),
   manifestDigest: z.string().nullable(),
+  model: modelBindingSchema.nullable(),
   report: specialistReportSchema.nullable(),
   skills: skillsSchema,
   toolCalls: toolCallsSchema,
@@ -114,7 +121,10 @@ export interface SpecialistReviewDeps {
   /** Runtime-held reviewer key per specialist, used to sign findings for consensus. Default: none (no statements). */
   findingSigner?: (manifest: AgentManifest) => FindingSigner | undefined;
   resolveAgent?: (manifest: AgentManifest, ctx: { mastra: unknown }) => SpecialistAgentLike;
+  /** Overrides the declared context window of the resolved model (test seam). Default: the model registry's declared value. */
   contextTokens?: () => number | undefined;
+  /** Which models specialists may run on. Default: the process's model configuration (src/runtime/models), read per run. */
+  modelResolver?: ModelResolver;
   timeoutMs?: number;
 }
 
@@ -164,7 +174,7 @@ export function createSpecialistReviewWorkflow(deps: SpecialistReviewDeps = {}) 
     stateSchema,
     execute: async ({ inputData, setState }) => {
       const reviewId = inputData.reviewId ?? `review-${inputData.taskId}`;
-      const base = { specialistId: inputData.specialistId, taskId: inputData.taskId, reviewId, manifestVersion: null as string | null, manifestDigest: null as string | null, root: null as string | null, prompt: null as string | null, skills: emptySkills };
+      const base = { specialistId: inputData.specialistId, taskId: inputData.taskId, reviewId, manifestVersion: null as string | null, manifestDigest: null as string | null, model: null as ModelBinding | null, root: null as string | null, prompt: null as string | null, skills: emptySkills };
       const refuse = async (...reasons: string[]) => { await publish({ setState }, { phase: 'refused', specialistId: inputData.specialistId, detail: reasons[0] }); return { ...base, ok: false, reasons }; };
       await publish({ setState }, { phase: 'preparing', specialistId: inputData.specialistId });
 
@@ -177,19 +187,30 @@ export function createSpecialistReviewWorkflow(deps: SpecialistReviewDeps = {}) 
       const refuseKnown = async (...reasons: string[]) => { await publish({ setState }, { phase: 'refused', specialistId: inputData.specialistId, detail: reasons[0] }); return { ...identified, ok: false, reasons }; };
 
       if (!handles(manifest, { language: inputData.language, taskType: inputData.taskType })) return refuseKnown(`out_of_scope: ${manifest.id} does not handle ${inputData.taskType} in ${inputData.language}`);
-      const fit = negotiate(manifest, 'mastra', 'ollama', (deps.contextTokens ?? declaredContextTokens)(), { requireKnownContext: true });
-      if (!fit.supported) return refuseKnown(`unsupported: ${fit.reason}`);
+      // Which model runs this specialist is runtime configuration. A refusal here is final: no other model is tried.
+      let resolved: ResolvedModel;
+      try {
+        resolved = resolveSpecialistModel(manifest, deps.modelResolver ?? modelResolverFromEnv());
+      } catch (err) {
+        if (err instanceof ModelResolutionError || err instanceof ModelConfigError) return refuseKnown(`model_refused: ${err.message}`);
+        throw err;
+      }
+      // From here on a refusal still names the model that was considered: `model` is null only when none could be resolved.
+      const withModel = { ...identified, model: resolved.binding };
+      const refuseBound = async (...reasons: string[]) => { await publish({ setState }, { phase: 'refused', specialistId: inputData.specialistId, detail: reasons[0] }); return { ...withModel, ok: false, reasons }; };
+      const fit = negotiate(manifest, 'mastra', resolved.binding.providerId, deps.contextTokens ? deps.contextTokens() : resolved.capabilities.contextTokens, { requireKnownContext: true });
+      if (!fit.supported) return refuseBound(`unsupported: ${fit.reason}`);
       const repo = await checkRepository(inputData.repository, (deps.allowedRoots ?? allowedRootsFromEnv)());
-      if (!repo.ok) return refuseKnown(`repository_refused: ${repo.reason}`);
+      if (!repo.ok) return refuseBound(`repository_refused: ${repo.reason}`);
 
       try {
         const pool = [...manifest.skills, ...manifest.optionalSkills].map((id) => pack.skillById.get(id)!);
         const composed = composeReviewPrompt(manifest, { specialistId: manifest.id, taskId: inputData.taskId, language: inputData.language, taskType: inputData.taskType, objective: inputData.objective, focusPaths: inputData.focusPaths },
           pool, (deps.activeSkills ?? (() => defaultActiveSkills(knowledgeDbPath(join(findProjectRoot() ?? process.cwd(), '.workdir')))))());
-        return { ...identified, ok: true, reasons: [], root: repo.root, prompt: composed.prompt,
+        return { ...withModel, ok: true, reasons: [], root: repo.root, prompt: composed.prompt,
           skills: { selected: [...composed.skills.selected], omitted: composed.skills.omitted.map((o) => ({ id: o.id, reason: o.reason })), digest: composed.skills.digest } };
       } catch (err) {
-        return refuseKnown(`invalid_request: ${(err as Error).message}`);
+        return refuseBound(`invalid_request: ${(err as Error).message}`);
       }
     },
   });
@@ -201,7 +222,7 @@ export function createSpecialistReviewWorkflow(deps: SpecialistReviewDeps = {}) 
     outputSchema: runOutputSchema,
     stateSchema,
     execute: async ({ inputData, setState, mastra, tracingContext, runId, abortSignal }) => {
-      const identity = { specialistId: inputData.specialistId, taskId: inputData.taskId, reviewId: inputData.reviewId, manifestVersion: inputData.manifestVersion, manifestDigest: inputData.manifestDigest, skills: inputData.skills };
+      const identity = { specialistId: inputData.specialistId, taskId: inputData.taskId, reviewId: inputData.reviewId, manifestVersion: inputData.manifestVersion, manifestDigest: inputData.manifestDigest, model: inputData.model, skills: inputData.skills };
       const ended = (status: ReviewStatus, reasons: string[], extra: Partial<z.infer<typeof runOutputSchema>> = {}) => ({ ...identity, status, reasons, report: null, toolCalls: [], usage: noUsage, inferenceCalls: 0, elapsedMs: 0, ...extra });
       if (!inputData.ok || !inputData.prompt || !inputData.root) return ended('REFUSED', inputData.reasons);
 
@@ -217,7 +238,14 @@ export function createSpecialistReviewWorkflow(deps: SpecialistReviewDeps = {}) 
 
       const agent: SpecialistAgentLike = deps.resolveAgent
         ? deps.resolveAgent(manifest, { mastra })
-        : ((mastra as { getAgent?: (id: string) => unknown } | undefined)?.getAgent?.(specialistRegistryKey(manifest)) as SpecialistAgentLike | undefined) ?? (createMastraSpecialist(manifest) as unknown as SpecialistAgentLike);
+        : ((mastra as { getAgent?: (id: string) => unknown } | undefined)?.getAgent?.(specialistRegistryKey(manifest)) as SpecialistAgentLike | undefined) ?? (createMastraSpecialist(manifest, deps.modelResolver ? { resolver: deps.modelResolver } : {}) as unknown as SpecialistAgentLike);
+      // A registered agent was constructed with a model at startup. It must be the one this run was authorized and negotiated
+      // for; otherwise the run would use a model nobody checked. Test doubles carry no binding and are not checked.
+      const bound = bindingOf(agent);
+      if (bound && inputData.model && (bound.agentId !== inputData.model.agentId || bound.providerId !== inputData.model.providerId || bound.modelId !== inputData.model.modelId)) {
+        await publish({ setState }, { phase: 'refused', specialistId: manifest.id, detail: 'model_binding_mismatch' });
+        return ended('REFUSED', [`model_binding_mismatch: the registered agent is bound to ${bound.providerId}/${bound.modelId}, but this run was authorized for ${inputData.model.providerId}/${inputData.model.modelId}`]);
+      }
 
       const timeout = new AbortController();
       const timer = setTimeout(() => timeout.abort(), deps.timeoutMs ?? manifest.limits.timeoutMs);
@@ -234,7 +262,7 @@ export function createSpecialistReviewWorkflow(deps: SpecialistReviewDeps = {}) 
           try {
             result = await agent.generate(prompt, {
               requestContext, maxSteps: manifest.limits.maxSteps, abortSignal: signal, tracingContext,
-              tracingOptions: { metadata: { specialistId: manifest.id, manifestVersion: manifest.version, taskId: inputData.taskId, reviewId: inputData.reviewId, workflowRunId: runId, attempt }, tags: ['specialist-review', manifest.id] },
+              tracingOptions: { metadata: { ...(inputData.model ? bindingMetadata(inputData.model) : {}), specialistId: manifest.id, manifestVersion: manifest.version, taskId: inputData.taskId, reviewId: inputData.reviewId, workflowRunId: runId, attempt }, tags: ['specialist-review', manifest.id] },
             });
           } catch (err) {
             const status: ReviewStatus = abortSignal?.aborted ? 'CANCELED' : timeout.signal.aborted ? 'TIMEOUT' : 'PROVIDER_ERROR';

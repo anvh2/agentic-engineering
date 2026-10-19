@@ -2,9 +2,8 @@ import { Agent } from '@mastra/core/agent';
 import { applyPatch, listFiles, readFile, searchFiles, writeFile } from './tools/repository-tools.ts';
 import { gitDiff, gitStatus, runGoFmt, runGoTest, runJestTest, runPrettier } from './tools/execution-tools.ts';
 import { resolveMaxRepairAttempts } from '../runtime/execution/repair-loop-tracker.ts';
+import { bindAgent, modelResolverFromEnv, type ModelResolver } from '../runtime/models/index.ts';
 
-const ollamaBaseUrl = (process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434').replace(/\/$/, '');
-const ollamaModel = process.env.OLLAMA_MODEL ?? 'qwen3:8b';
 const maxRepairAttempts = resolveMaxRepairAttempts();
 
 export type EditMode = 'writeFile' | 'applyPatch';
@@ -24,14 +23,6 @@ export function resolveEditMode(env: NodeJS.ProcessEnv = process.env): EditMode 
 
 export type Ecosystem = 'go' | 'js';
 
-const modelConfig = {
-  providerId: 'ollama',
-  modelId: ollamaModel,
-  // Ollama exposes an OpenAI-compatible API under /v1.
-  url: `${ollamaBaseUrl}/v1`,
-  apiKey: process.env.OLLAMA_API_KEY || 'ollama',
-} as const;
-
 // Mastra defaults generate()/stream() to maxSteps: 5. Repository exploration
 // plus a patch/format/test/repair cycle (list, read, patch, format, test,
 // and possibly a corrective patch/format/test round) routinely needs more
@@ -49,8 +40,11 @@ const defaultOptions = { maxSteps: 40 } as const;
  * ecosystem at a time. `codingTaskWorkflow` auto-detects which one to use
  * per run (go.mod vs package.json) rather than asking the model to guess.
  */
-export function createCodingWorker(ecosystem: Ecosystem, editMode: EditMode = resolveEditMode()): Agent {
+export function createCodingWorker(ecosystem: Ecosystem, editMode: EditMode = resolveEditMode(), resolver: ModelResolver = modelResolverFromEnv()): Agent {
   const isGo = ecosystem === 'go';
+  // The worker is a role; which model runs it is runtime configuration. Resolution fails closed: an unavailable or incapable
+  // model throws here instead of the worker quietly running on something else.
+  const resolved = resolver.resolve({ agentId: `coding-worker-${ecosystem}`, role: 'coding-worker', requires: { toolCalling: true } });
   const useWriteFile = editMode === 'writeFile';
 
   const toolsDescription = isGo
@@ -61,10 +55,10 @@ export function createCodingWorker(ecosystem: Ecosystem, editMode: EditMode = re
     ? 'runGoFmt the changed file, then runGoTest the affected package (or "./...").'
     : 'runPrettier the changed file (only if you created/fully rewrote it), then runJestTest scoped to the test file or directory you touched.';
 
-  return new Agent({
-    id: `coding-worker-${ecosystem}`,
+  const agent = new Agent({
+    id: resolved.binding.agentId,
     name: `Coding Worker (${ecosystem === 'go' ? 'Go' : 'JavaScript'})`,
-    description: `A worker that inspects, patches, formats, and tests a delegated ${isGo ? 'Go' : 'JavaScript/Node'} repository using a local Ollama model, with narrowly scoped write and verification tools.`,
+    description: `A worker that inspects, patches, formats, and tests a delegated ${isGo ? 'Go' : 'JavaScript/Node'} repository using its configured model, with narrowly scoped write and verification tools.`,
     instructions: `You are a repository coding worker for the assigned ${isGo ? 'Go' : 'JavaScript/Node'} repository. No arbitrary shell access.
 
 Tools: listFiles, readFile, searchFiles (regex or plain text, scans everything), gitStatus, gitDiff - all read-only. ${useWriteFile ? 'writeFile - replace one file with its complete new contents (or create it).' : 'applyPatch - unified diff to one file, or create a new file.'} ${toolsDescription}
@@ -78,7 +72,7 @@ To make a change:
 4. Test failure -> diagnose from its output, one corrective applyPatch, re-verify. Stop after ${maxRepairAttempts} corrective attempts or on success; report the last test result either way.
 
 Never claim a command ran or a change is tested unless a tool call in this conversation confirmed it. No repository or a failing tool call -> say so plainly.`,
-    model: modelConfig,
+    model: resolved.model,
     tools: isGo
       ? useWriteFile
         ? { listFiles, readFile, searchFiles, writeFile, runGoFmt, runGoTest, gitDiff, gitStatus }
@@ -88,10 +82,12 @@ Never claim a command ran or a change is tested unless a tool call in this conve
         : { listFiles, readFile, searchFiles, applyPatch, runPrettier, runJestTest, gitDiff, gitStatus },
     defaultOptions,
   });
+  return bindAgent(agent, resolved.binding);
 }
 
-export const codingWorkerGo = createCodingWorker('go');
-export const codingWorkerJs = createCodingWorker('js');
+const resolver = modelResolverFromEnv();
+export const codingWorkerGo = createCodingWorker('go', undefined, resolver);
+export const codingWorkerJs = createCodingWorker('js', undefined, resolver);
 
 /** Kept for existing callers (scripts, tests) that reference the original single-worker export - equivalent to codingWorkerGo. */
 export const codingWorker = codingWorkerGo;

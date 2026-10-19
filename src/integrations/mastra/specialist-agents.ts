@@ -20,6 +20,7 @@ import { TOOL_CLASSES } from '../../runtime/knowledge/engineering-hooks.ts';
 import { loadPackRegistry, type PackRegistry } from '../../runtime/knowledge/packs/loader.ts';
 import { renderAgentInstructions } from '../../runtime/knowledge/packs/agents.ts';
 import type { AgentManifest } from '../../runtime/knowledge/packs/schema.ts';
+import { bindAgent, modelResolverFromEnv, ModelResolutionError, ollamaSettings, type ModelResolver, type ResolvedModel } from '../../runtime/models/index.ts';
 
 export const MAX_SPECIALISTS = 64;
 
@@ -34,42 +35,56 @@ export function assertReadOnlyToolTable(): void {
 }
 assertReadOnlyToolTable();
 
-/** Model wiring: the same local Ollama endpoint the coding workers use. Reading env here does not contact the endpoint. */
+/**
+ * What a specialist needs from a model, derived from its manifest. It can only narrow which models are acceptable; it never
+ * names or grants one. Context size is not checked here: `negotiate` owns the manifest's per-provider minimum.
+ */
+export const specialistModelRequirements = (manifest: AgentManifest) => ({ toolCalling: manifest.tools.length > 0, structuredOutput: true }) as const;
+
+/**
+ * The authorized model for a specialist, or a ModelResolutionError. Which model that is comes from runtime configuration
+ * (src/runtime/models), never from the manifest, so a specialist can move between compatible models with no manifest change.
+ */
+export function resolveSpecialistModel(manifest: AgentManifest, resolver: ModelResolver = modelResolverFromEnv()): ResolvedModel {
+  return resolver.resolve({ agentId: specialistAgentId(manifest), role: 'specialist', requires: specialistModelRequirements(manifest) });
+}
+
+/** @deprecated Use `resolveSpecialistModel`. Kept for callers of the pre-registry env wiring; returns the default local model. */
 export function specialistModelConfig(env: NodeJS.ProcessEnv = process.env) {
-  return {
-    providerId: 'ollama',
-    modelId: env.OLLAMA_MODEL ?? 'qwen3:8b',
-    url: `${(env.OLLAMA_BASE_URL ?? 'http://localhost:11434').replace(/\/$/, '')}/v1`,
-    apiKey: env.OLLAMA_API_KEY || 'ollama',
-  } as const;
+  return modelResolverFromEnv(env).resolve({ agentId: 'specialist-default', role: 'specialist' }).model;
 }
 
 /** Context window the operator declares for the local model; undefined when unknown (never guessed). */
 export function declaredContextTokens(env: NodeJS.ProcessEnv = process.env): number | undefined {
-  const raw = env.OLLAMA_NUM_CTX;
-  if (!raw) return undefined;
-  const n = Number(raw);
-  return Number.isSafeInteger(n) && n > 0 ? n : undefined;
+  return ollamaSettings(env).contextTokens;
 }
 
 export const specialistAgentId = (manifest: AgentManifest): string => `specialist-${manifest.id}`;
 export const specialistRegistryKey = (manifest: AgentManifest): string => `specialist_${manifest.id.replaceAll('-', '_')}`;
 
-export function createMastraSpecialist(manifest: AgentManifest, options: { model?: ConstructorParameters<typeof Agent>[0]['model'] } = {}): Agent {
+export interface SpecialistModelOptions {
+  /** Test seam: a ready-made Mastra model that bypasses the resolver (and records no binding). Production paths never pass it. */
+  model?: ConstructorParameters<typeof Agent>[0]['model'];
+  resolver?: ModelResolver;
+}
+
+export function createMastraSpecialist(manifest: AgentManifest, options: SpecialistModelOptions = {}): Agent {
   const tools: Record<string, (typeof SPECIALIST_TOOL_TABLE)[ToolId]> = {};
   for (const id of manifest.tools) {
     if (!Object.hasOwn(SPECIALIST_TOOL_TABLE, id)) throw new Error(`Mastra specialist ${manifest.id} requests tool ${id} that is not in the read-only table`);
     tools[id] = SPECIALIST_TOOL_TABLE[id as ToolId];
   }
-  return new Agent({
+  const resolved = options.model ? undefined : resolveSpecialistModel(manifest, options.resolver);
+  const agent = new Agent({
     id: specialistAgentId(manifest),
     name: manifest.name,
     description: manifest.responsibility,
     instructions: renderAgentInstructions(manifest),
-    model: options.model ?? specialistModelConfig(),
+    model: options.model ?? resolved!.model,
     tools,
     defaultOptions: { maxSteps: manifest.limits.maxSteps },
   });
+  return resolved ? bindAgent(agent, resolved.binding) : agent;
 }
 
 export interface SpecialistRegistration {
@@ -78,6 +93,8 @@ export interface SpecialistRegistration {
   registry: PackRegistry | undefined;
   /** Why no specialists were registered, when that is the case. */
   error: string | undefined;
+  /** Specialists left out because no authorized, available, capable model could be resolved for them. Never silently substituted. */
+  refused: { id: string; code: string; reason: string }[];
 }
 
 /** Locates the pack from the working directory first (how `mastra dev` and the built server run), then from this file. */
@@ -85,19 +102,27 @@ export function locatePackRoot(): string | null {
   return findProjectRoot(process.cwd()) ?? findProjectRoot(import.meta.dirname);
 }
 
-export function registerSpecialists(registryOrRoot: PackRegistry | string | null = locatePackRoot(), options: { model?: ConstructorParameters<typeof Agent>[0]['model'] } = {}): SpecialistRegistration {
+export function registerSpecialists(registryOrRoot: PackRegistry | string | null = locatePackRoot(), options: SpecialistModelOptions = {}): SpecialistRegistration {
+  const refused: SpecialistRegistration['refused'] = [];
   try {
     if (registryOrRoot === null) throw new Error('project root not found; engineering pack not loaded');
     const registry = typeof registryOrRoot === 'string' ? loadPackRegistry(registryOrRoot) : registryOrRoot;
     if (registry.agents.length > MAX_SPECIALISTS) throw new Error(`pack declares ${registry.agents.length} agents, limit is ${MAX_SPECIALISTS}`);
+    // One resolver for the whole catalog; an invalid model configuration throws here and registers nothing (fail closed).
+    const resolver = options.model ? undefined : (options.resolver ?? modelResolverFromEnv());
     const agents: Record<string, Agent> = {};
     for (const manifest of registry.agents) {
       const key = specialistRegistryKey(manifest);
       if (Object.hasOwn(agents, key)) throw new Error(`duplicate specialist registry key ${key}`);
-      agents[key] = createMastraSpecialist(manifest, options);
+      try {
+        agents[key] = createMastraSpecialist(manifest, { ...options, ...(resolver ? { resolver } : {}) });
+      } catch (err) {
+        if (!(err instanceof ModelResolutionError)) throw err;
+        refused.push({ id: manifest.id, code: err.code, reason: err.message });
+      }
     }
-    return { agents, registry, error: undefined };
+    return { agents, registry, error: undefined, refused };
   } catch (err) {
-    return { agents: {}, registry: undefined, error: (err as Error).message };
+    return { agents: {}, registry: undefined, error: (err as Error).message, refused };
   }
 }
