@@ -111,7 +111,7 @@ Examples:
 - Audit variable names, comments, docs and Studio labels that call Qwen a worker or confuse provider with model.
 - Keep portable agent/skill definitions framework-agnostic and render them via the Mastra adapter.
 - Verify `codingWorkerGo` / `codingWorkerJs` and specialist agents obey the same run-identity and telemetry contract.
-- Introduce a genuine scheduler-to-specialist invocation path; appearing in Studio alone is not end-to-end support.
+- Introduce a genuine scheduler-to-specialist invocation path; appearing in Studio alone is not end-to-end support. **Status: partial.** `specialist-review-runner.ts` is a real caller, tested end to end against a scheduler-verified task; no automatic trigger (scheduler hook or lead CLI command) exists yet. See findings register N-06.
 - Ensure runtime-owned authorization, repository RequestContext and independent reviews are not bypassed by direct Studio usage.
 - Add deterministic tests for model substitution retaining `agentId`, provider incompatibility refusal, permission intersection, pinned skills/context, and correlated logs.
 - Do not retroactively claim the 16 specialist definitions or 40 skill summaries provide complete ECC workflows.
@@ -137,6 +137,13 @@ it changes no behaviour. Positions are advisory until a human accepts this ADR.
 `maxClaims (3) x coding attempts (3) x (1 + runtime retry 1) = 18` model invocations for one task, because a re-claim after a lost lease starts
 a fresh attempt budget. A single budget spanning claims would be tighter but needs the attempt count persisted in the scheduler store, which is
 a schema change requiring a migration; it is therefore not done in this PR. Paid providers are already excluded from re-claim.
+
+Safeguards agreed with the reviewer (`architecture-decision-response-20261019-001`):
+- The rule is framed around **side effects**, not the orchestrator's name: no independent retry of a *mutation* step anywhere; a manifest-declared, at-most-once re-ask for a read-only specialist's invalid output is allowed. The no-mutation-retry invariant is covered by `coding-task-workflow.test.ts` and `specialist-review-workflow.test.ts`.
+- The figure 18 is a **control-plane limit under the stated defaults**, not a cost bound and not evidence that every invocation is paid or completes. Recovery, operator re-submission and future specialist calls must not be assumed to fit inside it.
+- Before tuning any budget, persist model-call counts and report the observed amplification.
+- "A paid provider's task is never requeued by the scheduler" is a separate invariant and stays.
+- This section is a peer recommendation. It is **not** human ratification of the ADR and not an approval to merge.
 
 ## Consequences
 

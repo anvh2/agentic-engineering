@@ -22,6 +22,10 @@ import { loadPackRegistry } from '../../src/runtime/knowledge/packs/loader.ts';
 import { activeSkillDigests, pinSkillsForTask, skillToCandidate } from '../../src/runtime/knowledge/packs/skills.ts';
 import { Scheduler } from '../../src/runtime/scheduler/scheduler.ts';
 import { git, makeRepo, makeStore, plan, tempDir } from '../../src/runtime/scheduler/test-helpers.ts';
+import { createMastraSpecialist } from '../../src/integrations/mastra/specialist-agents.ts';
+import { report } from '../../src/integrations/mastra/__testing__/scripted-model.ts';
+import { reviewRequestFromTask, runSpecialistReviews } from '../../src/integrations/mastra/specialist-review-runner.ts';
+import { createSpecialistReviewWorkflow } from '../../src/integrations/mastra/workflows/specialist-review-workflow.ts';
 import { WorktreeManager } from '../../src/runtime/worktree/worktree.ts';
 import { gitDiff, gitStatus, runGoFmt, runGoTest } from '../../src/workers/tools/execution-tools.ts';
 import { listFiles, readFile, searchFiles, writeFile } from '../../src/workers/tools/repository-tools.ts';
@@ -135,7 +139,7 @@ async function runScenario(options: { id: string; taskId: string; contents: read
   };
   mkdirSync(EVIDENCE_DIR, { recursive: true });
   writeFileSync(join(EVIDENCE_DIR, `${options.id}.json`), JSON.stringify(evidence, null, 2));
-  return { evidence, task, scripted, repo, headBefore };
+  return { evidence, task, scripted, repo, headBefore, dir, store };
 }
 
 describe('autonomous demonstration: real runtime path, scripted model', () => {
@@ -171,5 +175,33 @@ describe('autonomous demonstration: real runtime path, scripted model', () => {
     assert.ok(e.attempts.every((a) => a.verifierExitCode !== 0), 'no attempt passed verification');
     assert.equal(e.sourceCheckoutClean, true);
     assert.equal(e.changedFiles.length, 0, 'nothing from a failed task reached a commit');
+  });
+
+  it('Scenario A+ (chain): the task the scheduler verified is handed to read-only specialists, which return advisories only and change nothing', async () => {
+    const r = await runScenario({ id: 'scenario-a-plus-chain', taskId: 'DEMO-AP', contents: [RIGHT] });
+    assert.equal(r.task.state, 'REVIEW_PENDING');
+    const model = scriptedModel([{ toolCall: { name: 'readFile', args: { path: 'calc/calc.go' } } }, { text: report() }]);
+    const workflow = createSpecialistReviewWorkflow({
+      registry: pack, allowedRoots: () => [join(r.dir, 'worktrees')], contextTokens: () => 16_384,
+      resolveAgent: (manifest) => createMastraSpecialist(manifest, { model: model.model }) as never,
+    });
+    const before = git(r.task.worktreePath!, 'status', '--porcelain') + git(r.task.worktreePath!, 'rev-parse', 'HEAD');
+    const started = Date.now();
+    const summary = await runSpecialistReviews({ workflow, registry: pack, prefer: ['security-reviewer', 'go-reviewer'] }, reviewRequestFromTask(r.task as never, { language: 'go' }));
+    const after = git(r.task.worktreePath!, 'status', '--porcelain') + git(r.task.worktreePath!, 'rev-parse', 'HEAD');
+    assert.equal(summary.advisory, true);
+    assert.ok(summary.runs.length >= 1 && summary.runs.length <= 3);
+    assert.deepEqual(summary.selected.slice(0, 2), ['security-reviewer', 'go-reviewer'], 'the lead\'s priority order was honoured');
+    assert.ok(summary.runs.every((x) => x.status === 'REPORTED'), JSON.stringify(summary.runs));
+    assert.equal(after, before, 'read-only specialists changed nothing in the task worktree');
+    const stateAfter = r.store.requireTask('DEMO-AP').state; // re-read from the durable store after the specialists ran
+    assert.equal(stateAfter, 'REVIEW_PENDING', 'a specialist advisory never moves the task out of review');
+    mkdirSync(EVIDENCE_DIR, { recursive: true });
+    writeFileSync(join(EVIDENCE_DIR, 'scenario-a-plus-specialists.json'), JSON.stringify({
+      schema: 'agentic.autonomy-evidence/1', scenario: 'scenario-a-plus-chain', taskId: 'DEMO-AP', schedulerRunIds: r.evidence.runIds,
+      stubbedComponents: ['specialist language model (scripted)'], advisory: summary.advisory, reviewId: summary.reviewId, selected: summary.selected, skippedForCap: summary.skippedForCap,
+      runs: summary.runs, modelInferenceCalls: model.calls(), taskStateAfter: stateAfter, worktreeUnchanged: after === before,
+      measured: { specialistWallClockMs: Date.now() - started, tokens: 'not measured (scripted)', costUsd: 'not measured' },
+    }, null, 2));
   });
 });
