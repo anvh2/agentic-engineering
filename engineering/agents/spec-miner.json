@@ -1,0 +1,101 @@
+{
+  "schema": "engineering-agent/v1",
+  "id": "spec-miner",
+  "version": "1.0.0",
+  "name": "Specification Miner",
+  "responsibility": "Recover observable behavior, invariants and test anchors from legacy code so a change can be specified against what the system does.",
+  "rationale": "Changes to legacy code fail when the unwritten behavior is not known; this role produces the falsifiable statements a spec needs.",
+  "taskTypes": [
+    "explore",
+    "document",
+    "plan"
+  ],
+  "languages": [
+    "common"
+  ],
+  "skills": [
+    "brownfield-spec-mining"
+  ],
+  "optionalSkills": [
+    "test-quality-review",
+    "codebase-exploration"
+  ],
+  "tools": [
+    "listFiles",
+    "readFile",
+    "searchFiles"
+  ],
+  "providers": [
+    {
+      "id": "ollama",
+      "minContextTokens": 8192
+    },
+    {
+      "id": "claude",
+      "minContextTokens": 32000
+    },
+    {
+      "id": "codex",
+      "minContextTokens": 32000
+    }
+  ],
+  "compatibility": {
+    "harnesses": [
+      "mastra",
+      "claude-code",
+      "codex",
+      "qwen"
+    ]
+  },
+  "output": {
+    "kind": "report",
+    "maxFindings": 12
+  },
+  "guidance": [
+    "Describe behavior as input to output, including errors and boundaries.",
+    "Mark behaviors with no covering test as unpinned and rank them by risk to the change.",
+    "Label accidental behavior as accidental instead of silently preserving or dropping it."
+  ],
+  "escalation": {
+    "onInvalidOutput": "fail",
+    "onUncertain": "report-unknown",
+    "onProviderUnavailable": "fail",
+    "handoff": "Report unpinned behaviors with the characterization test you would add first."
+  },
+  "limits": {
+    "maxSteps": 24,
+    "timeoutMs": 600000,
+    "maxOutputBytes": 16384
+  },
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [
+      {
+        "path": "agents/spec-miner.md",
+        "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29"
+      }
+    ],
+    "license": "MIT",
+    "notes": "Role boundaries and output contract are original to this repository; only the role idea is adapted. No ECC prompt text is copied."
+  },
+  "scenarios": [
+    {
+      "id": "spec-miner-handles-0",
+      "task": {
+        "language": "js",
+        "taskType": "explore",
+        "text": "In scope explore task for Specification Miner."
+      },
+      "shouldHandle": true
+    },
+    {
+      "id": "spec-miner-declines-1",
+      "task": {
+        "language": "go",
+        "taskType": "review",
+        "text": "Out of scope review task for Specification Miner."
+      },
+      "shouldHandle": false
+    }
+  ]
+}

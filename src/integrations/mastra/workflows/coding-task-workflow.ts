@@ -9,11 +9,15 @@ import { createOllamaProvider } from '../../../workers/providers/ollama.ts';
 import { defaultProviderRegistry } from '../../../workers/providers/default.ts';
 import { UnknownProviderError, type ProviderRegistry } from '../../../workers/providers/registry.ts';
 import { DEFAULT_PROVIDER_ID, allowedProvidersFromEnv, authorizeProvider } from '../../../runtime/execution/worker-provider.ts';
+import type { ApprovalVerifier } from '../../../runtime/execution/design-approval.ts';
+import type { EngineeringKnowledgeCatalog } from '../../../runtime/knowledge/engineering-knowledge.ts';
 import { delegationRequestSchema, executeDelegation, languageOf, routeTask, workerAgentIdFor, type EngineeringResult } from '../../../runtime/execution/delegation.ts';
 import type { RunCodingTaskOptions, WorkerLike } from '../../../runtime/execution/coding-task-runner.ts';
 import { phaseOf, type CodingPhase, type PhaseUpdate } from '../../../runtime/execution/coding-task-status.ts';
 import { runtimeMetrics } from '../../../observability/metrics.ts';
 import { createTraceSink } from '../../../runtime/execution/coding-task-trace.ts';
+import { knowledgeDbPath, loadActiveCatalog } from '../../../runtime/knowledge/engineering-control.ts';
+import { bindingMetadata, bindingOf, ollamaSettings } from '../../../runtime/models/index.ts';
 
 /**
  * coding-task-workflow: the Engineering Lead's door to the local coding worker, and the orchestration /
@@ -58,6 +62,8 @@ export const codingTaskResultSchema = z.object({
   taskId: z.string(),
   /** Provider that ran (or was refused) the task; 'ollama' unless the request named another. */
   provider: z.string().optional(),
+  /** Agent, provider and model the default worker was bound to (separate ids; no credential). Absent when a named provider ran the task. */
+  model: z.object({ agentId: z.string(), role: z.enum(['coding-worker', 'specialist']), providerId: z.string(), modelId: z.string() }).optional(),
   /** PASS | ESCALATED_TO_CLAUDE | RUNTIME_FAILURE | KEPT_BY_CLAUDE. Decided by the runtime verifier, never by the worker. */
   status: z.enum(['PASS', 'ESCALATED_TO_CLAUDE', 'RUNTIME_FAILURE', 'KEPT_BY_CLAUDE']),
   phase: phaseSchema,
@@ -92,7 +98,18 @@ export interface CodingTaskWorkflowDeps {
   providers?: ProviderRegistry;
   /** The operator's allow-list, read at run time (default: AGENTIC_ALLOW_PROVIDERS of THIS process, i.e. the Mastra server's). */
   allowProviders?: () => readonly string[];
-  runOptions?: Pick<RunCodingTaskOptions, 'modelTimeoutMs' | 'runtimeRetryDelayMs'>;
+  runOptions?: Pick<RunCodingTaskOptions, 'modelTimeoutMs' | 'runtimeRetryDelayMs' | 'modelLabel'>;
+  /**
+   * Verifies an attached approvedDesign against the runtime's durable approval records. Default: deny all. The workflow input
+   * is reachable by any local caller of the Mastra API, so a design in it is never trusted on its own `approvalRef`.
+   */
+  approvals?: ApprovalVerifier;
+  /**
+   * Trusted runtime catalog for tasks that pin curated knowledge. Default: none, so such a task is refused (fail closed).
+   * A function is evaluated per run and ONLY for a task that pins knowledge, so promotions and revocations take effect on the
+   * next run and a damaged store cannot affect tasks that pin nothing.
+   */
+  knowledgeCatalog?: EngineeringKnowledgeCatalog | (() => EngineeringKnowledgeCatalog | undefined);
 }
 
 const NEXT_ACTION: Record<EngineeringResult['status'], string> = {
@@ -160,6 +177,8 @@ function defaultArtifactRoot(): string {
 }
 
 export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
+  const catalogFor = (pinsKnowledge: boolean): EngineeringKnowledgeCatalog | undefined =>
+    !pinsKnowledge ? undefined : typeof deps.knowledgeCatalog === 'function' ? deps.knowledgeCatalog() : deps.knowledgeCatalog;
   const publish = async (
     ctx: { setState: (s: WorkflowState) => Promise<void>; writer: { write: (d: unknown) => Promise<void> } },
     taskId: string,
@@ -185,7 +204,7 @@ export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
     execute: async ({ inputData, state, setState, writer }) => {
       const taskId = inputData.contract?.taskId ?? 'unknown';
       await publish({ setState, writer }, taskId, { phase: 'preparing', detail: 'validating contract and routing' }, state);
-      const route = await routeTask(inputData, inputData.repository);
+      const route = await routeTask(inputData, inputData.repository, undefined, { approvals: deps.approvals, knowledgeCatalog: catalogFor(!!inputData.contract?.knowledge) });
       return {
         taskId,
         repository: inputData.repository,
@@ -244,12 +263,11 @@ export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
       // Worker follows the language of the allowed files (the gate already guaranteed they are all one language).
       const agentId = workerAgentIdFor(languageOf(request.contract.allowedFiles));
       const fallbackAgent = agentId === 'codingWorkerJs' ? codingWorkerJs : codingWorkerGo;
+      const defaultAgent = providerWorker || deps.resolveWorker ? undefined : ((mastra?.getAgent(agentId) as typeof fallbackAgent | undefined) ?? fallbackAgent);
+      const binding = bindingOf(defaultAgent);
       const worker = providerWorker ?? (deps.resolveWorker
         ? deps.resolveWorker({ mastra, tracingContext })
-        : createOllamaProvider(
-            (mastra?.getAgent(agentId) as typeof fallbackAgent | undefined) ?? fallbackAgent,
-            tracingContext ? { tracingContext } : {},
-          ));
+        : createOllamaProvider(defaultAgent!, tracingContext ? { tracingContext } : {}));
 
       // Runner events -> Studio phase updates, in order. Observability only; never decides anything.
       let current = state;
@@ -262,16 +280,20 @@ export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
         },
       });
 
+      if (binding) trace.emit('model_bound', bindingMetadata(binding));
+
       const result = await executeDelegation(request, {
         repoRoot: inputData.repository,
         worker,
         artifactDir,
         trace,
-        modelLabel: providerWorker ? undefined : (process.env.OLLAMA_MODEL ?? 'qwen3:8b'), // a provider labels itself (provider:model)
+        approvals: deps.approvals,
+        knowledgeCatalog: catalogFor(!!request.contract.knowledge),
+        modelLabel: providerWorker ? undefined : (binding?.modelId ?? ollamaSettings().modelId), // a provider labels itself (provider:model)
         runOptions: { modelTimeoutMs: 900_000, ...deps.runOptions, signal: abortSignal, runId }, // the run's own id owns its model permits
       });
       await chain;
-      return { ...summarize(result), provider: requestedProvider };
+      return { ...summarize(result), provider: requestedProvider, ...(binding ? { model: binding } : {}) };
     },
   });
 
@@ -314,4 +336,7 @@ export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
     .commit();
 }
 
-export const codingTaskWorkflow = createCodingTaskWorkflow();
+/** The registered workflow reads promoted knowledge from the project's durable store on every run that pins any. */
+export const codingTaskWorkflow = createCodingTaskWorkflow({
+  knowledgeCatalog: () => loadActiveCatalog(knowledgeDbPath(join(findProjectRoot() ?? process.cwd(), '.workdir'))),
+});

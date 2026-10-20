@@ -1,0 +1,54 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "benchmark-optimization",
+  "version": "1.0.0",
+  "title": "Benchmark-driven optimization",
+  "summary": "Optimize only what a reproducible measurement shows is slow or costly: establish a baseline, change one variable, remeasure, and keep the change only if the numbers justify it.",
+  "category": "optimization",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "skills/benchmark-optimization-loop/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "skills/benchmark-methodology/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "agents/performance-optimizer.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "Keeps ECC's loop but adds the stop rule: an optimization that adds complexity without a measured gain is reverted."
+  },
+  "activation": {
+    "languages": ["common"],
+    "taskTypes": ["implement", "review", "evaluate", "plan"],
+    "keywords": ["performance", "latency", "throughput", "slow", "optimize", "profile", "allocation", "memory", "hot path", "benchmark"],
+    "priority": 56
+  },
+  "inputs": [
+    { "name": "target", "description": "The operation to improve and the metric that defines better.", "required": true }
+  ],
+  "outputs": [
+    { "name": "measurements", "description": "Baseline and after numbers with the method." },
+    { "name": "decision", "description": "Keep or revert, with the reason." }
+  ],
+  "workflow": [
+    { "step": "Define the metric, workload and environment; reproduce the baseline at least three times and record the spread.", "check": "Run-to-run noise is known." },
+    { "step": "Profile to find where time or memory goes before changing anything.", "check": "The target is a measured hot spot." },
+    { "step": "Change one thing and remeasure with the same workload.", "check": "Only one variable differs between runs." },
+    { "step": "Keep the change only if the gain exceeds the noise and correctness tests still pass; otherwise revert.", "check": "A claimed improvement is outside the noise band." },
+    { "step": "Record the numbers, the environment and what was tried and rejected." }
+  ],
+  "constraints": [
+    "Never trade correctness or safety checks for speed.",
+    "Do not cite estimates as measurements; label them.",
+    "Do not run benchmarks that call paid providers without authorization."
+  ],
+  "examples": [
+    { "title": "Premature cache", "situation": "A cache is proposed for a function that takes 2 ms of a 900 ms request.", "guidance": "Profile first; the cache would save 0.2 percent and add invalidation risk, so reject it." }
+  ],
+  "verification": [
+    "Before and after use the same workload and are repeated.",
+    "Correctness tests pass after the change."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "optimize-hot-path", "task": { "language": "go", "taskType": "implement", "text": "Optimize the hot path: profile the allocation and latency, then benchmark." }, "selected": true },
+    { "id": "review-perf", "task": { "language": "js", "taskType": "review", "text": "Review this performance change; is it slow code or a throughput claim without a benchmark?" }, "selected": true },
+    { "id": "debug-no", "task": { "language": "go", "taskType": "debug", "text": "Slow performance bug." }, "selected": false },
+    { "id": "implement-no-keyword", "task": { "language": "go", "taskType": "implement", "text": "Add a config flag." }, "selected": false }
+  ]
+}

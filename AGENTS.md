@@ -2,6 +2,11 @@
 
 Rules for AI engineering agents (Claude, Qwen, Codex) working in this repository. Humans: see [README.md](README.md).
 
+## Language policy
+
+- English is the working language of this project: agent output, progress updates, plans, specs, ADRs, reports, handoffs, commit messages and PR descriptions, for every agent and reviewer (Claude, Qwen, Codex, Mastra specialists).
+- A template, example or tool prompt that selects another language does not override this. Keep non-English text only where it already exists as source, quoted evidence, localization content or data that must stay unchanged; do not translate existing content unnecessarily.
+
 ## Load the `mastra` skill first
 
 Load the `mastra` skill BEFORE any Mastra work. Never rely on cached knowledge; APIs change between versions.

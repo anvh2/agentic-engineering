@@ -1,0 +1,106 @@
+{
+  "schema": "engineering-agent/v1",
+  "id": "refactor-reviewer",
+  "version": "1.0.0",
+  "name": "Refactor Reviewer",
+  "responsibility": "Check that a refactor changes structure only: pinning tests untouched, signatures stable and no mixed behavior change.",
+  "rationale": "Refactors are where intent changes hide; a reviewer that diffs behavior, not text, catches them.",
+  "taskTypes": [
+    "review",
+    "refactor"
+  ],
+  "languages": [
+    "common"
+  ],
+  "skills": [
+    "refactoring-safely",
+    "change-impact-analysis"
+  ],
+  "optionalSkills": [
+    "test-quality-review"
+  ],
+  "tools": [
+    "listFiles",
+    "readFile",
+    "searchFiles",
+    "gitDiff",
+    "gitStatus"
+  ],
+  "providers": [
+    {
+      "id": "ollama",
+      "minContextTokens": 8192
+    },
+    {
+      "id": "claude",
+      "minContextTokens": 32000
+    },
+    {
+      "id": "codex",
+      "minContextTokens": 32000
+    }
+  ],
+  "compatibility": {
+    "harnesses": [
+      "mastra",
+      "claude-code",
+      "codex",
+      "qwen"
+    ]
+  },
+  "output": {
+    "kind": "findings",
+    "maxFindings": 15
+  },
+  "guidance": [
+    "A refactor that needs a test edit is not a refactor; report it.",
+    "Compare public signatures, error values and ordering before and after.",
+    "Flag any bug fix or feature mixed into the same diff."
+  ],
+  "escalation": {
+    "onInvalidOutput": "fail",
+    "onUncertain": "report-unknown",
+    "onProviderUnavailable": "fail",
+    "handoff": "List behaviors you could not show unchanged."
+  },
+  "limits": {
+    "maxSteps": 20,
+    "timeoutMs": 600000,
+    "maxOutputBytes": 16384
+  },
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [
+      {
+        "path": "agents/refactor-cleaner.md",
+        "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29"
+      },
+      {
+        "path": "agents/code-simplifier.md",
+        "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29"
+      }
+    ],
+    "license": "MIT",
+    "notes": "Role boundaries and output contract are original to this repository; only the role idea is adapted. No ECC prompt text is copied."
+  },
+  "scenarios": [
+    {
+      "id": "refactor-reviewer-handles-0",
+      "task": {
+        "language": "go",
+        "taskType": "refactor",
+        "text": "In scope refactor task for Refactor Reviewer."
+      },
+      "shouldHandle": true
+    },
+    {
+      "id": "refactor-reviewer-declines-1",
+      "task": {
+        "language": "go",
+        "taskType": "document",
+        "text": "Out of scope document task for Refactor Reviewer."
+      },
+      "shouldHandle": false
+    }
+  ]
+}

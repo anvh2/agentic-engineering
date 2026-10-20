@@ -1,0 +1,56 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "javascript-engineering",
+  "version": "1.0.0",
+  "title": "JavaScript engineering",
+  "summary": "Write and review Node.js JavaScript that respects the module format, handles promise rejections and avoids new dependencies.",
+  "category": "implementation",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "rules/typescript/coding-style.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "skills/error-handling/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "ECC's rule set targets TypeScript; the module-boundary and async-error guidance is carried over for plain JavaScript."
+  },
+  "activation": {
+    "languages": ["js"],
+    "taskTypes": ["implement", "review", "refactor", "debug"],
+    "keywords": ["javascript", "node", "commonjs", "esm", "require", "import", "promise", "async", "await", "module.exports"],
+    "priority": 50
+  },
+  "inputs": [
+    { "name": "files", "description": "The JavaScript files in scope.", "required": true },
+    { "name": "acceptance", "description": "The behavior that must hold when the change is done.", "required": true }
+  ],
+  "outputs": [
+    { "name": "change", "description": "A minimal diff inside the allowed files." },
+    { "name": "notes", "description": "Module-format, async or error-handling concerns noticed." }
+  ],
+  "workflow": [
+    { "step": "Identify the module format from package.json and neighboring files (CommonJS require vs ES import) and match it exactly.", "check": "The change adds no mixed require/import usage." },
+    { "step": "Read the file and its existing Jest test; copy the project's naming and error conventions.", "check": "The diff looks like it was written by the same author." },
+    { "step": "Make every async path propagate failure: await promises, return them, or attach a catch. Never leave a floating promise.", "check": "A rejected promise reaches a handler that logs or rethrows." },
+    { "step": "Validate untrusted input at the function boundary and throw a typed Error with a stable message.", "check": "Bad input has a test that asserts the thrown error." },
+    { "step": "Do not add a dependency or change package.json; use the standard library.", "check": "package.json and lockfiles are untouched." },
+    { "step": "Run only the approved scoped verifier and fix the code until it passes." }
+  ],
+  "constraints": [
+    "Do not edit test files or snapshots unless the task explicitly allows it.",
+    "No eval, no dynamic require of computed paths, no child_process unless the task is about it.",
+    "Stay within the allowed files."
+  ],
+  "examples": [
+    { "title": "Floating promise", "situation": "A function calls an async helper without awaiting it.", "guidance": "Await it inside try/catch or return the promise, and add a test where the helper rejects." }
+  ],
+  "verification": [
+    "The scoped Jest verifier passes.",
+    "No dependency, config or lockfile changed."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "js-async-fix", "task": { "language": "js", "taskType": "implement", "text": "Fix the floating promise: await the async call in this node module and handle rejection." }, "selected": true },
+    { "id": "js-esm-review", "task": { "language": "js", "taskType": "review", "text": "Review the import and require mix in this commonjs module." }, "selected": true },
+    { "id": "go-not-js", "task": { "language": "go", "taskType": "implement", "text": "Fix the floating promise in this async module." }, "selected": false },
+    { "id": "js-test-type", "task": { "language": "js", "taskType": "test", "text": "Write a test for the async promise." }, "selected": false }
+  ]
+}

@@ -1,0 +1,149 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "go-testing",
+  "version": "1.0.0",
+  "title": "Go testing",
+  "summary": "Design table-driven Go tests that pin behavior, failure paths and cancellation, and run them only through the approved targeted verifier.",
+  "category": "quality",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [
+      {
+        "path": "skills/golang-testing/SKILL.md",
+        "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29"
+      }
+    ],
+    "license": "MIT",
+    "notes": "Limited to flags the runtime verifier allow-lists: -run, -count, -v, -race and -timeout, with relative package paths."
+  },
+  "activation": {
+    "languages": [
+      "go"
+    ],
+    "taskTypes": [
+      "test",
+      "implement",
+      "review",
+      "debug"
+    ],
+    "keywords": [
+      "go test",
+      "table-driven",
+      "subtest",
+      "t.run",
+      "testing.t",
+      "test file",
+      "test.go",
+      "fixture",
+      "race detector"
+    ],
+    "priority": 55
+  },
+  "inputs": [
+    {
+      "name": "behavior",
+      "description": "The behavior under test, as input and expected output.",
+      "required": true
+    },
+    {
+      "name": "package",
+      "description": "The package whose tests are in scope.",
+      "required": true
+    }
+  ],
+  "outputs": [
+    {
+      "name": "tests",
+      "description": "Table-driven tests covering success, boundary and failure cases."
+    },
+    {
+      "name": "evidence",
+      "description": "The verifier command and its exit status."
+    }
+  ],
+  "workflow": [
+    {
+      "step": "Write the table first: name, input, expected output or error, covering the happy path, each boundary and each documented failure.",
+      "check": "Every row has a descriptive name."
+    },
+    {
+      "step": "Run each row with t.Run so a failure names the row; avoid shared mutable state between rows.",
+      "check": "Rows can run in any order."
+    },
+    {
+      "step": "Assert on behavior and error values (errors.Is / errors.As), not on formatted strings, unless the string is the contract.",
+      "check": "Renaming an internal helper does not break a test."
+    },
+    {
+      "step": "For concurrency and cancellation, use a cancelled context and a bounded wait; run with -race when the verifier allows it.",
+      "check": "The test fails if the cancellation check is removed."
+    },
+    {
+      "step": "Confirm the new test fails against the old behavior, then passes against the new, using the targeted package only.",
+      "check": "A test that never failed proves nothing."
+    }
+  ],
+  "constraints": [
+    "Do not modify an existing test to make it pass; a failing existing test is a finding.",
+    "Use only the approved verifier: go test with allow-listed flags and a relative package path.",
+    "Tests must not touch the network, wall-clock sleeps longer than a second, or paths outside the repository."
+  ],
+  "examples": [
+    {
+      "title": "Boundary table",
+      "situation": "A parser accepts values 1..100.",
+      "guidance": "Rows for 0, 1, 100 and 101 plus a non-numeric input, each asserting the exact error value."
+    }
+  ],
+  "verification": [
+    "The targeted go test exits 0 and the new rows fail against a reverted change.",
+    "No existing test file was edited."
+  ],
+  "compatibility": {
+    "harnesses": [
+      "mastra",
+      "claude-code",
+      "codex",
+      "qwen"
+    ]
+  },
+  "dependsOn": [],
+  "scenarios": [
+    {
+      "id": "write-table-test",
+      "task": {
+        "language": "go",
+        "taskType": "test",
+        "text": "Write a table-driven go test with subtests for the parser boundary cases in the _test.go file."
+      },
+      "selected": true
+    },
+    {
+      "id": "race-regression",
+      "task": {
+        "language": "go",
+        "taskType": "debug",
+        "text": "The go test fails under race; find the data race in the testing.t subtest."
+      },
+      "selected": true
+    },
+    {
+      "id": "js-not-go",
+      "task": {
+        "language": "js",
+        "taskType": "test",
+        "text": "Write a table-driven go test with subtests."
+      },
+      "selected": false
+    },
+    {
+      "id": "no-testing-words",
+      "task": {
+        "language": "go",
+        "taskType": "test",
+        "text": "Describe the deployment topology."
+      },
+      "selected": false
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+name: Agent handoff router
+
+# Deterministic router for AGENT_HANDOFF_V1 PR comments (docs/operations/agent-handoff-router.md). No LLM, no PR code is checked out or run.
+# NOTE: GitHub runs `issue_comment` workflows only from the default branch, so this file is inert until it is merged to master.
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: agent-handoff-router-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  route:
+    name: Route handoff comment
+    # Cheap pre-filter only; the router re-validates author, protocol, sender, recipient, message id and SHA itself.
+    if: >-
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, 'AGENT_HANDOFF_V1') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Default-branch checkout only (the event's ref): the comment text and the PR branch are never executed.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.23.2"
+      - name: Route the comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # The router's own replies are posted by this login, so they must count as trusted history for idempotency.
+          AGENT_ROUTER_ALLOWED_LOGINS: ${{ github.repository_owner }},github-actions[bot]
+        run: node --disable-warning=ExperimentalWarning scripts/pr-router.ts event

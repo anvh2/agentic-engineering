@@ -1,0 +1,53 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "rust-review-conventions",
+  "version": "1.0.0",
+  "title": "Rust review conventions",
+  "summary": "Read-only review guidance for Rust: ownership and lifetimes, error handling without panics, unsafe justification and test coverage. Rust implementation is not delegated.",
+  "category": "implementation",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "agents/rust-reviewer.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "skills/rust-patterns/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "skills/rust-testing/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "Review-only. The language adapters do not register Rust, so no worker receives this skill."
+  },
+  "activation": {
+    "languages": ["rust"],
+    "taskTypes": ["review", "explore", "debug"],
+    "keywords": ["rust", "cargo", "unsafe", "lifetime", "borrow", "unwrap", "result", "clippy", "ownership", "crate"],
+    "priority": 50
+  },
+  "inputs": [
+    { "name": "files", "description": "Rust sources under review.", "required": true }
+  ],
+  "outputs": [
+    { "name": "findings", "description": "Soundness, error handling and test findings with line references." }
+  ],
+  "workflow": [
+    { "step": "Find every unsafe block and check for a comment stating the invariant that makes it sound, and that the invariant is enforced by the surrounding type.", "check": "No unsafe block lacks a stated invariant." },
+    { "step": "Find unwrap, expect and panic paths in non-test code and judge whether the failure is truly impossible.", "check": "Library code returns Result instead of panicking." },
+    { "step": "Check ownership and lifetimes for needless clones, leaked references and shared mutable state without synchronization.", "check": "Shared state has a named synchronization strategy." },
+    { "step": "Check error types: they carry context and implement the standard traits; errors are not converted to strings early.", "check": "Callers can match on error kind." },
+    { "step": "Check tests cover failure paths, and note whether clippy and fmt expectations are met." }
+  ],
+  "constraints": [
+    "Read-only analysis; Rust implementation is not delegated to local workers.",
+    "Do not recommend removing unsafe without understanding why it is there.",
+    "Findings are advisory."
+  ],
+  "examples": [
+    { "title": "Unwrap in parser", "situation": "A parser calls unwrap on user input.", "guidance": "Report as high severity: malformed input panics the process. Return a typed error." }
+  ],
+  "verification": [
+    "Every finding cites a file and line.",
+    "Unsafe findings state the missing invariant."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "rust-review", "task": { "language": "rust", "taskType": "review", "text": "Review the rust crate: unsafe block, unwrap and lifetime handling." }, "selected": true },
+    { "id": "rust-debug", "task": { "language": "rust", "taskType": "debug", "text": "The cargo build fails with a borrow error in ownership of the result." }, "selected": true },
+    { "id": "go-not-rust", "task": { "language": "go", "taskType": "review", "text": "Review the unsafe and unwrap use." }, "selected": false },
+    { "id": "rust-implement", "task": { "language": "rust", "taskType": "implement", "text": "Write the cargo crate." }, "selected": false }
+  ]
+}

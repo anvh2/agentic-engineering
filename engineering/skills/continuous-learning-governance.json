@@ -1,0 +1,54 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "continuous-learning-governance",
+  "version": "1.0.0",
+  "title": "Continuous learning governance",
+  "summary": "Turn verified outcomes into candidate lessons and skills through evidence, validation and authorized promotion, with project isolation, monitoring and rollback.",
+  "category": "agent-engineering",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "skills/continuous-learning-v2/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "scripts/lib/skill-evolution/health.js", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "scripts/lib/skill-evolution/versioning.js", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "ECC promotes instincts by frequency and confidence. Here frequency never promotes: only verified outcomes feed candidates and only a signed authorization activates one."
+  },
+  "activation": {
+    "languages": ["common"],
+    "taskTypes": ["review", "evaluate", "operate", "design"],
+    "keywords": ["lesson", "instinct", "learning", "promote", "promotion", "skill health", "decline", "revoke", "rollback", "candidate skill"],
+    "priority": 64
+  },
+  "inputs": [
+    { "name": "outcomes", "description": "Runtime-verified, independently reviewed task outcomes.", "required": true }
+  ],
+  "outputs": [
+    { "name": "candidates", "description": "Candidate lessons with evidence references and confidence." },
+    { "name": "health", "description": "Per-skill acceptance trend with unmeasured skills distinguished from healthy ones." }
+  ],
+  "workflow": [
+    { "step": "Collect observations only from outcomes with runtime verification and an independent acceptance; ignore worker prose and unverified claims.", "check": "Every candidate cites evidence references." },
+    { "step": "Scope each candidate to its project; cross-project promotion needs independent supporting evidence from each project.", "check": "No lesson crosses a project boundary on one observation." },
+    { "step": "Deduplicate by content digest and score confidence from verified outcomes, not from how often something was said.", "check": "Repetition alone does not raise confidence." },
+    { "step": "Promote only through an authorized, signed, single-use grant bound to the exact digest and project.", "check": "A model cannot promote its own lesson." },
+    { "step": "Monitor outcomes per skill version; report unmeasured separately from healthy, flag decline, and revoke or roll back on authorization.", "check": "A revoked skill is absent from new task snapshots." }
+  ],
+  "constraints": [
+    "Never let worker output promote itself into trusted policy.",
+    "A candidate is inactive instructional text until promoted.",
+    "Keep an audit trail that the actor described cannot rewrite."
+  ],
+  "examples": [
+    { "title": "Popular but wrong", "situation": "A pattern appears in many worker summaries but fails review.", "guidance": "Its observation count is high and its verified-acceptance count is zero, so it never becomes a candidate." }
+  ],
+  "verification": [
+    "Candidates link to verified evidence and a project.",
+    "Promotion and revocation appear in the audit history with an authenticated principal."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "review-promotion", "task": { "language": "go", "taskType": "review", "text": "Review how a lesson is promoted and whether a revoke or rollback is possible for a candidate skill." }, "selected": true },
+    { "id": "evaluate-health", "task": { "language": "js", "taskType": "evaluate", "text": "Evaluate skill health and decline for the learning instinct." }, "selected": true },
+    { "id": "implement-no", "task": { "language": "go", "taskType": "implement", "text": "Implement the lesson promotion." }, "selected": false },
+    { "id": "review-no-keyword", "task": { "language": "go", "taskType": "review", "text": "Review the invoice layout." }, "selected": false }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "javascript-testing",
+  "version": "1.0.0",
+  "title": "JavaScript testing with Jest",
+  "summary": "Write focused Jest tests for Node modules and run them offline through the only approved verifier shape, npx --no-install jest on named test files.",
+  "category": "quality",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "skills/tdd-workflow/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "skills/e2e-testing/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "Constrained to this runtime's JS verifier: jest flags are limited to --runInBand and --ci, and every path must be a named test file."
+  },
+  "activation": {
+    "languages": ["js"],
+    "taskTypes": ["test", "implement", "review", "debug"],
+    "keywords": ["jest", "describe", "expect", "test file", "mock", "spy", "toequal", "tothrow", "test.js", "spec"],
+    "priority": 55
+  },
+  "inputs": [
+    { "name": "behavior", "description": "Behavior to pin, as input and expected result.", "required": true },
+    { "name": "test-file", "description": "The test file to add or extend.", "required": true }
+  ],
+  "outputs": [
+    { "name": "tests", "description": "Jest tests for success, boundary and failure paths." },
+    { "name": "evidence", "description": "Verifier command and exit status." }
+  ],
+  "workflow": [
+    { "step": "Read the module and the existing test file; match its structure, helper usage and naming.", "check": "The new tests sit in the existing describe blocks where they belong." },
+    { "step": "Write one test per behavior with a name stating the expected outcome; cover success, each boundary and each documented error.", "check": "Each test fails if its behavior is removed." },
+    { "step": "Assert exact values and thrown error messages or types; avoid snapshot assertions for logic.", "check": "No assertion is trivially true." },
+    { "step": "Mock only the process boundary (network, clock, filesystem); never mock the unit under test.", "check": "Removing the implementation makes the test fail." },
+    { "step": "Run exactly npx --no-install jest [--runInBand|--ci] <test file>; whole-suite runs and other flags are not allowed.", "check": "The verifier names the test file explicitly." }
+  ],
+  "constraints": [
+    "Do not edit existing assertions to make a failing test pass.",
+    "No network access, no real timers longer than a second, no writes outside the repository.",
+    "Do not add jest configuration or setup files."
+  ],
+  "examples": [
+    { "title": "Rejected promise", "situation": "An async function rejects on bad input.", "guidance": "await expect(fn(bad)).rejects.toThrow('exact message') alongside the success case." }
+  ],
+  "verification": [
+    "The scoped jest command exits 0 and the new tests fail against the previous implementation.",
+    "No config, snapshot or unrelated test file changed."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "jest-new-test", "task": { "language": "js", "taskType": "test", "text": "Add a jest test with describe and expect for the rejected promise in the test file." }, "selected": true },
+    { "id": "jest-mock-review", "task": { "language": "js", "taskType": "review", "text": "Review the jest mock and spy usage; does the test file mock the unit under test?" }, "selected": true },
+    { "id": "go-jest", "task": { "language": "go", "taskType": "test", "text": "Add a jest test with describe and expect." }, "selected": false },
+    { "id": "js-design", "task": { "language": "js", "taskType": "design", "text": "Design the jest mock layer." }, "selected": false }
+  ]
+}

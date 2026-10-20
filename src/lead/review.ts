@@ -1,6 +1,8 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { redact } from '../runtime/execution/coding-task-trace.ts';
+import { denyAllApprovals, type ApprovalVerifier } from '../runtime/execution/design-approval.ts';
+import { expectedEngineeringContext } from '../runtime/execution/engineering-context.ts';
 import { describeCapacity, type ResolvedCapacity } from '../runtime/execution/delegation-capacity.ts';
 import type { ReviewRow, SchedulerStore, TaskRow } from '../runtime/scheduler/store.ts';
 import { taskSpecSchema, type SchedulerConfig, type TaskSpec } from '../runtime/scheduler/types.ts';
@@ -22,6 +24,22 @@ export const REVIEW_CHECKLIST = [
   'Maintainability and integration risk (conflicts with other pending tasks)',
 ] as const;
 
+/** The design the worker was held to, shown only if the runtime verifies its approval, so reviewer and worker see the same text. */
+function renderEngineeringContext(task: TaskRow, approvals: ApprovalVerifier): string[] {
+  const contract = task.spec.request?.contract;
+  const design = contract?.approvedDesign;
+  if (!contract) return [];
+  if (!design) return ['', '**Engineering context:** no HLD/LLD attached (legacy task, NOT approved).'];
+  const verdict = approvals({ approvalRef: design.approvalRef, design, taskId: contract.taskId, allowedFiles: contract.allowedFiles });
+  if (!verdict.ok) return ['', `**Engineering context:** the attached design is NOT verified as approved (${verdict.code}: ${verdict.reason}). Do not review against it; escalate.`];
+  const context = expectedEngineeringContext(contract, verdict.approval);
+  return [
+    '',
+    `**Engineering context** (fingerprint ${context?.fingerprint ?? 'n/a'}; approval ${verdict.approval.approvalId} revision ${verdict.approval.revision}, approved by ${verdict.approval.role} ${verdict.approval.approverId} under grant ${verdict.approval.grantId}). The worker prompt contained exactly this text; review against it and do not rewrite it:`,
+    '', '_HLD_', design.hld, '', '_LLD_', design.lld, ...(design.adr?.length ? ['', '_ADR_', ...design.adr.map((a) => `- ${a}`)] : []),
+  ];
+}
+
 export function pendingReviews(store: SchedulerStore): { review: ReviewRow; task: TaskRow }[] {
   return store
     .listReviews({ pendingOnly: true })
@@ -30,7 +48,7 @@ export function pendingReviews(store: SchedulerStore): { review: ReviewRow; task
 }
 
 /** One Markdown pack with every pending review (criteria, findings, verifier evidence, diff), for a single batched pass. */
-export function renderReviewPack(store: SchedulerStore, taskIds?: string[]): string {
+export function renderReviewPack(store: SchedulerStore, taskIds?: string[], approvals: ApprovalVerifier = denyAllApprovals): string {
   const items = pendingReviews(store).filter(({ task }) => !taskIds || taskIds.includes(task.id));
   const out: string[] = [`# Review pack: ${items.length} task(s) awaiting the Engineering Lead`, '', 'Checklist applied to EVERY task:', ...REVIEW_CHECKLIST.map((c) => `- ${c}`), ''];
   for (const { review, task } of items) {
@@ -41,6 +59,7 @@ export function renderReviewPack(store: SchedulerStore, taskIds?: string[]): str
     out.push(`- verifier: ${r.verifier ? `${(r.verifier.command as string[]).join(' ')} -> exit ${r.verifier.exitCode}` : 'n/a'}`);
     if (r.capacity) out.push(`- delegation capacity: ${describeCapacity(r.capacity as ResolvedCapacity)}; changed lines: ${Object.entries((r.changedLines ?? {}) as Record<string, number>).map(([f, n]) => `${f} ${n}`).join(', ') || 'none'}`);
     if (r.feedbackAddressed) out.push(`- addresses earlier feedback: ${r.feedbackAddressed}`);
+    out.push(...renderEngineeringContext(task, approvals));
     out.push('', `**Objective:** ${r.objective}`, '', '**Acceptance criteria:**', ...(r.acceptanceCriteria as string[]).map((c) => `- ${c}`), '');
     const findings = r.findings as { code: string; severity: string; detail: string }[];
     out.push(findings.length ? '**Deterministic findings (acknowledge each):**' : '**Deterministic findings:** none', ...findings.map((f) => `- [${f.severity}] ${f.code}: ${f.detail}`), '');

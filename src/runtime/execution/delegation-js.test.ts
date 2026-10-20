@@ -76,6 +76,20 @@ describe('JS/TS delegation gate (deterministic, no model)', () => {
     });
   }
 
+  it('does not allow an injected policy to bypass the unapproved TypeScript adapter', async () => {
+    await writeFile(join(root, 'src/util/double.ts'), 'export const double = (n: number) => n * 2;\n');
+    const request = withContract({ allowedFiles: ['src/util/double.ts'] });
+    const customPolicy = {
+      maxAllowedFiles: 1,
+      allowedExtensions: ['.ts'],
+      allowedVerificationBinaries: ['npx'],
+      maxAttempts: 3,
+    };
+    const route = await routeTask(request, root, customPolicy);
+    assert.equal(route.route, 'claude');
+    assert.match((route as { reasons: string[] }).reasons.join('\n'), /mixed or other file types are not delegated/);
+  });
+
   it('keeps the task with Claude when the verification test is a symlink', async () => {
     await symlink('double.test.js', join(root, 'src/util/tests/unit/link.test.js'));
     const route = await routeTask(withVerify('npx', '--no-install', 'jest', 'src/util/tests/unit/link.test.js'), root);

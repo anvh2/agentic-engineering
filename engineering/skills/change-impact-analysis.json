@@ -1,0 +1,55 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "change-impact-analysis",
+  "version": "1.0.0",
+  "title": "Change impact analysis",
+  "summary": "Prove the blast radius of a change from real dependencies before implementation, then reconcile the planned impact against the actual diff.",
+  "category": "architecture",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "skills/change-impact/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "skills/module-regression/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "Keeps ECC's six questions (code, data, interfaces, tests, docs, release) and the rule that unverified consumers are reported as unverified."
+  },
+  "activation": {
+    "languages": ["common"],
+    "taskTypes": ["plan", "design", "review", "refactor"],
+    "keywords": ["blast radius", "impact", "affected callers", "cross-module", "public interface", "breaking change", "rollback", "consumers", "dependents"],
+    "priority": 65
+  },
+  "inputs": [
+    { "name": "change", "description": "The planned change in one paragraph.", "required": true },
+    { "name": "diff", "description": "The actual diff, when reconciling after implementation.", "required": false }
+  ],
+  "outputs": [
+    { "name": "impact-report", "description": "Affected code, data, interfaces, tests, docs and release steps, each with evidence." },
+    { "name": "drift", "description": "Differences between planned impact and the actual diff." }
+  ],
+  "workflow": [
+    { "step": "List direct callers and importers of each changed symbol using search over real imports and calls.", "check": "No dependency is inferred from a directory name." },
+    { "step": "Check data and interfaces: persisted formats, serialization, schemas, routes, CLI flags, message shapes and who consumes each.", "check": "Each consumer is named, or listed as unverified." },
+    { "step": "Name the tests that should prove the change and the existing tests likely to break; name the missing ones.", "check": "Test names come from files you opened." },
+    { "step": "State rollout and rollback: ordering, compatibility window and anything irreversible.", "check": "A change with irreversible effects has an explicit recovery statement or is reported as blocked." },
+    { "step": "After implementation, compare the diff with the plan and report scope drift and consumers still unverified." }
+  ],
+  "constraints": [
+    "Read-only analysis; do not run migrations or deploy anything.",
+    "Mark every unproven consumer as unverified instead of omitting it.",
+    "An impact report does not authorize widening the task's allowed files."
+  ],
+  "examples": [
+    { "title": "Error type change", "situation": "A function starts returning a wrapped error.", "guidance": "Search for errors.Is and equality checks against the old value, list each caller, and flag the ones that would stop matching." }
+  ],
+  "verification": [
+    "Every affected item cites a file; unknowns are labelled unverified.",
+    "Post-change reconciliation lists any file touched that the plan did not predict."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "breaking-interface", "task": { "language": "go", "taskType": "plan", "text": "Plan a breaking change to the public interface and identify the blast radius and consumers." }, "selected": true },
+    { "id": "review-cross-module", "task": { "language": "js", "taskType": "review", "text": "Review this cross-module refactor for affected callers and rollback." }, "selected": true },
+    { "id": "implement-no", "task": { "language": "go", "taskType": "implement", "text": "Apply the breaking change to the public interface." }, "selected": false },
+    { "id": "plan-no-keyword", "task": { "language": "go", "taskType": "plan", "text": "Plan the copy for the welcome email." }, "selected": false }
+  ]
+}

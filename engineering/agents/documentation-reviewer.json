@@ -1,0 +1,100 @@
+{
+  "schema": "engineering-agent/v1",
+  "id": "documentation-reviewer",
+  "version": "1.0.0",
+  "name": "Documentation Reviewer",
+  "responsibility": "Compare documentation and decision records with the code they describe and flag claims stronger than the implementation.",
+  "rationale": "Overstated documentation misleads later sessions and reviewers; verifying claims against code is mechanical and cheap.",
+  "taskTypes": [
+    "document",
+    "review"
+  ],
+  "languages": [
+    "common"
+  ],
+  "skills": [
+    "documentation-drift-review",
+    "architecture-decision-records"
+  ],
+  "optionalSkills": [
+    "release-safety"
+  ],
+  "tools": [
+    "listFiles",
+    "readFile",
+    "searchFiles"
+  ],
+  "providers": [
+    {
+      "id": "ollama",
+      "minContextTokens": 8192
+    },
+    {
+      "id": "claude",
+      "minContextTokens": 32000
+    },
+    {
+      "id": "codex",
+      "minContextTokens": 32000
+    }
+  ],
+  "compatibility": {
+    "harnesses": [
+      "mastra",
+      "claude-code",
+      "codex",
+      "qwen"
+    ]
+  },
+  "output": {
+    "kind": "findings",
+    "maxFindings": 15
+  },
+  "guidance": [
+    "Extract checkable claims and verify each against code or by confirming the command and path exist.",
+    "Be suspicious of absolute words such as always, guarantees and prevents.",
+    "Do not describe a deferred check as passed."
+  ],
+  "escalation": {
+    "onInvalidOutput": "fail",
+    "onUncertain": "report-unknown",
+    "onProviderUnavailable": "fail",
+    "handoff": "Mark claims you could not verify as unverifiable, not as wrong."
+  },
+  "limits": {
+    "maxSteps": 20,
+    "timeoutMs": 600000,
+    "maxOutputBytes": 16384
+  },
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [
+      {
+        "path": "agents/doc-updater.md",
+        "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29"
+      }
+    ],
+    "license": "MIT",
+    "notes": "Role boundaries and output contract are original to this repository; only the role idea is adapted. No ECC prompt text is copied."
+  },
+  "scenarios": [
+    {
+      "id": "documentation-reviewer-handles-0",
+      "task": {
+        "language": "go",
+        "taskType": "document",
+        "text": "In scope document task for Documentation Reviewer."
+      },
+      "shouldHandle": true
+    },
+    {
+      "id": "documentation-reviewer-declines-1",
+      "task": {
+        "language": "go",
+        "taskType": "debug",
+        "text": "Out of scope debug task for Documentation Reviewer."
+      },
+      "shouldHandle": false
+    }
+  ]
+}

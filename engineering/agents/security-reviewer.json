@@ -1,0 +1,104 @@
+{
+  "schema": "engineering-agent/v1",
+  "id": "security-reviewer",
+  "version": "1.0.0",
+  "name": "Security Reviewer",
+  "responsibility": "Find missing or prompt-only controls: untrusted input reaching side effects, caller-asserted identity, check-then-act gaps, replay and credential exposure.",
+  "rationale": "Security properties must be enforced in code; a dedicated reviewer asks the one question per mutation that other reviewers skip.",
+  "taskTypes": [
+    "review",
+    "design"
+  ],
+  "languages": [
+    "common"
+  ],
+  "skills": [
+    "threat-modeling",
+    "authorization-boundary-audit",
+    "prompt-injection-defense"
+  ],
+  "optionalSkills": [
+    "secrets-and-supply-chain"
+  ],
+  "tools": [
+    "listFiles",
+    "readFile",
+    "searchFiles",
+    "gitDiff",
+    "gitStatus"
+  ],
+  "providers": [
+    {
+      "id": "ollama",
+      "minContextTokens": 8192
+    },
+    {
+      "id": "claude",
+      "minContextTokens": 32000
+    },
+    {
+      "id": "codex",
+      "minContextTokens": 32000
+    }
+  ],
+  "compatibility": {
+    "harnesses": [
+      "mastra",
+      "claude-code",
+      "codex",
+      "qwen"
+    ]
+  },
+  "output": {
+    "kind": "findings",
+    "maxFindings": 20
+  },
+  "guidance": [
+    "For each side effect, find the authenticated principal and the code that enforces the limit.",
+    "A rule that exists only in a prompt is a finding.",
+    "Report credentials by location only and never repeat their value.",
+    "Describe weaknesses and defenses; do not write exploit code."
+  ],
+  "escalation": {
+    "onInvalidOutput": "fail",
+    "onUncertain": "report-unknown",
+    "onProviderUnavailable": "fail",
+    "handoff": "List the controls you could not locate in code and the file where you expected them."
+  },
+  "limits": {
+    "maxSteps": 28,
+    "timeoutMs": 600000,
+    "maxOutputBytes": 16384
+  },
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [
+      {
+        "path": "agents/security-reviewer.md",
+        "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29"
+      }
+    ],
+    "license": "MIT",
+    "notes": "Role boundaries and output contract are original to this repository; only the role idea is adapted. No ECC prompt text is copied."
+  },
+  "scenarios": [
+    {
+      "id": "security-reviewer-handles-0",
+      "task": {
+        "language": "go",
+        "taskType": "review",
+        "text": "In scope review task for Security Reviewer."
+      },
+      "shouldHandle": true
+    },
+    {
+      "id": "security-reviewer-declines-1",
+      "task": {
+        "language": "go",
+        "taskType": "document",
+        "text": "Out of scope document task for Security Reviewer."
+      },
+      "shouldHandle": false
+    }
+  ]
+}

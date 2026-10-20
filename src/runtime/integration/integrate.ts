@@ -1,3 +1,4 @@
+import { gofmtArgvProblem } from '../execution/gofmt-policy.ts';
 import { integrationOwnership } from './ownership.ts';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
@@ -79,7 +80,8 @@ async function validateCommand(command: string[], repoRoot: string, hidden: Reco
   if (command[0] === 'npx') {
     return validateJsVerification(command, { taskId: 'integration', objective: 'integration', allowedFiles: [], contextFiles: [], acceptanceCriteria: [], verificationCommands: [command], constraints: [], hiddenFiles: hidden }, repoRoot);
   }
-  return ['go', 'gofmt'].includes(command[0]) ? [] : [`integration command binary "${command[0]}" is not allow-listed`];
+  if (command[0] === 'gofmt') { const problem = gofmtArgvProblem(command); return problem ? [problem] : []; }
+  return command[0] === 'go' ? [] : [`integration command binary "${command[0]}" is not allow-listed`];
 }
 
 export interface IntegrateOptions {

@@ -1,3 +1,4 @@
+import { gofmtArgvProblem } from '../../runtime/execution/gofmt-policy.ts';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -42,7 +43,7 @@ const NODE_EVAL_FLAGS = new Set(['-e', '--eval', '-p', '--print', '--input-type'
 export function commandPolicyProblems(command: string[]): string[] {
   const [bin, ...args] = command;
   if (!bin) return ['empty command'];
-  if (bin === 'gofmt') return [];
+  if (bin === 'gofmt') { const problem = gofmtArgvProblem(command); return problem ? [problem] : []; }
   if (bin === 'go') return GO_SUBCOMMANDS.has(args[0] ?? '') ? [] : [`go ${args[0] ?? ''}: only ${[...GO_SUBCOMMANDS].join('/')} are allowed`];
   if (bin === 'npx') return args.includes('--no-install') ? [] : ['npx must run with --no-install'];
   if (bin === 'node') return args.some((a) => NODE_EVAL_FLAGS.has(a)) ? ['node must run a file, not an expression'] : [];

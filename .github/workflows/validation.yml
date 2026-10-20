@@ -1,0 +1,91 @@
+name: Validation
+
+on:
+  workflow_call:
+    inputs:
+      test-lane:
+        description: "fast = 4-shard PR tests; full = post-merge all tests including smoke/E2E"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    name: Install and typecheck (Node 22)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.23.2"
+          cache: npm
+      - name: Install pinned dependencies
+        run: npm ci
+      - name: Typecheck all project TypeScript
+        run: npm run typecheck
+
+  fast-tests:
+    name: PR tests (macOS, shard ${{ matrix.shard }}/4)
+    if: inputs.test-lane == 'fast'
+    runs-on: macos-15
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Node and Go outside HOME for sandbox parity
+        run: |
+          brew install node@22 go@1.25
+          echo "$(brew --prefix node@22)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix go@1.25)/bin" >> "$GITHUB_PATH"
+      - name: Verify sandbox-safe toolchain paths
+        run: |
+          node --version
+          go version
+          case "$(command -v node):$(command -v go):$(command -v npx)" in *"$HOME"*) echo "toolchain under HOME"; exit 1;; esac
+      - run: npm ci
+      - name: PR fast suite (src + apps, smoke/E2E in tests/smoke-e2e excluded)
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          node --disable-warning=ExperimentalWarning --test --test-shard="${SHARD}/4" 'src/**/*.test.ts' 'apps/**/*.test.ts'
+
+  full-regression:
+    name: Post-merge full regression (macOS, shard ${{ matrix.shard }}/10)
+    if: inputs.test-lane == 'full'
+    runs-on: macos-15
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Node and Go outside HOME for sandbox parity
+        run: |
+          brew install node@22 go@1.25
+          echo "$(brew --prefix node@22)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix go@1.25)/bin" >> "$GITHUB_PATH"
+      - name: Verify sandbox-safe toolchain paths
+        run: |
+          node --version
+          go version
+          case "$(command -v node):$(command -v go):$(command -v npx)" in *"$HOME"*) echo "toolchain under HOME"; exit 1;; esac
+      - run: npm ci
+      - name: Complete regression including tests/smoke-e2e and Oracle
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          node --disable-warning=ExperimentalWarning --test --test-shard="${SHARD}/10" 'src/**/*.test.ts' 'apps/**/*.test.ts' 'tests/**/*.test.ts'

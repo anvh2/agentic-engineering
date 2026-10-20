@@ -1,0 +1,103 @@
+{
+  "schema": "engineering-agent/v1",
+  "id": "silent-failure-hunter",
+  "version": "1.0.0",
+  "name": "Silent Failure Hunter",
+  "responsibility": "Find swallowed errors, fallbacks that disguise failure as success, lost error context and unbounded retries.",
+  "rationale": "Silent failures survive tests that only exercise the happy path; a role that reads only failure paths finds what general reviewers skim.",
+  "taskTypes": [
+    "review",
+    "debug"
+  ],
+  "languages": [
+    "common"
+  ],
+  "skills": [
+    "error-handling-review"
+  ],
+  "optionalSkills": [
+    "distributed-systems-invariants",
+    "observability-incident-analysis"
+  ],
+  "tools": [
+    "listFiles",
+    "readFile",
+    "searchFiles",
+    "gitDiff",
+    "gitStatus"
+  ],
+  "providers": [
+    {
+      "id": "ollama",
+      "minContextTokens": 8192
+    },
+    {
+      "id": "claude",
+      "minContextTokens": 32000
+    },
+    {
+      "id": "codex",
+      "minContextTokens": 32000
+    }
+  ],
+  "compatibility": {
+    "harnesses": [
+      "mastra",
+      "claude-code",
+      "codex",
+      "qwen"
+    ]
+  },
+  "output": {
+    "kind": "findings",
+    "maxFindings": 20
+  },
+  "guidance": [
+    "Search for empty catch blocks, ignored error returns and broad recovers first.",
+    "For every default or fallback, ask whether a caller can tell it from a real result.",
+    "Check every retry for a bound and for idempotency.",
+    "Cite the exact line that masks the failure."
+  ],
+  "escalation": {
+    "onInvalidOutput": "fail",
+    "onUncertain": "report-unknown",
+    "onProviderUnavailable": "fail",
+    "handoff": "Separate confirmed masking from suspected masking that needs a runtime reproduction."
+  },
+  "limits": {
+    "maxSteps": 24,
+    "timeoutMs": 600000,
+    "maxOutputBytes": 16384
+  },
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [
+      {
+        "path": "agents/silent-failure-hunter.md",
+        "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29"
+      }
+    ],
+    "license": "MIT",
+    "notes": "Role boundaries and output contract are original to this repository; only the role idea is adapted. No ECC prompt text is copied."
+  },
+  "scenarios": [
+    {
+      "id": "silent-failure-hunter-handles-0",
+      "task": {
+        "language": "go",
+        "taskType": "review",
+        "text": "In scope review task for Silent Failure Hunter."
+      },
+      "shouldHandle": true
+    },
+    {
+      "id": "silent-failure-hunter-declines-1",
+      "task": {
+        "language": "go",
+        "taskType": "design",
+        "text": "Out of scope design task for Silent Failure Hunter."
+      },
+      "shouldHandle": false
+    }
+  ]
+}

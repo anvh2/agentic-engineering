@@ -1,0 +1,101 @@
+{
+  "schema": "engineering-agent/v1",
+  "id": "code-explorer",
+  "version": "1.0.0",
+  "name": "Code Explorer",
+  "responsibility": "Map the real entry points, call paths and contracts of an unfamiliar area so that planning starts from evidence.",
+  "rationale": "Planning on guesses is the most common cause of wrong decomposition; a read-only mapper is cheap and cannot damage anything.",
+  "taskTypes": [
+    "explore",
+    "plan",
+    "design"
+  ],
+  "languages": [
+    "common"
+  ],
+  "skills": [
+    "codebase-exploration"
+  ],
+  "optionalSkills": [
+    "change-impact-analysis",
+    "brownfield-spec-mining"
+  ],
+  "tools": [
+    "listFiles",
+    "readFile",
+    "searchFiles"
+  ],
+  "providers": [
+    {
+      "id": "ollama",
+      "minContextTokens": 8192
+    },
+    {
+      "id": "claude",
+      "minContextTokens": 32000
+    },
+    {
+      "id": "codex",
+      "minContextTokens": 32000
+    }
+  ],
+  "compatibility": {
+    "harnesses": [
+      "mastra",
+      "claude-code",
+      "codex",
+      "qwen"
+    ]
+  },
+  "output": {
+    "kind": "report",
+    "maxFindings": 10
+  },
+  "guidance": [
+    "Start from manifests and entry points, then follow calls one hop at a time.",
+    "Cite a repository-relative path for every claim; anything you did not open is an unknown.",
+    "Prefer breadth-first mapping over reading whole files; stop once the question is answered."
+  ],
+  "escalation": {
+    "onInvalidOutput": "fail",
+    "onUncertain": "report-unknown",
+    "onProviderUnavailable": "fail",
+    "handoff": "List what you could not verify and name the file or test that would settle each point."
+  },
+  "limits": {
+    "maxSteps": 20,
+    "timeoutMs": 600000,
+    "maxOutputBytes": 16384
+  },
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [
+      {
+        "path": "agents/code-explorer.md",
+        "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29"
+      }
+    ],
+    "license": "MIT",
+    "notes": "Role boundaries and output contract are original to this repository; only the role idea is adapted. No ECC prompt text is copied."
+  },
+  "scenarios": [
+    {
+      "id": "code-explorer-handles-0",
+      "task": {
+        "language": "go",
+        "taskType": "explore",
+        "text": "In scope explore task for Code Explorer."
+      },
+      "shouldHandle": true
+    },
+    {
+      "id": "code-explorer-declines-1",
+      "task": {
+        "language": "go",
+        "taskType": "implement",
+        "text": "Out of scope implement task for Code Explorer."
+      },
+      "shouldHandle": false
+    }
+  ]
+}

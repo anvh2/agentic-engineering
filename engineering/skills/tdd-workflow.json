@@ -1,0 +1,55 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "tdd-workflow",
+  "version": "1.0.0",
+  "title": "Test-driven development",
+  "summary": "Specify behavior as a failing test, make it pass with the smallest change, then clean up, one behavior at a time.",
+  "category": "quality",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "skills/tdd-workflow/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "agents/tdd-guide.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "In this runtime the test file is frequently immutable for the worker (an Oracle); the workflow therefore also covers writing tests as a separate, reviewed task."
+  },
+  "activation": {
+    "languages": ["common"],
+    "taskTypes": ["implement", "test", "plan"],
+    "keywords": ["tdd", "test first", "failing test", "red green", "new behavior", "acceptance criteria", "write the test", "regression test"],
+    "priority": 52
+  },
+  "inputs": [
+    { "name": "acceptance", "description": "Acceptance criteria that define done.", "required": true },
+    { "name": "test-policy", "description": "Whether the test file may be edited or is an immutable oracle.", "required": true }
+  ],
+  "outputs": [
+    { "name": "tests", "description": "A test per acceptance criterion, observed failing then passing." },
+    { "name": "change", "description": "The smallest implementation that passes them." }
+  ],
+  "workflow": [
+    { "step": "Turn each acceptance criterion into one test-sized behavior with a concrete input and expected output.", "check": "Each behavior is falsifiable." },
+    { "step": "If the test file is immutable, treat the existing tests as the specification and do not edit them; otherwise write the failing test first.", "check": "The test policy was read before editing." },
+    { "step": "Run the test and confirm it fails for the right reason (missing behavior, not a typo).", "check": "The failure message names the missing behavior." },
+    { "step": "Implement the least code that passes; avoid anticipating later criteria.", "check": "The diff adds nothing that no test requires." },
+    { "step": "Refactor only with tests green, then rerun the verifier." }
+  ],
+  "constraints": [
+    "Never weaken or delete a test to get to green.",
+    "A worker that may not edit tests must report a wrong test as a finding.",
+    "Coverage numbers are not a goal; behavior is."
+  ],
+  "examples": [
+    { "title": "Boundary criterion", "situation": "Acceptance says inputs over 100 are rejected.", "guidance": "Write rows for 100 and 101, watch 101 fail, add the check, watch both pass." }
+  ],
+  "verification": [
+    "A new test failed before the change and passes after it.",
+    "No test was edited or removed when the policy forbids it."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "tdd-new-behavior", "task": { "language": "go", "taskType": "implement", "text": "Use tdd: add the new behavior with a failing test first against the acceptance criteria." }, "selected": true },
+    { "id": "plan-test-first", "task": { "language": "js", "taskType": "plan", "text": "Plan the work as red green with a regression test for each acceptance criteria." }, "selected": true },
+    { "id": "review-no", "task": { "language": "go", "taskType": "review", "text": "Review the tdd failing test approach." }, "selected": false },
+    { "id": "implement-no-keyword", "task": { "language": "go", "taskType": "implement", "text": "Increase the buffer size constant." }, "selected": false }
+  ]
+}

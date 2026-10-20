@@ -10,6 +10,7 @@
     "skipLibCheck": true,
     "types": ["node"],
     "noEmit": true,
+    "erasableSyntaxOnly": true,
     "outDir": "dist"
   },
   "include": ["src/**/*", "scripts/**/*", "tests/**/*"]

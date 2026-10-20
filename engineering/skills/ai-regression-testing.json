@@ -1,0 +1,55 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "ai-regression-testing",
+  "version": "1.0.0",
+  "title": "Regression testing for AI-written changes",
+  "summary": "Counter the blind spot where the same model writes and reviews a change: lock fixed bugs behind deterministic tests, and check every parallel code path a fix could miss.",
+  "category": "quality",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "skills/ai-regression-testing/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "ECC's central observation, that self-review repeats the author's assumptions, is why this repository requires runtime verification and an independent reviewer; this skill is the test-design half."
+  },
+  "activation": {
+    "languages": ["common"],
+    "taskTypes": ["test", "review", "debug", "implement"],
+    "keywords": ["regression", "bug fix", "blind spot", "self-review", "parallel path", "sandbox path", "fixed bug", "reintroduce", "ai-written"],
+    "priority": 62
+  },
+  "inputs": [
+    { "name": "defect", "description": "The bug that was found and fixed, with a minimal reproduction.", "required": true },
+    { "name": "paths", "description": "Every code path that should behave the same (production, fallback, feature flag, mock mode).", "required": false }
+  ],
+  "outputs": [
+    { "name": "regression-tests", "description": "Deterministic tests that fail on the original defect." },
+    { "name": "path-matrix", "description": "Which parallel paths were checked and which were not." }
+  ],
+  "workflow": [
+    { "step": "Reproduce the defect with the smallest deterministic input and write the test that fails on it before touching the fix.", "check": "The test fails on the unfixed code." },
+    { "step": "List every path that handles the same data: main path, fallback, cache, mock or sandbox mode, retry path.", "check": "The list comes from searching the code, not from memory." },
+    { "step": "Add or confirm a test for each path; a fix applied to one path and not the others is the most common regression.", "check": "Each path has its own assertion." },
+    { "step": "Do not accept the author's own review as evidence; require the test result and an independent reviewer.", "check": "Evidence is a test outcome, not a statement." },
+    { "step": "Keep the regression test next to the code it protects and name it after the defect." }
+  ],
+  "constraints": [
+    "Tests must be deterministic: no network, no wall-clock dependence, fixed seeds.",
+    "Never mark a bug fixed on the basis of the model saying it is fixed.",
+    "Do not skip a parallel path because it is hard to reach; report it as untested."
+  ],
+  "examples": [
+    { "title": "Field added to one response path", "situation": "A field was added to the live response but not the fallback response.", "guidance": "Write a test per path asserting the field; the fallback assertion would have failed first." }
+  ],
+  "verification": [
+    "The regression test fails on the original defect and passes on the fix.",
+    "Every identified parallel path has a test or is listed as untested."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "lock-bug-fix", "task": { "language": "go", "taskType": "test", "text": "Add a regression test so the fixed bug cannot reintroduce; check the fallback parallel path too." }, "selected": true },
+    { "id": "review-self-review", "task": { "language": "js", "taskType": "review", "text": "The same model did the self-review of this bug fix; look for a blind spot in the sandbox path." }, "selected": true },
+    { "id": "design-no", "task": { "language": "go", "taskType": "design", "text": "Design for regression of the fixed bug." }, "selected": false },
+    { "id": "no-regression-words", "task": { "language": "go", "taskType": "test", "text": "Test the string formatter output." }, "selected": false }
+  ]
+}

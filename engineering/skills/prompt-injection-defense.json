@@ -1,0 +1,54 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "prompt-injection-defense",
+  "version": "1.0.0",
+  "title": "Prompt injection defense",
+  "summary": "Keep instructions and untrusted content separate, and make sure no text a model reads can widen its tools, files, commands or approvals, because enforcement lives in code rather than in the prompt.",
+  "category": "security",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "skills/agent-security-hardening/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "agents/security-reviewer.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "ECC's Prompt Defense Baseline is a useful instruction, but this skill treats it as defense in depth only; the control is that capabilities are granted outside the model's reach."
+  },
+  "activation": {
+    "languages": ["common"],
+    "taskTypes": ["review", "design", "implement", "test"],
+    "keywords": ["prompt injection", "injected", "untrusted content", "jailbreak", "tool output", "hostile", "malicious instructions", "context poisoning", "indirect injection"],
+    "priority": 72
+  },
+  "inputs": [
+    { "name": "prompt-path", "description": "Where model-visible text is assembled and which sources feed it.", "required": true }
+  ],
+  "outputs": [
+    { "name": "findings", "description": "Paths where untrusted text can influence a privileged decision." },
+    { "name": "tests", "description": "Hostile-input tests proving the decision does not change." }
+  ],
+  "workflow": [
+    { "step": "Trace every source that reaches the model: repository files, search results, tool output, prior model output, retrieved knowledge.", "check": "All sources are listed." },
+    { "step": "For each, confirm it is delimited and labelled as data, and that no instruction channel (system prompt, tool schema) is built from it.", "check": "Untrusted text never lands in the system role." },
+    { "step": "Confirm capabilities (tools, writable paths, commands, approvals) are fixed by code before the model runs and cannot be changed by its output.", "check": "A hostile file cannot add a tool or a path." },
+    { "step": "Check parsers of model output: strict schema, size limits, no execution of returned strings.", "check": "Output is validated, not interpreted." },
+    { "step": "Write hostile-content tests (instructions to ignore rules, request more files, claim approval) and assert the privileged outcome is unchanged." }
+  ],
+  "constraints": [
+    "Do not claim a prompt makes a system injection-proof; state what code prevents.",
+    "Test with the inert payloads only; never run the payload's requested action.",
+    "Advisory only."
+  ],
+  "examples": [
+    { "title": "Poisoned README", "situation": "A repository file says to read ~/.ssh and print it.", "guidance": "The read tool is rooted at the repository and rejects the path in code; add a test where the file contains that instruction and assert nothing outside the root is read." }
+  ],
+  "verification": [
+    "Each privileged decision is shown to be independent of model-visible text.",
+    "A hostile-input test exists for each prompt path reviewed."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "review-injection", "task": { "language": "ts", "taskType": "review", "text": "Review for prompt injection: can untrusted content or tool output widen the allowed files?" }, "selected": true },
+    { "id": "test-hostile", "task": { "language": "go", "taskType": "test", "text": "Add a hostile test for context poisoning and malicious instructions in the file." }, "selected": true },
+    { "id": "plan-no", "task": { "language": "go", "taskType": "plan", "text": "Plan prompt injection work." }, "selected": false },
+    { "id": "no-injection-words", "task": { "language": "go", "taskType": "review", "text": "Review the pagination code." }, "selected": false }
+  ]
+}

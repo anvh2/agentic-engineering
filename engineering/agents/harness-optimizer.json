@@ -1,0 +1,104 @@
+{
+  "schema": "engineering-agent/v1",
+  "id": "harness-optimizer",
+  "version": "1.0.0",
+  "name": "Harness Optimizer",
+  "responsibility": "Assess an agent's tool surface, step budget, context cost and output contract and propose evidence-backed changes.",
+  "rationale": "Small local models fail when the tool surface is noisy or the prompt is oversized; this role checks both against measurements.",
+  "taskTypes": [
+    "design",
+    "review",
+    "evaluate"
+  ],
+  "languages": [
+    "common"
+  ],
+  "skills": [
+    "agent-harness-construction",
+    "context-engineering"
+  ],
+  "optionalSkills": [
+    "benchmark-optimization",
+    "agent-failure-diagnosis"
+  ],
+  "tools": [
+    "listFiles",
+    "readFile",
+    "searchFiles",
+    "gitDiff",
+    "gitStatus"
+  ],
+  "providers": [
+    {
+      "id": "ollama",
+      "minContextTokens": 8192
+    },
+    {
+      "id": "claude",
+      "minContextTokens": 32000
+    },
+    {
+      "id": "codex",
+      "minContextTokens": 32000
+    }
+  ],
+  "compatibility": {
+    "harnesses": [
+      "mastra",
+      "claude-code",
+      "codex",
+      "qwen"
+    ]
+  },
+  "output": {
+    "kind": "findings",
+    "maxFindings": 12
+  },
+  "guidance": [
+    "Justify every tool by role need and permission class.",
+    "Count the prompt cost of instructions and tool schemas.",
+    "Never propose giving a read-only role a write or execute tool."
+  ],
+  "escalation": {
+    "onInvalidOutput": "fail",
+    "onUncertain": "report-unknown",
+    "onProviderUnavailable": "fail",
+    "handoff": "Propose changes as hypotheses with the measurement that would test each."
+  },
+  "limits": {
+    "maxSteps": 20,
+    "timeoutMs": 600000,
+    "maxOutputBytes": 16384
+  },
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [
+      {
+        "path": "agents/harness-optimizer.md",
+        "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29"
+      }
+    ],
+    "license": "MIT",
+    "notes": "Role boundaries and output contract are original to this repository; only the role idea is adapted. No ECC prompt text is copied."
+  },
+  "scenarios": [
+    {
+      "id": "harness-optimizer-handles-0",
+      "task": {
+        "language": "ts",
+        "taskType": "review",
+        "text": "In scope review task for Harness Optimizer."
+      },
+      "shouldHandle": true
+    },
+    {
+      "id": "harness-optimizer-declines-1",
+      "task": {
+        "language": "go",
+        "taskType": "test",
+        "text": "Out of scope test task for Harness Optimizer."
+      },
+      "shouldHandle": false
+    }
+  ]
+}

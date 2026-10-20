@@ -1,0 +1,53 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "database-migrations",
+  "version": "1.0.0",
+  "title": "Database migration review",
+  "summary": "Review schema and data migrations for compatibility, recovery and irreversible effects before they run, including the identifiers that must not change without a migration.",
+  "category": "reliability",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "skills/database-migrations/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "Ties to this repository's rule that persisted identifiers and table names change only together with an explicit migration."
+  },
+  "activation": {
+    "languages": ["common"],
+    "taskTypes": ["review", "design", "plan"],
+    "keywords": ["migration", "schema change", "alter table", "backfill", "persisted", "rename column", "add column", "data migration", "irreversible"],
+    "priority": 66
+  },
+  "inputs": [
+    { "name": "migration", "description": "The migration and the code that reads the changed data.", "required": true }
+  ],
+  "outputs": [
+    { "name": "assessment", "description": "Compatibility window, rollback plan and irreversible effects." }
+  ],
+  "workflow": [
+    { "step": "Enumerate everything that reads or writes the changed tables, columns, files or identifiers.", "check": "Readers and writers come from a code search." },
+    { "step": "Define the compatibility window: old code with new schema and new code with old schema must both be safe, or the deploy order must be explicit.", "check": "Rollback of code does not corrupt migrated data." },
+    { "step": "Classify each statement reversible or irreversible; for irreversible ones require a backup or a stated recovery path.", "check": "No destructive step lacks recovery." },
+    { "step": "Check backfills are batched, restartable and idempotent.", "check": "Running the migration twice is harmless." },
+    { "step": "Verify the migration on a copy or fixture and record the command and result." }
+  ],
+  "constraints": [
+    "Do not run migrations against live data from an analysis task.",
+    "Persisted identifiers and table names change only with an explicit migration and review.",
+    "Treat a missing recovery step as a blocker."
+  ],
+  "examples": [
+    { "title": "Rename a column", "situation": "A column is renamed in one release.", "guidance": "Add the new column, dual-write, backfill, switch reads, then drop the old column in a later release." }
+  ],
+  "verification": [
+    "Each statement is marked reversible or irreversible with recovery noted.",
+    "The compatibility window is stated in terms of deploy order."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "review-migration", "task": { "language": "go", "taskType": "review", "text": "Review the migration: alter table, backfill and the irreversible data migration." }, "selected": true },
+    { "id": "plan-schema", "task": { "language": "js", "taskType": "plan", "text": "Plan the schema change to rename column in the persisted table." }, "selected": true },
+    { "id": "implement-no", "task": { "language": "go", "taskType": "implement", "text": "Write the migration." }, "selected": false },
+    { "id": "plan-no-keyword", "task": { "language": "go", "taskType": "plan", "text": "Plan the onboarding emails." }, "selected": false }
+  ]
+}

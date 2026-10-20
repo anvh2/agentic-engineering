@@ -1,0 +1,144 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "database-transactions",
+  "version": "1.0.0",
+  "title": "Database transaction safety",
+  "summary": "Review transaction boundaries, isolation, locking and idempotent writes so a multi-statement change is atomic and safe under concurrent writers.",
+  "category": "reliability",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [
+      {
+        "path": "skills/postgres-patterns/SKILL.md",
+        "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29"
+      },
+      {
+        "path": "agents/database-reviewer.md",
+        "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29"
+      }
+    ],
+    "license": "MIT",
+    "notes": "Examples are SQLite-oriented because this runtime persists with node:sqlite, but the checks apply to any relational store."
+  },
+  "activation": {
+    "languages": [
+      "common"
+    ],
+    "taskTypes": [
+      "review",
+      "design",
+      "debug",
+      "implement"
+    ],
+    "keywords": [
+      "transaction",
+      "sqlite",
+      "begin immediate",
+      "isolation",
+      "rollback",
+      "commit",
+      "unique index",
+      "atomic",
+      "deadlock"
+    ],
+    "priority": 64
+  },
+  "inputs": [
+    {
+      "name": "queries",
+      "description": "The statements and code that issue them.",
+      "required": true
+    }
+  ],
+  "outputs": [
+    {
+      "name": "findings",
+      "description": "Atomicity, locking and constraint gaps, each with an interleaving that exposes it."
+    }
+  ],
+  "workflow": [
+    {
+      "step": "Group statements into logical operations and confirm each operation runs in one transaction with commit and rollback on every path.",
+      "check": "No path leaves a transaction open."
+    },
+    {
+      "step": "Find reads that decide a later write; confirm the read happens inside the same write-locked transaction (for SQLite, BEGIN IMMEDIATE).",
+      "check": "The decision and the write cannot be separated by another writer."
+    },
+    {
+      "step": "Check invariants are enforced by the database: unique indexes, NOT NULL, foreign keys, triggers for append-only tables.",
+      "check": "A direct SQL UPDATE cannot violate an invariant the application relies on."
+    },
+    {
+      "step": "Check busy handling: a bounded busy timeout and a defined result when the lock is not obtained.",
+      "check": "Contention yields a retry or a clear error, never a silent skip."
+    },
+    {
+      "step": "Check one-use tokens and nonces are consumed in the same transaction as the action they authorize.",
+      "check": "Replay after a crash cannot reuse a consumed token."
+    }
+  ],
+  "constraints": [
+    "Never recommend disabling a constraint or trigger to resolve a failing write.",
+    "Do not run statements against a live database; reason from code and fixtures.",
+    "Advisory review only."
+  ],
+  "examples": [
+    {
+      "title": "Select then insert",
+      "situation": "Code checks a row does not exist and then inserts it outside a transaction.",
+      "guidance": "Two callers pass the check. Use a unique index and treat the constraint violation as the already-exists result."
+    }
+  ],
+  "verification": [
+    "Each finding names the statements and the interleaving.",
+    "Recommended fixes rely on a database-enforced constraint where possible."
+  ],
+  "compatibility": {
+    "harnesses": [
+      "mastra",
+      "claude-code",
+      "codex",
+      "qwen"
+    ]
+  },
+  "dependsOn": [],
+  "scenarios": [
+    {
+      "id": "review-transaction",
+      "task": {
+        "language": "js",
+        "taskType": "review",
+        "text": "Review the sqlite transaction: begin immediate, rollback and the unique index for atomic writes."
+      },
+      "selected": true
+    },
+    {
+      "id": "debug-deadlock",
+      "task": {
+        "language": "go",
+        "taskType": "debug",
+        "text": "The database commit hangs, maybe a deadlock between two transaction writers."
+      },
+      "selected": true
+    },
+    {
+      "id": "document-no",
+      "task": {
+        "language": "go",
+        "taskType": "document",
+        "text": "Document the transaction layout."
+      },
+      "selected": false
+    },
+    {
+      "id": "review-no-keyword",
+      "task": {
+        "language": "go",
+        "taskType": "review",
+        "text": "Review the animation timing."
+      },
+      "selected": false
+    }
+  ]
+}

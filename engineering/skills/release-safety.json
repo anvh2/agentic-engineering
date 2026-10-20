@@ -1,0 +1,53 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "release-safety",
+  "version": "1.0.0",
+  "title": "CI/CD and release safety",
+  "summary": "Check that a change is deliverable: verification evidence exists for the exact commit, the pipeline gates are real, and rollout and rollback are defined before anything ships.",
+  "category": "operations",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "skills/delivery-gate/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "skills/verification-loop/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "Encodes the rule that a previous commit's PASS, or a cancelled job, is not evidence for the current HEAD."
+  },
+  "activation": {
+    "languages": ["common"],
+    "taskTypes": ["operate", "review", "plan"],
+    "keywords": ["release", "ci", "pipeline", "deploy", "rollout", "rollback", "ready to merge", "delivery", "head sha", "workflow run"],
+    "priority": 62
+  },
+  "inputs": [
+    { "name": "candidate", "description": "The commit or release candidate and the evidence collected for it.", "required": true }
+  ],
+  "outputs": [
+    { "name": "readiness", "description": "Ready or blocked, with each gate and its evidence." }
+  ],
+  "workflow": [
+    { "step": "Pin the exact commit SHA under review; every piece of evidence must name the same SHA.", "check": "Evidence for an older commit is discarded." },
+    { "step": "List required gates (typecheck, unit, integration, security, regression) and find a completed run for each; cancelled, skipped or still-running jobs are not passes.", "check": "Each gate has a completed pass or is reported missing." },
+    { "step": "Check the pipeline itself: do gates fail the build on failure, or can they be skipped by configuration?", "check": "A failing test blocks the merge." },
+    { "step": "Check rollout and rollback: ordering, compatibility window, and what cannot be undone.", "check": "Irreversible steps have an explicit recovery statement." },
+    { "step": "Report blocked with the specific missing evidence rather than ready with caveats." }
+  ],
+  "constraints": [
+    "Never mark ready on the basis of a previous commit or a summary.",
+    "Never merge, deploy or push as part of the analysis.",
+    "Report skipped suites as skipped, never as passed."
+  ],
+  "examples": [
+    { "title": "Cancelled job", "situation": "A CI run for the head commit was cancelled and an earlier run passed.", "guidance": "Report blocked: the earlier pass is for a different commit and the current run did not complete." }
+  ],
+  "verification": [
+    "Every gate lists a SHA, a result and a count.",
+    "Deferred checks are labelled deferred."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "ready-check", "task": { "language": "go", "taskType": "operate", "text": "Is the release ready to merge? Check the ci pipeline and the head sha workflow run." }, "selected": true },
+    { "id": "plan-rollout", "task": { "language": "js", "taskType": "plan", "text": "Plan the deploy rollout and the rollback." }, "selected": true },
+    { "id": "debug-no", "task": { "language": "go", "taskType": "debug", "text": "The release pipeline hangs." }, "selected": false },
+    { "id": "operate-no-keyword", "task": { "language": "go", "taskType": "operate", "text": "Order lunch for the team." }, "selected": false }
+  ]
+}

@@ -23,6 +23,7 @@ import {
   vetWorkspace,
   type GeminiConfig,
 } from './gemini.ts';
+import { readPid } from './__testing__/pidfile.ts';
 
 const FAKE = join(dirname(fileURLToPath(import.meta.url)), '__testing__', 'fake-gemini.mjs');
 const files = { 'src/x.js': 'module.exports = 0;\n' };
@@ -391,8 +392,8 @@ describe('cancellation and timeout kill the CLI', () => {
     const c = new AbortController();
     const { result } = runOnce(f.config, { signal: c.signal });
     const end = Date.now() + 10_000;
-    while (!existsSync(pidfile) && Date.now() < end) await new Promise((r) => setTimeout(r, 20));
-    const pid = Number(readFileSync(pidfile, 'utf8'));
+    while (readPid(pidfile) === undefined && Date.now() < end) await new Promise((r) => setTimeout(r, 20));
+    const pid = readPid(pidfile)!;
     assert.ok(alive(pid), 'the CLI is running');
     c.abort(new Error('cancelled'));
     const r = await result;
@@ -417,7 +418,8 @@ describe('cancellation and timeout kill the CLI', () => {
     assert.equal(r.verdict, 'FAIL');
     assert.match(r.records[0].runtimeError ?? '', /exceeded 1500ms/);
     assert.equal(f.runs().length, 1);
-    const pid = Number(readFileSync(pidfile, 'utf8'));
+    const pid = readPid(pidfile);
+    assert.ok(pid, 'the CLI published a complete pid before it was cancelled');
     const dead = Date.now() + 3_000;
     while (alive(pid) && Date.now() < dead) await new Promise((res) => setTimeout(res, 20));
     assert.equal(alive(pid), false);

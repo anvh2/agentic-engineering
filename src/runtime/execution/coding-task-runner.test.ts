@@ -4,6 +4,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runCodingTask, type CodingTask, type WorkerLike } from './coding-task-runner.ts';
+import { LEAD_KEY, approvedTask, revokeCredential } from './__testing__/approval-fixture.ts';
+import { revokeApproval } from './design-approval.ts';
 
 const STUB = 'package calc\n\nfunc Double(n int) int {\n\treturn 0\n}\n';
 const WRONG = 'package calc\n\nfunc Double(n int) int {\n\treturn n + 1\n}\n';
@@ -61,6 +63,72 @@ describe('runCodingTask (runtime-owned control loop, model boundary stubbed)', (
     assert.equal(result.records[0].formatter?.ok, true);
     assert.equal(await readFile(join(root, 'calc', 'calc.go'), 'utf8'), RIGHT, 'gofmt must have run on the final state');
     assert.ok(result.verifiedStateHash);
+  });
+
+  it('injects the VERIFIED approved HLD/LLD and Go conventions into the actual worker prompt on each attempt', async () => {
+    const approved = approvedTask('T-1', ['calc/calc.go'], {
+      hld: 'The scheduler exclusively owns capacity assignment.',
+      lld: 'Never exceed two permits and preserve oldest-ticket fairness.',
+      adr: ['Do not expose the hidden Oracle to the worker.'],
+    });
+    const result = await runCodingTask(
+      { ...task, approvedDesign: approved.approvedDesign },
+      { repoRoot: root, approvals: approved.verifier, worker: workerFrom(({ call }) => writeImpl(call === 1 ? WRONG : RIGHT)) },
+    );
+    assert.equal(result.verdict, 'PASS');
+    assert.equal(prompts.length, 2);
+    const hashes: string[] = [];
+    for (const prompt of prompts) {
+      assert.match(prompt, /The scheduler exclusively owns capacity assignment/);
+      assert.match(prompt, /Never exceed two permits/);
+      assert.ok(prompt.includes(approved.approvalId), 'the approval record id is what the prompt references');
+      assert.match(prompt, /approved by engineering-lead/);
+      assert.match(prompt, /idiomatic Go naming/);
+      assert.match(prompt, /runtime verifier and independent reviewer/);
+      const hash = prompt.match(/Engineering context SHA-256: ([a-f0-9]{64})/);
+      assert.ok(hash, 'the injected context must be fingerprinted');
+      hashes.push(hash[1]);
+    }
+    assert.equal(hashes[0], hashes[1], 'repair attempts keep the same approved design');
+    assert.equal(result.engineeringContext?.approval.status, 'verified');
+  });
+
+  describe('an attached design that is not verifiably approved never reaches a worker', () => {
+    const design = { hld: 'The scheduler owns capacity.', lld: 'Never exceed two permits.' };
+    const neverRuns = workerFrom(() => { throw new Error('worker must not be invoked'); });
+    const rejected = (taskInput: CodingTask, options: Partial<Parameters<typeof runCodingTask>[1]> = {}) =>
+      runCodingTask(taskInput, { repoRoot: root, worker: neverRuns, ...options });
+
+    it('an arbitrary approvalRef with no verifier (the default denies everything)', async () => {
+      await assert.rejects(rejected({ ...task, approvedDesign: { ...design, approvalRef: 'ADR-14@forged' } }), /approved_design_rejected: authority_unconfigured/);
+    });
+
+    it('an arbitrary approvalRef against a real verifier', async () => {
+      const approved = approvedTask('T-1', ['calc/calc.go'], design);
+      await assert.rejects(rejected({ ...task, approvedDesign: { ...design, approvalRef: 'ADR-14@forged' } }, { approvals: approved.verifier }), /approved_design_rejected: approval_unknown/);
+    });
+
+    it('a genuine approval presented with an edited design', async () => {
+      const approved = approvedTask('T-1', ['calc/calc.go'], design);
+      await assert.rejects(rejected({ ...task, approvedDesign: { ...approved.approvedDesign, lld: 'Allow unlimited permits.' } }, { approvals: approved.verifier }), /approved_design_rejected: design_mismatch/);
+    });
+
+    it('a genuine approval presented for a different task', async () => {
+      const approved = approvedTask('T-1', ['calc/calc.go'], design);
+      await assert.rejects(rejected({ ...task, taskId: 'T-2', approvedDesign: approved.approvedDesign }, { approvals: approved.verifier }), /approved_design_rejected: task_mismatch/);
+    });
+
+    it('a genuine approval after it was revoked', async () => {
+      const approved = approvedTask('T-1', ['calc/calc.go'], design);
+      revokeApproval({ store: approved.store, authority: approved.authority }, { approvalId: approved.approvalId, credential: revokeCredential('lead-1', LEAD_KEY, approved.approvalId), reason: 'unsound' });
+      await assert.rejects(rejected({ ...task, approvedDesign: approved.approvedDesign }, { approvals: approved.verifier }), /approved_design_rejected: approval_revoked/);
+    });
+
+    it('legacy tasks (no design) are unaffected by the verifier', async () => {
+      const result = await runCodingTask(task, { repoRoot: root, approvals: () => { throw new Error('must not be consulted'); }, worker: workerFrom(() => writeImpl(RIGHT)) });
+      assert.equal(result.verdict, 'PASS');
+      assert.deepEqual(result.engineeringContext?.approval, { status: 'none' });
+    });
   });
 
   it("model prose claiming success cannot produce PASS; attempts are bounded and categorized", async () => {
@@ -178,6 +246,33 @@ describe('runCodingTask (runtime-owned control loop, model boundary stubbed)', (
     assert.equal(result.failureCategory, 'F_model_runtime');
     assert.match(result.records[0].runtimeError ?? '', /tripwire/);
     assert.equal(result.attempts, 0);
+  });
+
+  it('preserves legacy nondelegated .txt runtime fixtures without inventing language conventions', async () => {
+    await writeFile(join(root, 'calc', 'legacy.txt'), 'initial\n');
+    let seenPrompt = '';
+    const result = await runCodingTask(
+      { ...task, allowedFiles: ['calc/legacy.txt'], verificationCommands: [['go', 'test', '-count=1', './calc']] },
+      { repoRoot: root, maxAttempts: 1, worker: { async generate(prompt) {
+        seenPrompt = prompt;
+        await writeFile(join(root, 'calc', 'legacy.txt'), 'updated\n');
+        return { text: 'done', finishReason: 'stop', steps: [{}] };
+      } } },
+    );
+    assert.equal(result.modelCalls, 1, 'a legacy fixture still reaches its model boundary');
+    assert.doesNotMatch(seenPrompt, /Engineering context SHA-256/);
+  });
+
+  it('refuses silently omitting approved architecture on unknown language files', async () => {
+    await writeFile(join(root, 'calc', 'legacy.txt'), 'initial\n');
+    await assert.rejects(
+      runCodingTask(
+        { ...task, allowedFiles: ['calc/legacy.txt'],
+          approvedDesign: { approvalRef: 'ADR-01', hld: 'Design', lld: 'Implementation details' } },
+        { repoRoot: root, worker: workerFrom(() => {}) },
+      ),
+      /approvedDesign requires one registered implementation language/,
+    );
   });
 
   it('rejects contracts whose allowedFiles escape the repository', async () => {

@@ -1,0 +1,53 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "ruby-review-conventions",
+  "version": "1.0.0",
+  "title": "Ruby review conventions",
+  "summary": "Read-only review guidance for Ruby and Rails: mass assignment, unsafe metaprogramming, query patterns and test isolation. Ruby implementation is not delegated.",
+  "category": "implementation",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "agents/ruby-reviewer.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "Review-only. Ruby is deliberately out of scope for delegated implementation, and no worker receives this skill."
+  },
+  "activation": {
+    "languages": ["ruby"],
+    "taskTypes": ["review", "explore", "debug"],
+    "keywords": ["ruby", "rails", "activerecord", "gem", "rspec", "metaprogramming", "send", "mass assignment", "controller", "bundler"],
+    "priority": 50
+  },
+  "inputs": [
+    { "name": "files", "description": "Ruby sources under review.", "required": true }
+  ],
+  "outputs": [
+    { "name": "findings", "description": "Security, correctness and performance findings with line references." }
+  ],
+  "workflow": [
+    { "step": "Find places where request parameters reach models or queries and check strong parameters, validation and SQL interpolation.", "check": "No raw parameter reaches a query or a mass assignment." },
+    { "step": "Find dynamic dispatch and eval-like calls (send, public_send, constantize, instance_eval) fed by external values.", "check": "External strings never choose a method or a constant unchecked." },
+    { "step": "Look for N+1 queries and missing indexes in loops over associations.", "check": "Loops that issue a query per row are flagged." },
+    { "step": "Check Gemfile changes for new gems, unpinned versions and git sources.", "check": "Each new dependency is justified." },
+    { "step": "Check tests isolate state and cover failure paths rather than only the happy path." }
+  ],
+  "constraints": [
+    "Read-only analysis; Ruby implementation is out of scope.",
+    "Do not run the application or its console.",
+    "Findings are advisory."
+  ],
+  "examples": [
+    { "title": "send with params", "situation": "A controller calls record.send(params[:action]).", "guidance": "Report as critical: external input chooses the method. Replace with an explicit allow-list." }
+  ],
+  "verification": [
+    "Every finding cites a file and line.",
+    "Injection findings name the sink."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "ruby-review", "task": { "language": "ruby", "taskType": "review", "text": "Review the rails controller for mass assignment and a send call on activerecord." }, "selected": true },
+    { "id": "ruby-debug", "task": { "language": "ruby", "taskType": "debug", "text": "The rspec suite shows an n+1 query in the gem." }, "selected": true },
+    { "id": "js-not-ruby", "task": { "language": "js", "taskType": "review", "text": "Review rails mass assignment." }, "selected": false },
+    { "id": "ruby-test", "task": { "language": "ruby", "taskType": "test", "text": "Write an rspec for the rails model." }, "selected": false }
+  ]
+}

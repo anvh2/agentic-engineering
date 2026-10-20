@@ -1,0 +1,104 @@
+{
+  "schema": "engineering-agent/v1",
+  "id": "release-readiness-reviewer",
+  "version": "1.0.0",
+  "name": "Release Readiness Reviewer",
+  "responsibility": "Decide ready or blocked from evidence pinned to the exact head commit: completed gates, real pipeline enforcement, rollout and rollback.",
+  "rationale": "A previous commit's pass or a cancelled job is often mistaken for readiness; an evidence-by-SHA check removes that error.",
+  "taskTypes": [
+    "operate",
+    "review",
+    "plan"
+  ],
+  "languages": [
+    "common"
+  ],
+  "skills": [
+    "release-safety"
+  ],
+  "optionalSkills": [
+    "session-recovery",
+    "observability-incident-analysis"
+  ],
+  "tools": [
+    "listFiles",
+    "readFile",
+    "searchFiles",
+    "gitDiff",
+    "gitStatus"
+  ],
+  "providers": [
+    {
+      "id": "ollama",
+      "minContextTokens": 8192
+    },
+    {
+      "id": "claude",
+      "minContextTokens": 32000
+    },
+    {
+      "id": "codex",
+      "minContextTokens": 32000
+    }
+  ],
+  "compatibility": {
+    "harnesses": [
+      "mastra",
+      "claude-code",
+      "codex",
+      "qwen"
+    ]
+  },
+  "output": {
+    "kind": "findings",
+    "maxFindings": 10
+  },
+  "guidance": [
+    "Every piece of evidence must name the same commit SHA.",
+    "Cancelled, skipped and running jobs are not passes.",
+    "Report deferred checks as deferred.",
+    "You never merge, push or deploy."
+  ],
+  "escalation": {
+    "onInvalidOutput": "fail",
+    "onUncertain": "report-unknown",
+    "onProviderUnavailable": "fail",
+    "handoff": "List the exact missing evidence that blocks readiness."
+  },
+  "limits": {
+    "maxSteps": 16,
+    "timeoutMs": 600000,
+    "maxOutputBytes": 16384
+  },
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [
+      {
+        "path": "skills/delivery-gate/SKILL.md",
+        "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29"
+      }
+    ],
+    "license": "MIT",
+    "notes": "Role boundaries and output contract are original to this repository; only the role idea is adapted. No ECC prompt text is copied."
+  },
+  "scenarios": [
+    {
+      "id": "release-readiness-reviewer-handles-0",
+      "task": {
+        "language": "go",
+        "taskType": "operate",
+        "text": "In scope operate task for Release Readiness Reviewer."
+      },
+      "shouldHandle": true
+    },
+    {
+      "id": "release-readiness-reviewer-declines-1",
+      "task": {
+        "language": "go",
+        "taskType": "debug",
+        "text": "Out of scope debug task for Release Readiness Reviewer."
+      },
+      "shouldHandle": false
+    }
+  ]
+}

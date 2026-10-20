@@ -1,0 +1,54 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "distributed-systems-invariants",
+  "version": "1.0.0",
+  "title": "Distributed-system invariants",
+  "summary": "Check concurrency and delivery invariants: idempotency, ordering, leases and fencing, cancellation, restart recovery and check-then-act races.",
+  "category": "reliability",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "skills/backend-patterns/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "agents/silent-failure-hunter.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "Uses the invariants this runtime already depends on: run-once and zombie protection, lease plus fencing, bounded retries and rollback."
+  },
+  "activation": {
+    "languages": ["common"],
+    "taskTypes": ["review", "design", "debug", "plan"],
+    "keywords": ["idempotent", "idempotency", "race condition", "concurrency", "lease", "fencing", "duplicate delivery", "ordering", "restart", "cancellation", "deadlock"],
+    "priority": 64
+  },
+  "inputs": [
+    { "name": "flow", "description": "The multi-step or concurrent flow under review.", "required": true }
+  ],
+  "outputs": [
+    { "name": "invariants", "description": "The invariants the flow must keep, each with the code that enforces it." },
+    { "name": "findings", "description": "Races, replay hazards and recovery gaps." }
+  ],
+  "workflow": [
+    { "step": "Write each step's postcondition and the state it leaves if the process dies immediately after it.", "check": "Every step has a defined crash outcome." },
+    { "step": "Find check-then-act sequences; confirm the check and the act share one lock or transaction.", "check": "No await or yield separates a check from its act." },
+    { "step": "Check idempotency: replaying a step with the same key must not repeat the side effect.", "check": "A duplicate delivery test exists." },
+    { "step": "Check ownership: leases carry a fencing token, and stale holders are rejected at the write.", "check": "A late worker cannot overwrite newer state." },
+    { "step": "Check cancellation and restart: in-flight work stops, partial effects are rolled back or recorded, and resume does not re-run completed side effects.", "check": "Resume is tested from a mid-flight state." }
+  ],
+  "constraints": [
+    "Do not add a second scheduler or retry loop; extend the existing one.",
+    "Assume any step can run twice or never; designs that rely on exactly-once delivery are findings.",
+    "Advisory review only."
+  ],
+  "examples": [
+    { "title": "Claim then run", "situation": "A worker reads a task's status and then marks it running in a separate statement.", "guidance": "Two workers can both read pending. Make the claim a single conditional update and test with two concurrent claimants." }
+  ],
+  "verification": [
+    "Each invariant maps to enforcing code and a test.",
+    "Concurrency findings include a concrete interleaving."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "review-race", "task": { "language": "go", "taskType": "review", "text": "Look for a race condition and idempotency problem with duplicate delivery in the worker claim." }, "selected": true },
+    { "id": "design-lease", "task": { "language": "js", "taskType": "design", "text": "Design lease and fencing with restart recovery and cancellation." }, "selected": true },
+    { "id": "test-no", "task": { "language": "go", "taskType": "test", "text": "Test the lease fencing." }, "selected": false },
+    { "id": "review-no-keyword", "task": { "language": "go", "taskType": "review", "text": "Review the button label." }, "selected": false }
+  ]
+}

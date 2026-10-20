@@ -6,6 +6,8 @@ import { integrationNote } from '../../runtime/scheduler/report.ts';
 import type { SchedulerStore } from '../../runtime/scheduler/store.ts';
 import type { SchedulerConfig } from '../../runtime/scheduler/types.ts';
 import type { WorktreeManager } from '../../runtime/worktree/worktree.ts';
+import type { EngineeringKnowledgeCatalog } from '../../runtime/knowledge/engineering-knowledge.ts';
+import { knowledgeDbPath, loadActiveCatalog } from '../../runtime/knowledge/engineering-control.ts';
 import { cancelObjective, resumeObjective, runObjectiveLifecycle, type LifecycleDeps, type LifecycleOutcome } from './driver.ts';
 import { sandboxRunner } from './exec.ts';
 import { pinOracle, type OracleSpecInput } from './oracle.ts';
@@ -27,6 +29,19 @@ import { LifecycleError, LifecycleStore } from './store.ts';
  * Exit codes: 0 ACCEPTED · 1 NOT_ACCEPTED · 2 usage/input · 3 ESCALATED · 4 AWAITING_OPERATOR · 5 CANCELLED · 6 still in progress.
  * `run` calls the real worker executor; paid providers still need the operator's allow-list (`--allow-provider`, AGENTIC_ALLOW_PROVIDERS).
  */
+
+/**
+ * The catalog review recomputes pinned knowledge from. A store that cannot be read yields NO catalog (and a logged reason), so a
+ * task that pinned knowledge cannot be approved (fail closed) while tasks that pinned nothing are unaffected.
+ */
+export function trustedCatalog(ctx: Pick<LifecycleCliContext, 'knowledgeCatalog' | 'workdir' | 'err'>): EngineeringKnowledgeCatalog | undefined {
+  try {
+    return (ctx.knowledgeCatalog ?? (() => loadActiveCatalog(knowledgeDbPath(ctx.workdir))))();
+  } catch (err) {
+    ctx.err(`knowledge store unreadable; tasks that pin knowledge cannot be approved: ${(err as Error).message}`);
+    return undefined;
+  }
+}
 
 export const LIFECYCLE_USAGE = `usage:
   lead lifecycle pin <objective-id> --oracle <oracle.json>
@@ -57,6 +72,8 @@ export interface LifecycleCliContext {
   /** Command runner for verification, integration and acceptance (default: the OS sandbox). */
   run?: CommandRunner;
   actor?: string;
+  /** Trusted catalog used to re-resolve pinned knowledge during review. Default: the project's durable store (global entries). */
+  knowledgeCatalog?: () => EngineeringKnowledgeCatalog | undefined;
 }
 
 const flag = (args: string[], name: string): string | undefined => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
@@ -87,7 +104,7 @@ export async function runLifecycleCommand(args: string[], ctx: LifecycleCliConte
       case 'run': {
         if (!ctx.makeRuntime) return usage('run is not available in this context');
         const runtime = ctx.makeRuntime();
-        const deps: LifecycleDeps = { store: ctx.store, worktrees: ctx.worktrees, lifecycle, scheduler: runtime.scheduler, executor: runtime.executor, capacity: runtime.capacity, run: ctx.run ?? sandboxRunner(600_000), config: ctx.config, evidenceDir: join(ctx.workdir, 'objectives', objectiveId), log: (l) => ctx.out(`  ${l}`) };
+        const deps: LifecycleDeps = { store: ctx.store, worktrees: ctx.worktrees, lifecycle, scheduler: runtime.scheduler, executor: runtime.executor, capacity: runtime.capacity, run: ctx.run ?? sandboxRunner(600_000), config: ctx.config, knowledgeCatalog: trustedCatalog(ctx), evidenceDir: join(ctx.workdir, 'objectives', objectiveId), log: (l) => ctx.out(`  ${l}`) };
         const outcome = await runObjectiveLifecycle(deps, objectiveId, { actor });
         ctx.out(renderOutcome(outcome));
         return exitFor(outcome);

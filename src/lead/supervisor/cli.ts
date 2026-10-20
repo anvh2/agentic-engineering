@@ -1,0 +1,190 @@
+/**
+ * M11 supervisor: a foreground control loop over the existing lifecycle driver.
+ * No additional scheduler or job database. LifecycleStore is the sole authority.
+ * Commands from other terminals write cooperative intent, never signal a PID.
+ */
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, writeFile, unlink, rmdir, stat } from 'node:fs/promises';
+import { join } from 'node:path';
+import type { SchedulerStore } from '../../runtime/scheduler/store.ts';
+import { LifecycleStore } from '../lifecycle/store.ts';
+
+export interface SupervisorContext {
+  store: SchedulerStore;
+  workdir: string;
+  out: (message: string) => void;
+  err: (message: string) => void;
+  /** Executes the EXISTING lead lifecycle driver, not an alternate task engine. */
+  runLifecycle: (objectiveId: string) => Promise<number>;
+}
+export const SUPERVISOR_USAGE = 'lead supervisor start --batch <id> [--once] [--poll-ms <100..60000>] | status | pause | resume | stop';
+const pauseName = 'pause-requested';
+const stopName = 'stop-requested';
+const intervalMs = 20_000;
+const lockTtlMs = 90_000;
+
+const flag = (a: string[], key: string) => {
+  const i = a.indexOf(key);
+  return i < 0 ? undefined : a[i + 1];
+};
+const holderDir = (wd: string) => join(wd, 'supervisor', 'holder');
+const dir = (wd: string) => join(wd, 'supervisor');
+const intent = (wd: string, name: string) => join(dir(wd), name);
+const exists = async (path: string) => stat(path).then(() => true, (e: NodeJS.ErrnoException) => {
+  if (e.code === 'ENOENT') return false;
+  throw e;
+});
+const readHolder = async (wd: string) => {
+  const body = await readFile(join(holderDir(wd), 'owner.json'), 'utf8');
+  const parsed: unknown = JSON.parse(body);
+  if (!parsed || typeof parsed !== 'object' || typeof (parsed as { token?: unknown }).token !== 'string')
+    throw new Error('invalid supervisor owner; manual reconciliation required');
+  return parsed as { token: string; pid: number; batch: string };
+};
+const writeIntent = async (wd: string, name: string) => {
+  await mkdir(dir(wd), { recursive: true, mode: 0o700 });
+  await writeFile(intent(wd, name), new Date().toISOString() + '\n', { mode: 0o600 });
+};
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Never claim an objective is accepted from a CLI exit code alone. */
+const states = new Set(['PINNED', 'EXECUTING']);
+export async function runSupervisorCommand(args: string[], ctx: SupervisorContext): Promise<number> {
+  const [cmd] = args;
+  if (!cmd || !['start','status','pause','resume','stop'].includes(cmd)) {
+    ctx.err(SUPERVISOR_USAGE);
+    return 2;
+  }
+  if (cmd === 'status') {
+    const locked = await exists(holderDir(ctx.workdir));
+    let owner: unknown = null;
+    if (locked) {
+      try { owner = await readHolder(ctx.workdir); } catch { owner = 'CORRUPT_OR_ORPHANED'; }
+    }
+    const result = { state: !locked ? 'STOPPED' : (await exists(intent(ctx.workdir, stopName))) ? 'STOP_REQUESTED' :
+      (await exists(intent(ctx.workdir, pauseName))) ? 'PAUSE_REQUESTED' : 'RUNNING_OR_ORPHANED',
+      locked, owner, note: locked ? 'PID is diagnostic only, never proof of ownership. Reconcile on crash.' : undefined };
+    ctx.out(JSON.stringify(result, null, 2));
+    return 0;
+  }
+  if (cmd === 'pause' || cmd === 'stop') {
+    if (!(await exists(holderDir(ctx.workdir)))) {
+      ctx.err('No active holder. Check status; orphan lock must be reconciled manually.');
+      return 1;
+    }
+    await writeIntent(ctx.workdir, cmd === 'pause' ? pauseName : stopName);
+    ctx.out(cmd + ' requested; current lifecycle must settle before new objectives are blocked. No run was cancelled.');
+    return 0;
+  }
+  if (cmd === 'resume') {
+    if (!(await exists(holderDir(ctx.workdir)))) {
+      // No live gate remains: remove only control intents and require an explicit NEW start.
+      await unlink(intent(ctx.workdir, stopName)).catch((e: NodeJS.ErrnoException) => { if (e.code !== 'ENOENT') throw e; });
+      await unlink(intent(ctx.workdir, pauseName)).catch((e: NodeJS.ErrnoException) => { if (e.code !== 'ENOENT') throw e; });
+      ctx.out('No holder; control intents cleared. Use start explicitly after checking the lifecycle.');
+      return 0;
+    }
+    if (await exists(intent(ctx.workdir, stopName))) {
+      ctx.err('Stop was requested while holder is still present. Wait for completion or reconcile; no takeover.');
+      return 1;
+    }
+    if (!(await exists(intent(ctx.workdir, pauseName)))) {
+      ctx.err('No pause request found');
+      return 1;
+    }
+    await unlink(intent(ctx.workdir, pauseName));
+    ctx.out('Resume requested; verify owner is still alive via process table and log.');
+    return 0;
+  }
+
+  const batch = flag(args, '--batch');
+  const pollInput = flag(args, '--poll-ms');
+  const poll = pollInput === undefined ? 2000 : Number(pollInput);
+  if (!batch || !/^[A-Za-z0-9._-]+$/.test(batch) ||
+      !Number.isInteger(poll) || poll < 100 || poll > 60_000) {
+    ctx.err('start requires --batch <id>; --poll-ms must be 100..60000');
+    return 2;
+  }
+  // Verify batch exists and pre-pinned oracle BEFORE grabbing leadership.
+  const batchRow = ctx.store.getBatch(batch);
+  const lifecycle = new LifecycleStore(ctx.store);
+  const pinned = lifecycle.getByBatch(batch);
+  if (!batchRow || !pinned || pinned.batchId !== batch) {
+    ctx.err('Batch must exist and have an independently pinned lifecycle oracle');
+    return 2;
+  }
+
+  await mkdir(dir(ctx.workdir), { recursive: true, mode: 0o700 });
+  try { await mkdir(holderDir(ctx.workdir)); } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'EEXIST') {
+      ctx.err('Supervisor gate held or orphaned: no automatic takeover');
+      return 1;
+    }
+    throw e;
+  }
+  const token = 'supervisor:' + process.pid + ':' + randomUUID();
+  const lockName = 'supervisor:' + batch;
+  let locked = false;
+  let lost = false;
+  let beat: ReturnType<typeof setInterval> | undefined;
+  let running = false;
+  let stopping = false;
+  const onSignal = () => { stopping = true; };
+  process.on('SIGTERM', onSignal);
+  process.on('SIGINT', onSignal);
+  try {
+    await writeFile(join(holderDir(ctx.workdir), 'owner.json'), JSON.stringify({ token, pid: process.pid, batch }), { flag: 'wx', mode: 0o600 });
+    if (!ctx.store.acquireLock(lockName, token, lockTtlMs)) throw new Error('DB leadership lock held');
+    locked = true;
+    beat = setInterval(() => {
+      try { if (!ctx.store.renewLock(lockName, token, lockTtlMs)) lost = true; }
+      catch { lost = true; }
+    }, intervalMs);
+    beat.unref();
+    const assertOwner = async () => {
+      const owner = await readHolder(ctx.workdir);
+      if (lost || owner.token !== token || !ctx.store.ownsLock(lockName, token))
+        throw new Error('supervisor ownership lost; fail closed, retaining gate');
+    };
+    let rounds = 0;
+    let resultCode = 0;
+    while (!stopping) {
+      await assertOwner();
+      if (await exists(intent(ctx.workdir, stopName))) break;
+      if (await exists(intent(ctx.workdir, pauseName))) { await sleep(poll); continue; }
+      const current = lifecycle.getByBatch(batch);
+      if (!current || current.objectiveId !== pinned.objectiveId) throw new Error('lifecycle identity changed');
+      if (!states.has(current.phase)) break;
+      running = true;
+      const exit = await ctx.runLifecycle(current.objectiveId);
+      running = false;
+      await assertOwner();
+      const verified = lifecycle.require(current.objectiveId);
+      rounds++;
+      ctx.out(JSON.stringify({ batch, objectiveId: current.objectiveId, phase: verified.phase, exit, rounds }));
+      if (exit !== 0 || verified.phase !== 'ACCEPTED') { resultCode = 1; break; }
+      if (args.includes('--once')) break;
+      // One pinned objective per batch; no alternate backlog iteration.
+      break;
+    }
+    await assertOwner();
+    return resultCode;
+  } catch (e) {
+    ctx.err('supervisor failed CLOSED: ' + (e as Error).message);
+    // A failed/unknown child, lock loss, or failed startup must not result in an unsafe automatic takeover.
+    return 1;
+  } finally {
+    if (beat) clearInterval(beat);
+    process.off('SIGTERM', onSignal);
+    process.off('SIGINT', onSignal);
+    if (!running && locked && !lost) {
+      try {
+        if (ctx.store.ownsLock(lockName, token) && (await readHolder(ctx.workdir)).token === token) {
+          ctx.store.releaseLock(lockName, token);
+          await unlink(join(holderDir(ctx.workdir), 'owner.json'));
+          await rmdir(holderDir(ctx.workdir));
+        }
+      } catch (e) { ctx.err('gate retained for manual reconciliation: ' + (e as Error).message); }
+    }
+  }
+}

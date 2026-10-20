@@ -1,0 +1,53 @@
+{
+  "schema": "engineering-skill/v1",
+  "id": "error-handling-review",
+  "version": "1.0.0",
+  "title": "Error handling and silent failure review",
+  "summary": "Find swallowed errors, misleading fallbacks and lost context: every failure must be handled, propagated or recorded, and a fallback must never disguise a failure as success.",
+  "category": "reliability",
+  "provenance": {
+    "origin": "ecc-adapted",
+    "sources": [{ "path": "agents/silent-failure-hunter.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }, { "path": "skills/error-handling/SKILL.md", "commit": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29" }],
+    "license": "MIT",
+    "notes": "Adds the rule that a default value returned on failure must be distinguishable from a real result."
+  },
+  "activation": {
+    "languages": ["common"],
+    "taskTypes": ["review", "debug", "implement", "refactor"],
+    "keywords": ["swallowed", "silent failure", "error handling", "fallback", "catch", "ignored error", "retry", "timeout", "propagate", "panic"],
+    "priority": 62
+  },
+  "inputs": [
+    { "name": "files", "description": "Code under review.", "required": true }
+  ],
+  "outputs": [
+    { "name": "findings", "description": "Each swallowed, mislabelled or context-losing failure with its location." }
+  ],
+  "workflow": [
+    { "step": "Search for empty catch blocks, ignored error returns, bare recover calls and broad except clauses.", "check": "Each match is classified handled, propagated, logged or swallowed." },
+    { "step": "For every fallback or default, ask whether a caller can tell it from a real result; if not, it hides failure.", "check": "Fallbacks are labelled or surfaced." },
+    { "step": "Check that errors keep their cause and context when wrapped, and that logs include the operation and identifiers, never secrets.", "check": "A failure can be traced to its origin from the message." },
+    { "step": "Check retry and timeout logic for bounds, backoff and idempotency; an unbounded retry is a finding.", "check": "Every retry has a limit." },
+    { "step": "Check cleanup on failure paths: resources released, partial writes rolled back, state not left half-updated.", "check": "Error paths are as tested as success paths." }
+  ],
+  "constraints": [
+    "Read-only unless the task allows edits; never remove a failure signal to make a test pass.",
+    "Distinguish expected, recoverable errors from bugs.",
+    "Findings must cite the line that swallows or masks the error."
+  ],
+  "examples": [
+    { "title": "Default on failure", "situation": "A loader returns an empty config when parsing fails.", "guidance": "Report it: the caller cannot tell empty from broken. Return the error or a typed unavailable result." }
+  ],
+  "verification": [
+    "Each finding has a path and a line.",
+    "Proposed fixes keep failures observable to the caller."
+  ],
+  "compatibility": { "harnesses": ["mastra", "claude-code", "codex", "qwen"] },
+  "dependsOn": [],
+  "scenarios": [
+    { "id": "hunt-swallowed", "task": { "language": "go", "taskType": "review", "text": "Hunt for a swallowed error and a silent failure behind the fallback in the loader." }, "selected": true },
+    { "id": "debug-retry", "task": { "language": "js", "taskType": "debug", "text": "The retry has no timeout and the catch hides the cause." }, "selected": true },
+    { "id": "plan-no", "task": { "language": "go", "taskType": "plan", "text": "Plan the retry timeout work." }, "selected": false },
+    { "id": "review-no-keyword", "task": { "language": "go", "taskType": "review", "text": "Review the color palette." }, "selected": false }
+  ]
+}

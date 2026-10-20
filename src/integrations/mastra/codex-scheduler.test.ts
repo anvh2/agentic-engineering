@@ -19,6 +19,7 @@ import { codexEntry, type CodexConfig } from '../../workers/providers/codex.ts';
 import { ProviderRegistry } from '../../workers/providers/registry.ts';
 import { createInProcessExecutor } from './__testing__/in-process-executor.ts';
 import { createCodingTaskWorkflow } from './workflows/coding-task-workflow.ts';
+import { isAlive as alive, readPid } from '../../workers/providers/__testing__/pidfile.ts';
 
 /**
  * Scheduler -> executor -> coding-task-workflow -> Codex adapter (mock CLI) -> isolated worktree -> runtime verifier ->
@@ -37,14 +38,6 @@ const waitFor = async (cond: () => boolean, what: string, ms = 15_000) => {
   while (!cond()) {
     if (Date.now() > end) throw new Error(`timed out waiting for: ${what}`);
     await sleep(10);
-  }
-};
-const alive = (pid: number) => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
   }
 };
 
@@ -89,7 +82,9 @@ function harness(options: { provider?: string; fake?: Record<string, string>; sc
     capacity: capacityFor(),
     allowProviders: options.schedulerAllow ?? ['codex:T'],
     cancelGraceMs: 2_000,
-    config: { pollMs: 20, workerLeaseTimeoutMs: 1_000, taskTimeoutMs: 120_000, maxCapacityWaitMs: 120_000 },
+    // A 1s lease (three ~333ms heartbeats) expired mid-attempt on a loaded CI runner (CI run 39283415933). Lease expiry itself is
+    // covered with a fake clock in the fencing test below; these cases test attempt bounding, not lease timing.
+    config: { pollMs: 20, workerLeaseTimeoutMs: 10_000, taskTimeoutMs: 120_000, maxCapacityWaitMs: 120_000 },
   });
   const records = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
   const execCalls = () => records().filter((r) => r.args?.[0] === 'exec' && r.args.includes('--sandbox')) as { args: string[]; envKeys: string[] }[];
@@ -210,8 +205,8 @@ describe('scheduler -> codex adapter -> verifier (mock CLI)', () => {
     const pidfile = join(tempDir('codex-pid-'), 'pid');
     const h = harness({ fake: { FAKE_MODE: 'hang', FAKE_PIDFILE: pidfile } });
     const running = h.scheduler.run();
-    await waitFor(() => existsSync(pidfile), 'the CLI to be running');
-    const pid = Number(readFileSync(pidfile, 'utf8'));
+    await waitFor(() => readPid(pidfile) !== undefined, 'the CLI to be running');
+    const pid = readPid(pidfile)!;
     assert.ok(alive(pid));
     const r = await cancelTask(h.store, { taskId: 'T', reason: 'operator stop', executor: h.executor, capacity: capacityFor(), graceMs: 5_000 });
     assert.equal(r.task.state, 'CANCELLED');
@@ -226,8 +221,8 @@ describe('scheduler -> codex adapter -> verifier (mock CLI)', () => {
     const pidfile = join(tempDir('codex-pid-'), 'pid');
     const h = harness({ fake: { FAKE_MODE: 'hang', FAKE_PIDFILE: pidfile } });
     const running = h.scheduler.run();
-    await waitFor(() => existsSync(pidfile), 'the CLI to be running');
-    const pid = Number(readFileSync(pidfile, 'utf8'));
+    await waitFor(() => readPid(pidfile) !== undefined, 'the CLI to be running');
+    const pid = readPid(pidfile)!;
     h.scheduler.stop();
     const summary = await running;
     assert.deepEqual(summary.stillActive, []);

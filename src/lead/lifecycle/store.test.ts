@@ -62,6 +62,9 @@ describe('M8.5 lifecycle store', () => {
   it('the command policy allows toolchain argv only', () => {
     assert.deepEqual(commandPolicyProblems(['go', 'test', './...']), []);
     assert.deepEqual(commandPolicyProblems(['gofmt', '-l', '.']), []);
+    for (const argv of [['gofmt', '-w', '.'], ['gofmt', '-r', 'a -> b', '.'], ['gofmt', '-l'], ['gofmt', '-l', '/etc'], ['gofmt', '-l', '../x']]) {
+      assert.equal(commandPolicyProblems(argv).length, 1, `${argv.join(' ')} must be refused: the lifecycle verifier is check-only`);
+    }
     assert.deepEqual(commandPolicyProblems(['npx', '--no-install', 'jest']), []);
     assert.deepEqual(commandPolicyProblems(['node', 'check.mjs']), []);
     for (const bad of [['sh', '-c', 'x'], ['bash'], ['curl', 'http://x'], ['git', 'push'], ['npx', 'jest'], ['node', '-e', '1'], ['go', 'run', 'x.go'], ['go', 'get', 'x'], []]) assert.ok(commandPolicyProblems(bad).length > 0, JSON.stringify(bad));
