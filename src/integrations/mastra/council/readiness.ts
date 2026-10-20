@@ -3,6 +3,7 @@ import type { PackRegistry } from '../../../runtime/knowledge/packs/loader.ts';
 import { DEFAULT_SEATS, resolvePanel } from '../../../runtime/council/panel.ts';
 import { declaredContext, SCRIPTED_CONTEXT_TOKENS } from '../../../runtime/council/run.ts';
 import { specialistRegistryKey, type SpecialistRegistration } from '../specialist-agents.ts';
+import { resolveLiveRoster } from './live-roster.ts';
 
 export const COUNCIL_READINESS_SCHEMA = 'agentic.council-readiness/1';
 
@@ -19,7 +20,7 @@ export interface CouncilReadiness {
 }
 
 export interface ReadinessInput {
-  specialists: Pick<SpecialistRegistration, 'agents' | 'registry' | 'error'>;
+  specialists: Pick<SpecialistRegistration, 'agents' | 'registry' | 'error'> & Partial<Pick<SpecialistRegistration, 'refused'>>;
   env?: NodeJS.ProcessEnv;
   /** Contact a LOOPBACK Ollama to check the model is installed. Off by default: status must not depend on a network. */
   probe?: boolean;
@@ -42,13 +43,17 @@ export async function councilReadiness(input: ReadinessInput): Promise<CouncilRe
   const scriptedPanel = registry ? resolvePanel({ registry, language: 'ts', contextTokens: SCRIPTED_CONTEXT_TOKENS }) : ({ ok: false, reasons: [`pack_unavailable: ${pack.error}`] } as const);
   const livePanel = registry ? resolvePanel({ registry, language: 'ts', contextTokens: ctx }) : scriptedPanel;
 
-  const scriptedReasons: string[] = [...(scriptedPanel.ok ? [] : scriptedPanel.reasons), ...panelMissing.map((id) => `not_registered_in_mastra: ${id}`)];
+  const refusedById = new Map((input.specialists.refused ?? []).map((r) => [r.id, r]));
+  const missingReason = (id: string) => { const r = refusedById.get(id); return r ? `not_registered_in_mastra: ${id} (model refused, ${r.code}: ${r.reason})` : `not_registered_in_mastra: ${id}`; };
+  const scriptedReasons: string[] = [...(scriptedPanel.ok ? [] : scriptedPanel.reasons), ...panelMissing.map(missingReason)];
+  // The workflow's own LIVE gate, evaluated on the registered agents: what status reports is what a run would refuse.
+  const roster = registry && panelMissing.length === 0 ? resolveLiveRoster((key) => input.specialists.agents[key], registry, wanted, env) : null;
   // The same undeclared-context refusal comes back once per seat; say it once, with the fix.
   const undeclared = (r: string) => /context window is not declared/.test(r);
   const liveFromPanel = livePanel.ok ? [] : livePanel.reasons.filter((r) => !undeclared(r));
   const liveReasons: string[] = [
     ...(ctx === undefined && registry ? ['model_context_undeclared: set OLLAMA_NUM_CTX to the local model\'s context window (the council needs at least 8192 tokens); an undeclared window is refused, never guessed'] : []),
-    ...liveFromPanel, ...panelMissing.map((id) => `not_registered_in_mastra: ${id}`),
+    ...liveFromPanel, ...panelMissing.map(missingReason), ...(roster && !roster.ok ? roster.reasons : []),
   ];
   if (env.AGENTIC_COUNCIL_LIVE !== '1') liveReasons.push('live_not_enabled: set AGENTIC_COUNCIL_LIVE=1 in the environment of the process that runs the council');
   let probe: ProviderReadiness | 'not-run' = 'not-run';

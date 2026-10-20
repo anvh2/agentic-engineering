@@ -11,8 +11,10 @@ import { COUNCIL_LIMITS } from '../../../runtime/council/contract.ts';
 import { conveneCouncil, loadSidecar, noteWorkflowRun, prepareCouncil, recordCouncil, type CouncilDeps } from '../../../runtime/council/run.ts';
 import type { SpecialistInvoker } from '../../../runtime/council/participant.ts';
 import { allowedRootsFromEnv } from '../workflows/specialist-review-workflow.ts';
-import { createMastraSpecialist, locatePackRoot, specialistRegistryKey } from '../specialist-agents.ts';
+import { DEFAULT_SEATS } from '../../../runtime/council/panel.ts';
+import { locatePackRoot } from '../specialist-agents.ts';
 import { createMastraInvoker, type CouncilAgentLike } from './invoker.ts';
+import { resolveLiveRoster } from './live-roster.ts';
 import { createScriptedCouncilAgents, scriptedAgentKey, SCRIPTED_QUESTION } from './scripted.ts';
 
 /**
@@ -98,11 +100,17 @@ export function createEngineeringCouncilWorkflow(deps: CouncilWorkflowDeps = {})
     description: 'Preflight (pack, exactly 3 role-distinct read-only specialists, model readiness, repository inside the configured roots, question) and open the meeting. Any refusal ends the run before a model is called.',
     inputSchema: councilInputSchema,
     outputSchema: prepared,
-    execute: async ({ inputData, runId }) => {
+    execute: async ({ inputData, runId, mastra }) => {
       const meetingId = inputData.meetingId ?? `council-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)}-${inputData.mode}`;
       const mode = modeOf(inputData.mode);
       try {
         const d = councilDeps();
+        // LIVE runs on the registered roster only. Checked before the meeting exists, so a refusal leaves no state behind.
+        if (mode === 'LIVE' && !deps.invokerFor) {
+          const seatIds = (loadSidecar(d.workdir, meetingId)?.panel ?? DEFAULT_SEATS).map((s) => s.specialistId);
+          const roster = resolveLiveRoster(agentLookup(mastra), d.registry, seatIds, d.env);
+          if (!roster.ok) return { status: 'refused' as const, meetingId, mode, resumed: false, reasons: [...roster.reasons] };
+        }
         const useExample = !inputData.question;
         const result = await prepareCouncil(d, {
           meetingId, mode, question: inputData.question ?? SCRIPTED_QUESTION.question, focusPaths: inputData.focusPaths ?? (useExample ? [...SCRIPTED_QUESTION.focusPaths] : []),
@@ -135,13 +143,15 @@ export function createEngineeringCouncilWorkflow(deps: CouncilWorkflowDeps = {})
         : createMastraInvoker({
             repositoryRoot: sidecar.repository, workflowRunId: runId, tracingContext,
             resolveAgent: (specialistId) => {
-              const manifest = d.registry.agentById.get(specialistId)!;
-              const m = mastra as { getAgent?: (key: string) => unknown } | undefined;
               if (inputData.mode === 'SCRIPTED') {
-                const registered = tryGet(m, scriptedAgentKey(specialistId));
+                // Offline seam: a canned model, never a provider. The record says SCRIPTED.
+                const registered = tryGet(mastra, scriptedAgentKey(specialistId));
                 return (registered ?? Object.values(createScriptedCouncilAgents(d.registry, [specialistId]))[0]) as unknown as CouncilAgentLike;
               }
-              return (tryGet(m, specialistRegistryKey(manifest)) ?? createMastraSpecialist(manifest)) as unknown as CouncilAgentLike;
+              // Re-checked per call: the registered, locally bound agent or a failed call. Never a newly constructed agent.
+              const roster = resolveLiveRoster(agentLookup(mastra), d.registry, [specialistId], d.env);
+              if (!roster.ok) throw new Error(roster.reasons.join('; '));
+              return roster.agents.get(specialistId)!;
             },
           });
       const result = await conveneCouncil(d, sidecar, { invoker, signal: abortSignal, owner: `council-workflow:${runId}` });
@@ -192,8 +202,10 @@ export function createEngineeringCouncilWorkflow(deps: CouncilWorkflowDeps = {})
     .commit();
 }
 
-function tryGet(mastra: { getAgent?: (key: string) => unknown } | undefined, key: string): unknown {
-  try { return mastra?.getAgent?.(key); } catch { return undefined; }
+function tryGet(mastra: unknown, key: string): unknown {
+  try { return (mastra as { getAgent?: (key: string) => unknown } | undefined)?.getAgent?.(key); } catch { return undefined; }
 }
+
+const agentLookup = (mastra: unknown) => (key: string): unknown => tryGet(mastra, key);
 
 export const engineeringCouncilWorkflow = createEngineeringCouncilWorkflow();
