@@ -76,7 +76,7 @@ export async function runCouncilCli(argv: string[], io: CliIo): Promise<number> 
     if (has(rest, '--in-process')) {
       const specialists = registerSpecialists();
       const council = councilRegistration(specialists);
-      const mastra = new Mastra({ agents: { ...specialists.agents, ...council.agents }, workflows: { engineeringCouncilWorkflow } });
+      const mastra = new Mastra({ agents: { ...specialists.agents, ...council.agents }, workflows: { engineeringCouncilWorkflow: council.workflow } });
       const r = (await (await mastra.getWorkflow('engineeringCouncilWorkflow').createRun()).start({ inputData: input as never })) as { status: string; result?: CouncilWorkflowResult; error?: unknown };
       if (r.status !== 'success' || !r.result) { io.err(`council: workflow ended ${r.status}: ${JSON.stringify(r.error ?? '').slice(0, 500)}`); return 1; }
       result = r.result;

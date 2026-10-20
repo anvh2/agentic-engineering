@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { Mastra } from '@mastra/core/mastra';
+import { MastraStorageExporter, Observability } from '@mastra/observability';
 import { findProjectRoot } from '../../../core/paths.ts';
 import { loadPackRegistry } from '../../../runtime/knowledge/packs/loader.ts';
 import { AGENT_ROLES, ModelRegistry, ModelResolver, type ModelRef } from '../../../runtime/models/index.ts';
@@ -38,12 +39,15 @@ function resolverFor(url: string, assignments: Record<string, ModelRef> = {}, de
   return new ModelResolver(reg, { defaults: { 'coding-worker': local(defaultModel), specialist: local(defaultModel) }, assignments }, { OLLAMA_API_KEY: 'loopback', PAIDCO_API_KEY: 'loopback-not-a-credential' });
 }
 
-async function harness(assignments: Record<string, ModelRef>, opts: { url?: (loopback: string) => string; defaultModel?: string; workdir?: string } = {}) {
+async function harness(assignments: Record<string, ModelRef>, opts: { url?: (loopback: string) => string; defaultModel?: string; workdir?: string; traced?: 'registration' | 'step-mastra' } = {}) {
   const server = await fakeModelServer('not a council reply');
   const workdir = opts.workdir ?? mkdtempSync(join(tmpdir(), 'council-registry-'));
   const specialists = registerSpecialists(registry, { resolver: resolverFor(opts.url ? opts.url(server.url) : server.url, assignments, opts.defaultModel) });
-  const workflow = createEngineeringCouncilWorkflow({ workdir, registry, env: LIVE_ENV, allowedRoots: () => [root], probe });
-  const mastra = new Mastra({ agents: specialists.agents, workflows: { engineeringCouncilWorkflow: workflow } });
+  const registeredAgent = opts.traced === 'registration' ? (key: string) => specialists.agents[key] : undefined;
+  const workflow = createEngineeringCouncilWorkflow({ workdir, registry, env: LIVE_ENV, allowedRoots: () => [root], probe, ...(registeredAgent ? { registeredAgent } : {}) });
+  // As on the server (index.ts): with observability on, a step's `mastra` and the agents it returns are tracing Proxies.
+  const observability = opts.traced ? new Observability({ configs: { default: { serviceName: 'council-test', exporters: [new MastraStorageExporter()] } } }) : undefined;
+  const mastra = new Mastra({ agents: specialists.agents, workflows: { engineeringCouncilWorkflow: workflow }, ...(observability ? { observability } : {}) });
   const run = async (meetingId: string, limits?: Record<string, number>) =>
     (await (await mastra.getWorkflow('engineeringCouncilWorkflow').createRun()).start({ inputData: { meetingId, mode: 'live', ...(limits ? { limits } : {}) } as never })) as unknown as { status: string; result?: CouncilWorkflowResult };
   const meetings = () => (existsSync(join(workdir, 'council')) ? readdirSync(join(workdir, 'council')).filter((n) => !n.startsWith('council.db')) : []);
@@ -140,4 +144,25 @@ test('a resumed LIVE meeting must finish on the model it was opened with, even a
       assert.equal(h.server.seen.length, 0);
     } finally { await h.server.close(); }
   } finally { rmSync(workdir, { recursive: true, force: true }); }
+});
+
+test('under Mastra observability the step sees tracing Proxies; LIVE seats resolve against the registration, not the proxied lookup', async () => {
+  // Observed on the dev server: every seat refused as model_binding_missing, because a Proxy is not the bound agent.
+  const viaStep = await harness({}, { traced: 'step-mastra' });
+  try {
+    await assertRefusedWithoutCalls(viaStep, 'traced-step', /model_binding_missing: architect/);
+  } finally { await viaStep.done(); }
+
+  const viaRegistration = await harness({}, { traced: 'registration' });
+  try {
+    const r = await viaRegistration.run('traced-registration', { maxInvocations: 3 });
+    assert.equal(r.result!.status, 'recorded', JSON.stringify(r.result));
+    assert.ok(viaRegistration.server.seen.length >= 1 && viaRegistration.server.seen.every((x) => x.model === 'qwen3:8b'));
+  } finally { await viaRegistration.done(); }
+
+  const repointed = await harness({}, { traced: 'registration' });
+  try {
+    (repointed.specialists.agents.specialist_architect as unknown as { __updateModel(o: { model: string }): void }).__updateModel({ model: 'openai/gpt-4o' });
+    await assertRefusedWithoutCalls(repointed, 'traced-repointed', /model_changed_after_binding: architect/);
+  } finally { await repointed.done(); }
 });

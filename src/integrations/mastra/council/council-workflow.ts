@@ -14,7 +14,7 @@ import { allowedRootsFromEnv } from '../workflows/specialist-review-workflow.ts'
 import { DEFAULT_SEATS } from '../../../runtime/council/panel.ts';
 import { locatePackRoot } from '../specialist-agents.ts';
 import { createMastraInvoker, type CouncilAgentLike } from './invoker.ts';
-import { resolveLiveRoster } from './live-roster.ts';
+import { resolveLiveRoster, type AgentLookup } from './live-roster.ts';
 import { createScriptedCouncilAgents, scriptedAgentKey, SCRIPTED_QUESTION } from './scripted.ts';
 
 /**
@@ -73,6 +73,12 @@ export interface CouncilWorkflowDeps {
   probe?: () => Promise<ProviderReadiness>;
   /** Tests: replace how a seat is run. Default: the registered Mastra agent through the read-only invoker. */
   invokerFor?: (ctx: { mode: 'SCRIPTED' | 'LIVE'; repositoryRoot: string; workflowRunId: string; mastra: unknown; tracingContext: unknown }) => SpecialistInvoker;
+  /**
+   * LIVE: the specialist agents the registration produced, by registry key (see register.ts). The `mastra` a step receives
+   * is a tracing Proxy when observability is on, and so are the agents it returns: their identity is not the registered
+   * agent's, so its model binding cannot be checked through them. Without this, the step's `mastra` is used (tests, plain).
+   */
+  registeredAgent?: AgentLookup;
   log?: (line: string) => void;
 }
 
@@ -111,7 +117,7 @@ export function createEngineeringCouncilWorkflow(deps: CouncilWorkflowDeps = {})
           if (existing && existing.model.provider !== 'ollama') return { status: 'refused' as const, meetingId, mode, resumed: false, reasons: [`model_changed_since_opened: meeting ${meetingId} was opened on ${existing.model.provider}/${existing.model.model}`] };
           const seatIds = (existing?.panel ?? DEFAULT_SEATS).map((s) => s.specialistId);
           // A resumed meeting must finish on the model it was opened with: its record names that model for every turn.
-          const roster = resolveLiveRoster(agentLookup(mastra), d.registry, seatIds, d.env, existing?.model.model);
+          const roster = resolveLiveRoster(deps.registeredAgent ?? agentLookup(mastra), d.registry, seatIds, d.env, existing?.model.model);
           if (!roster.ok) return { status: 'refused' as const, meetingId, mode, resumed: false, reasons: [...roster.reasons] };
         }
         const useExample = !inputData.question;
@@ -154,7 +160,7 @@ export function createEngineeringCouncilWorkflow(deps: CouncilWorkflowDeps = {})
                 return (registered ?? Object.values(createScriptedCouncilAgents(d.registry, [specialistId]))[0]) as unknown as CouncilAgentLike;
               }
               // Re-checked per call: the registered, locally bound agent or a failed call. Never a newly constructed agent.
-              const roster = resolveLiveRoster(agentLookup(mastra), d.registry, [specialistId], d.env, sidecar.model.model);
+              const roster = resolveLiveRoster(deps.registeredAgent ?? agentLookup(mastra), d.registry, [specialistId], d.env, sidecar.model.model);
               if (!roster.ok) throw new Error(roster.reasons.join('; '));
               return roster.agents.get(specialistId)!;
             },

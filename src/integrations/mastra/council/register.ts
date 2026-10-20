@@ -2,7 +2,7 @@ import { registerApiRoute } from '@mastra/core/server';
 import type { Agent } from '@mastra/core/agent';
 import { DEFAULT_SEATS } from '../../../runtime/council/panel.ts';
 import type { SpecialistRegistration } from '../specialist-agents.ts';
-import { engineeringCouncilWorkflow } from './council-workflow.ts';
+import { createEngineeringCouncilWorkflow, type engineeringCouncilWorkflow } from './council-workflow.ts';
 import { councilReadiness } from './readiness.ts';
 import { createScriptedCouncilAgents } from './scripted.ts';
 
@@ -12,7 +12,9 @@ import { createScriptedCouncilAgents } from './scripted.ts';
  */
 export function councilRegistration(specialists: SpecialistRegistration): { agents: Record<string, Agent>; workflow: typeof engineeringCouncilWorkflow } {
   const agents = specialists.registry ? createScriptedCouncilAgents(specialists.registry, DEFAULT_SEATS.map((s) => s.specialistId)) : {};
-  return { agents, workflow: engineeringCouncilWorkflow };
+  // LIVE seats resolve against this registration, the authority on which specialists exist and which model each is bound to.
+  const registeredAgent = (key: string): unknown => (Object.hasOwn(specialists.agents, key) ? specialists.agents[key] : undefined);
+  return { agents, workflow: createEngineeringCouncilWorkflow({ registeredAgent }) };
 }
 
 function liveText(live: { ready: boolean; reasons: readonly string[] }): string {
