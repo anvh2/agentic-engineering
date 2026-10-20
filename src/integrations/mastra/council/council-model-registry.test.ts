@@ -8,6 +8,7 @@ import { findProjectRoot } from '../../../core/paths.ts';
 import { loadPackRegistry } from '../../../runtime/knowledge/packs/loader.ts';
 import { AGENT_ROLES, ModelRegistry, ModelResolver, type ModelRef } from '../../../runtime/models/index.ts';
 import { fakeModelServer } from '../__testing__/fake-model-server.ts';
+import { prepareCouncil } from '../../../runtime/council/run.ts';
 import { registerSpecialists, type SpecialistRegistration } from '../specialist-agents.ts';
 import { createEngineeringCouncilWorkflow, type CouncilWorkflowResult } from './council-workflow.ts';
 import { councilReadiness } from './readiness.ts';
@@ -26,7 +27,7 @@ const local = (modelId: string): ModelRef => ({ providerId: 'ollama', modelId })
 const LIVE_ENV = { AGENTIC_COUNCIL_LIVE: '1', OLLAMA_NUM_CTX: '8192' };
 const probe = async () => ({ id: 'ollama' as const, configured: true, basis: 'probe' as const, detail: 'endpoint reachable and model present', model: 'qwen3:8b' });
 
-function resolverFor(url: string, assignments: Record<string, ModelRef> = {}): ModelResolver {
+function resolverFor(url: string, assignments: Record<string, ModelRef> = {}, defaultModel = 'qwen3:8b'): ModelResolver {
   const reg = new ModelRegistry()
     .addProvider({ providerId: 'ollama', kind: 'local', url, billing: 'local-free', credential: { env: 'OLLAMA_API_KEY', placeholder: 'ollama' }, availability: ok })
     .addProvider({ providerId: 'paidco', kind: 'cloud', url: 'https://paid.invalid/v1', billing: 'metered', credential: { env: 'PAIDCO_API_KEY' }, availability: ok })
@@ -34,19 +35,19 @@ function resolverFor(url: string, assignments: Record<string, ModelRef> = {}): M
     .addModel({ providerId: 'ollama', modelId: 'qwen3:14b', capabilities: caps, availability: ok, roles: AGENT_ROLES })
     .addModel({ providerId: 'ollama', modelId: 'qwen3:gone', capabilities: caps, availability: { state: 'unavailable', reason: 'not installed' }, roles: AGENT_ROLES })
     .addModel({ providerId: 'paidco', modelId: 'frontier-1', capabilities: caps, availability: ok, roles: ['specialist'] });
-  return new ModelResolver(reg, { defaults: { 'coding-worker': local('qwen3:8b'), specialist: local('qwen3:8b') }, assignments }, { OLLAMA_API_KEY: 'loopback', PAIDCO_API_KEY: 'loopback-not-a-credential' });
+  return new ModelResolver(reg, { defaults: { 'coding-worker': local(defaultModel), specialist: local(defaultModel) }, assignments }, { OLLAMA_API_KEY: 'loopback', PAIDCO_API_KEY: 'loopback-not-a-credential' });
 }
 
-async function harness(assignments: Record<string, ModelRef>, reply = 'not a council reply') {
-  const server = await fakeModelServer(reply);
-  const workdir = mkdtempSync(join(tmpdir(), 'council-registry-'));
-  const specialists = registerSpecialists(registry, { resolver: resolverFor(server.url, assignments) });
+async function harness(assignments: Record<string, ModelRef>, opts: { url?: (loopback: string) => string; defaultModel?: string; workdir?: string } = {}) {
+  const server = await fakeModelServer('not a council reply');
+  const workdir = opts.workdir ?? mkdtempSync(join(tmpdir(), 'council-registry-'));
+  const specialists = registerSpecialists(registry, { resolver: resolverFor(opts.url ? opts.url(server.url) : server.url, assignments, opts.defaultModel) });
   const workflow = createEngineeringCouncilWorkflow({ workdir, registry, env: LIVE_ENV, allowedRoots: () => [root], probe });
   const mastra = new Mastra({ agents: specialists.agents, workflows: { engineeringCouncilWorkflow: workflow } });
   const run = async (meetingId: string, limits?: Record<string, number>) =>
     (await (await mastra.getWorkflow('engineeringCouncilWorkflow').createRun()).start({ inputData: { meetingId, mode: 'live', ...(limits ? { limits } : {}) } as never })) as unknown as { status: string; result?: CouncilWorkflowResult };
   const meetings = () => (existsSync(join(workdir, 'council')) ? readdirSync(join(workdir, 'council')).filter((n) => !n.startsWith('council.db')) : []);
-  return { server, specialists, run, meetings, done: async () => { await server.close(); rmSync(workdir, { recursive: true, force: true }); } };
+  return { server, specialists, workdir, run, meetings, done: async () => { await server.close(); rmSync(workdir, { recursive: true, force: true }); } };
 }
 
 async function assertRefusedWithoutCalls(h: Awaited<ReturnType<typeof harness>>, meetingId: string, pattern: RegExp): Promise<void> {
@@ -102,4 +103,41 @@ test('the registered, locally bound agents are the ones that answer: the default
     assert.ok(h.server.seen.every((s) => s.authorization === 'Bearer loopback'), 'the local provider credential, never the paid one');
     for (const seat of r.result!.panel) assert.deepEqual([seat.provider, seat.model], ['ollama', 'qwen3:8b']);
   } finally { await h.done(); }
+});
+
+test('an agent repointed after registration (Mastra __updateModel, e.g. Studio) is refused: the binding alone is not trusted', async () => {
+  const h = await harness({});
+  try {
+    const agent = h.specialists.agents.specialist_security_reviewer as unknown as { __updateModel(o: { model: string }): void; __resetToOriginalModel(): void };
+    agent.__updateModel({ model: 'openai/gpt-4o' });
+    await assertRefusedWithoutCalls(h, 'repointed', /model_changed_after_binding: security-reviewer/);
+    const status = await councilReadiness({ specialists: h.specialists, env: LIVE_ENV, probe: true, probeImpl: probe });
+    assert.match(status.live.reasons.join(), /model_changed_after_binding: security-reviewer/);
+    agent.__resetToOriginalModel();
+    assert.equal((await councilReadiness({ specialists: h.specialists, env: LIVE_ENV, probe: true, probeImpl: probe })).live.ready, true, 'the original model object is accepted again');
+  } finally { await h.done(); }
+});
+
+test('"local" is a checked loopback endpoint, not a provider id: an ollama provider on a remote host is refused', async () => {
+  const h = await harness({}, { url: () => 'https://ollama.example.invalid/v1' });
+  try {
+    await assertRefusedWithoutCalls(h, 'remote-ollama', /model_not_local: architect/);
+  } finally { await h.done(); }
+});
+
+test('a resumed LIVE meeting must finish on the model it was opened with, even after the default model changes', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'council-resume-'));
+  try {
+    // Open (no model call) a LIVE meeting on qwen3:8b, as a server would before it suspended.
+    const opened = await prepareCouncil({ workdir, registry, env: LIVE_ENV, allowedRoots: () => [root], probe }, { meetingId: 'resume-me', mode: 'LIVE', question: 'Which lease length?', repository: root });
+    assert.equal(opened.status, 'ready');
+    // The server restarts with every specialist on qwen3:14b.
+    const h = await harness({}, { defaultModel: 'qwen3:14b', workdir });
+    try {
+      const r = await h.run('resume-me');
+      assert.equal(r.result!.status, 'refused', JSON.stringify(r.result));
+      assert.match(r.result!.reasons.join(), /model_binding_refused: architect is bound to ollama\/qwen3:14b; the LIVE council runs only on ollama\/qwen3:8b/);
+      assert.equal(h.server.seen.length, 0);
+    } finally { await h.server.close(); }
+  } finally { rmSync(workdir, { recursive: true, force: true }); }
 });

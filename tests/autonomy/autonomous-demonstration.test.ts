@@ -117,7 +117,8 @@ async function runScenario(options: { id: string; taskId: string; contents: read
   store.promote();
   const scheduler = new Scheduler({
     store, executor, workspace: new WorktreeManager(join(dir, 'worktrees')), capacity: capacityFor(), allowProviders: [], cancelGraceMs: 2_000,
-    config: { pollMs: 20, workerLeaseTimeoutMs: 1_000, taskTimeoutMs: 120_000, maxCapacityWaitMs: 120_000 },
+    // 1s leases expired mid-attempt under full-suite load; lease expiry is tested in src/runtime/scheduler (store, multi-worker).
+    config: { pollMs: 20, workerLeaseTimeoutMs: 10_000, taskTimeoutMs: 120_000, maxCapacityWaitMs: 120_000 },
   });
   const headBefore = git(repo, 'rev-parse', 'HEAD');
   const summary = await scheduler.run();

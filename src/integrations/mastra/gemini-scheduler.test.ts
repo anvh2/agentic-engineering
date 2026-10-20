@@ -87,7 +87,8 @@ function harness(options: { provider?: string; fake?: Record<string, string>; sc
     capacity: capacityFor(),
     allowProviders: options.schedulerAllow ?? ['gemini:T'],
     cancelGraceMs: 2_000,
-    config: { pollMs: 20, workerLeaseTimeoutMs: 1_000, taskTimeoutMs: 120_000, maxCapacityWaitMs: 120_000 },
+    // 1s leases expired mid-attempt under full-suite load; lease expiry has its own fake-clock tests.
+    config: { pollMs: 20, workerLeaseTimeoutMs: 10_000, taskTimeoutMs: 120_000, maxCapacityWaitMs: 120_000 },
   });
   const records = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
   const execCalls = () => records().filter((r) => r.args?.includes('--prompt')) as { args: string[]; cwd: string; envKeys: string[] }[];

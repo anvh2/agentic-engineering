@@ -107,8 +107,11 @@ export function createEngineeringCouncilWorkflow(deps: CouncilWorkflowDeps = {})
         const d = councilDeps();
         // LIVE runs on the registered roster only. Checked before the meeting exists, so a refusal leaves no state behind.
         if (mode === 'LIVE' && !deps.invokerFor) {
-          const seatIds = (loadSidecar(d.workdir, meetingId)?.panel ?? DEFAULT_SEATS).map((s) => s.specialistId);
-          const roster = resolveLiveRoster(agentLookup(mastra), d.registry, seatIds, d.env);
+          const existing = loadSidecar(d.workdir, meetingId);
+          if (existing && existing.model.provider !== 'ollama') return { status: 'refused' as const, meetingId, mode, resumed: false, reasons: [`model_changed_since_opened: meeting ${meetingId} was opened on ${existing.model.provider}/${existing.model.model}`] };
+          const seatIds = (existing?.panel ?? DEFAULT_SEATS).map((s) => s.specialistId);
+          // A resumed meeting must finish on the model it was opened with: its record names that model for every turn.
+          const roster = resolveLiveRoster(agentLookup(mastra), d.registry, seatIds, d.env, existing?.model.model);
           if (!roster.ok) return { status: 'refused' as const, meetingId, mode, resumed: false, reasons: [...roster.reasons] };
         }
         const useExample = !inputData.question;
@@ -137,19 +140,21 @@ export function createEngineeringCouncilWorkflow(deps: CouncilWorkflowDeps = {})
       const d = councilDeps();
       const sidecar = loadSidecar(d.workdir, inputData.meetingId);
       if (!sidecar) return skip(['sidecar_missing: the meeting was prepared but its sidecar is gone']);
+      // The sidecar, not the step input, says what kind of meeting this is (a step can be re-entered with crafted input).
+      if (sidecar.mode !== inputData.mode) return skip([`mode_mismatch: meeting ${inputData.meetingId} was opened as ${sidecar.mode}`]);
 
       const invoker: SpecialistInvoker = deps.invokerFor
         ? deps.invokerFor({ mode: inputData.mode, repositoryRoot: sidecar.repository, workflowRunId: runId, mastra, tracingContext })
         : createMastraInvoker({
             repositoryRoot: sidecar.repository, workflowRunId: runId, tracingContext,
             resolveAgent: (specialistId) => {
-              if (inputData.mode === 'SCRIPTED') {
+              if (sidecar.mode === 'SCRIPTED') {
                 // Offline seam: a canned model, never a provider. The record says SCRIPTED.
                 const registered = tryGet(mastra, scriptedAgentKey(specialistId));
                 return (registered ?? Object.values(createScriptedCouncilAgents(d.registry, [specialistId]))[0]) as unknown as CouncilAgentLike;
               }
               // Re-checked per call: the registered, locally bound agent or a failed call. Never a newly constructed agent.
-              const roster = resolveLiveRoster(agentLookup(mastra), d.registry, [specialistId], d.env);
+              const roster = resolveLiveRoster(agentLookup(mastra), d.registry, [specialistId], d.env, sidecar.model.model);
               if (!roster.ok) throw new Error(roster.reasons.join('; '));
               return roster.agents.get(specialistId)!;
             },

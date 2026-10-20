@@ -84,8 +84,19 @@ export function createMastraSpecialist(manifest: AgentManifest, options: Special
     tools,
     defaultOptions: { maxSteps: manifest.limits.maxSteps },
   });
-  return resolved ? bindAgent(agent, resolved.binding) : agent;
+  if (!resolved) return agent;
+  boundModels.set(agent, resolved.model);
+  return bindAgent(agent, resolved.binding);
 }
+
+const boundModels = new WeakMap<object, ResolvedModel['model']>();
+
+/**
+ * The exact model configuration object the resolver gave this specialist at construction. Mastra can repoint an agent later
+ * (`Agent.__updateModel`, e.g. Studio's model picker), which replaces `agent.model` but not its binding; a caller that must
+ * run on the bound model compares `agent.model` to this by reference. Undefined for agents built without the resolver.
+ */
+export const boundModelOf = (agent: object | undefined | null): Readonly<ResolvedModel['model']> | undefined => (agent ? boundModels.get(agent) : undefined);
 
 export interface SpecialistRegistration {
   /** Agents keyed for `new Mastra({ agents })`; empty when the pack could not be loaded. */
