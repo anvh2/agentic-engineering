@@ -1,0 +1,123 @@
+{
+  "schema": "agentic.council-sidecar/1",
+  "meetingId": "m12-ts-delegation-live-2",
+  "threadId": "council-thread-m12-ts-delegation-live-2",
+  "sessionId": "council-m12-ts-delegation-live-2",
+  "mode": "LIVE",
+  "question": "Next autonomous self-development milestone (M12): let this runtime's local coding workers implement bounded changes to THIS TypeScript repository. Today the delegation gate in src/runtime/execution/delegation.ts admits only .go files (go/gofmt verification) or .js/.mjs/.cjs files verified by 'npx --no-install jest <test file>'; .ts files are refused, and this repository tests with 'node --test'. Language adapters live in src/runtime/execution/language-adapters.ts; the sandbox is src/runtime/sandbox. Propose: (1) the architecture of a bounded 'ts' language adapter: which files may be delegated, the exact verification argv the sandbox may run (for example node --test on one named test file, and whether tsc --noEmit belongs in the gate), and how safety-critical paths (scheduler, sandbox, verifier, delegation gate, integration, model registry, council) stay non-delegatable so a worker can never edit its own gates; (2) acceptance criteria and negative tests required before any live delegation; (3) the risks you would block on. Constraints: the worker proposes and only the runtime verifier can produce PASS; the sandbox fails closed; no paid providers; widening delegation is an authorization change that needs human approval. Cite only repository files you actually read with your tools.",
+  "focusPaths": [],
+  "repository": "<repository>",
+  "language": "ts",
+  "panel": [
+    {
+      "participantId": "council-architect",
+      "specialistId": "architect",
+      "name": "Architect",
+      "responsibility": "Review a proposed design against the repository's real boundaries, alternatives and failure modes, and record decisions with their rationale.",
+      "chair": true,
+      "manifestVersion": "1.0.0",
+      "manifestDigest": "9d0185f8410e7b0dda079e7aa6cbe742e111bb581f5f4328376a53a3606f5e7f",
+      "tools": [
+        "listFiles",
+        "readFile",
+        "searchFiles",
+        "gitDiff",
+        "gitStatus"
+      ],
+      "skills": [
+        "system-design-review",
+        "architecture-decision-records"
+      ],
+      "taskTypes": [
+        "design",
+        "review",
+        "plan"
+      ],
+      "guidance": [
+        "Review the approved design; do not substitute your own.",
+        "Check dependency direction against actual imports and the repository's stated layering.",
+        "Name at least one rejected alternative and what the chosen design gives up.",
+        "Prefer extending the existing execution path over adding a parallel one."
+      ],
+      "handoff": "State which design questions need the Lead's decision and which evidence would resolve them."
+    },
+    {
+      "participantId": "council-security-reviewer",
+      "specialistId": "security-reviewer",
+      "name": "Security Reviewer",
+      "responsibility": "Find missing or prompt-only controls: untrusted input reaching side effects, caller-asserted identity, check-then-act gaps, replay and credential exposure.",
+      "chair": false,
+      "manifestVersion": "1.0.0",
+      "manifestDigest": "f81acd1f0b69366de378a070958ac87a517d7d296302e90cd0ceb701906aa7ea",
+      "tools": [
+        "listFiles",
+        "readFile",
+        "searchFiles",
+        "gitDiff",
+        "gitStatus"
+      ],
+      "skills": [
+        "threat-modeling",
+        "authorization-boundary-audit",
+        "prompt-injection-defense"
+      ],
+      "taskTypes": [
+        "review",
+        "design"
+      ],
+      "guidance": [
+        "For each side effect, find the authenticated principal and the code that enforces the limit.",
+        "A rule that exists only in a prompt is a finding.",
+        "Report credentials by location only and never repeat their value.",
+        "Describe weaknesses and defenses; do not write exploit code."
+      ],
+      "handoff": "List the controls you could not locate in code and the file where you expected them."
+    },
+    {
+      "participantId": "council-reliability-reviewer",
+      "specialistId": "reliability-reviewer",
+      "name": "Reliability Reviewer",
+      "responsibility": "Review idempotency, retries, leases, cancellation, restart recovery and telemetry for the failure modes a flow can reach.",
+      "chair": false,
+      "manifestVersion": "1.0.0",
+      "manifestDigest": "d1faebe167b0ff01aedebbb836efd20d6655f237b4397566193421e2a11b3452",
+      "tools": [
+        "listFiles",
+        "readFile",
+        "searchFiles",
+        "gitDiff",
+        "gitStatus"
+      ],
+      "skills": [
+        "distributed-systems-invariants",
+        "error-handling-review",
+        "observability-incident-analysis"
+      ],
+      "taskTypes": [
+        "review",
+        "design",
+        "operate"
+      ],
+      "guidance": [
+        "Write each step's postcondition and its state if the process dies right after.",
+        "Find check-then-act sequences and confirm one lock covers both.",
+        "Assume any step can run twice or not at all.",
+        "Do not propose a second scheduler or retry loop."
+      ],
+      "handoff": "Give the concrete interleaving for every race you report."
+    }
+  ],
+  "model": {
+    "provider": "ollama",
+    "model": "qwen3:8b-ctx8192"
+  },
+  "limits": {
+    "maxInvocations": 9,
+    "maxTokens": 120000,
+    "maxModelCallsPerSeat": 4,
+    "maxTokensPerSeat": 40000,
+    "callTimeoutMs": 240000,
+    "turnTimeoutMs": 600000
+  },
+  "openedAt": 1792504287119
+}
