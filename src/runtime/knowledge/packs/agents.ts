@@ -87,7 +87,7 @@ export function renderAgentInstructions(m: AgentManifest): string {
 export type ParsedReport = { ok: true; report: SpecialistReport } | { ok: false; reason: string };
 
 /** Every balanced top-level `{...}` span in `text`, in order. Tolerates prose, code fences and stray braces around the report. */
-function* jsonObjectCandidates(text: string): Generator<string> {
+export function* jsonObjectCandidates(text: string): Generator<string> {
   let i = 0;
   while (i < text.length) {
     const start = text.indexOf('{', i);

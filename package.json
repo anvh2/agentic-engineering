@@ -25,6 +25,7 @@
     "smoke:codex-http": "node --disable-warning=ExperimentalWarning tests/provider-smoke/run-codex-http-smoke.ts",
     "smoke:gemini-http": "node --disable-warning=ExperimentalWarning tests/provider-smoke/run-gemini-http-smoke.ts",
     "engineering": "node --disable-warning=ExperimentalWarning scripts/engineering.ts",
+    "council": "node --disable-warning=ExperimentalWarning scripts/council.ts",
     "pr-router": "node --disable-warning=ExperimentalWarning scripts/pr-router.ts",
     "reliability": "node --disable-warning=ExperimentalWarning tests/reliability/run.ts"
   },
