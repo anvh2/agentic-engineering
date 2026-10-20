@@ -17,6 +17,7 @@ import { createTraceSink, redact, type TraceSink } from './coding-task-trace.ts'
 import { denyAllApprovals, type ApprovalVerifier } from './design-approval.ts';
 import { knowledgeLanguageForFiles, type EngineeringKnowledgeCatalog } from '../knowledge/engineering-knowledge.ts';
 import { LANGUAGE_ADAPTERS, delegatableLanguage } from './language-adapters.ts';
+import { nonDelegatableReasons } from './non-delegatable.ts';
 
 /**
  * Engineering Lead -> local coding worker delegation.
@@ -206,6 +207,9 @@ export async function routeTask(
       if (!parent?.isDirectory()) reasons.push(`${file}: does not exist and its directory does not exist`);
     }
   }
+  // Self-development: in this runtime's own repository the gates, the worker, the oracles and the manifests are never a
+  // worker's mutation scope, whatever language adapter is enabled.
+  reasons.push(...(await nonDelegatableReasons(repoRoot, contract.allowedFiles)));
   for (const file of contract.contextFiles) {
     if (!(await lstat(join(repoRoot, file)).catch(() => undefined))) reasons.push(`context file ${file} does not exist`);
   }
@@ -305,12 +309,15 @@ export interface DelegateOptions {
 
 /**
  * Runs an already-cleared delegation through the runtime-owned runner (the ONE source of coding execution
- * semantics), restores the tree on anything but PASS, and builds the result/escalation. Does not re-gate:
- * callers route first (routeTask). Used by delegateCodingTask and by the Mastra coding-task-workflow.
+ * semantics), restores the tree on anything but PASS, and builds the result/escalation. Callers route first (routeTask);
+ * the one check repeated here is the self-development deny-list, because a workflow step can be re-entered with input that
+ * never passed the routing step. Used by delegateCodingTask and by the Mastra coding-task-workflow.
  */
 export async function executeDelegation(requestInput: DelegationRequest, options: DelegateOptions): Promise<EngineeringResult> {
   const { repoRoot } = options;
   const request = delegationRequestSchema.parse(requestInput);
+  const protectedFiles = await nonDelegatableReasons(repoRoot, request.contract.allowedFiles);
+  if (protectedFiles.length) return { taskId: request.contract.taskId, status: 'KEPT_BY_CLAUDE', reasons: protectedFiles, diff: '', restored: false };
   // Only maxAttempts is read here, but it is clamped to the language ceiling like every other permission.
   const policy = effectivePolicy(languageOf(request.contract.allowedFiles), options.policy);
   const taskId = request.contract.taskId;
