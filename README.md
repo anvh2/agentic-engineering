@@ -17,7 +17,7 @@ Human operator (scope, budgets, approvals)
   -> independent review/acceptance -> audited integration
 ```
 
-Mastra, Ollama, Qwen, Claude and other providers are replaceable adapters, not the source of execution authority. Core packages live in `src/runtime`, `src/lead`, `src/workers` and `src/integrations`. See [runtime architecture](docs/architecture/runtime.md).
+Mastra, Ollama, Qwen, Claude and other providers are replaceable adapters, not the source of execution authority. Core packages live in `src/runtime`, `src/lead`, `src/workers` and `src/integrations`. See [runtime architecture](docs/architecture/runtime.md) and [model registry](docs/architecture/model-registry.md) for how agents are bound to models.
 
 ## Requirements and limitations
 

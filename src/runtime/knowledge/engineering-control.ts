@@ -15,6 +15,7 @@ import { recommendActions, type Recommendation } from './engineering-learning.ts
 import { skillHealth, type SkillHealth, type SkillRun } from './engineering-skill-health.ts';
 import type { Trial } from './engineering-eval.ts';
 import { negotiate } from './packs/agents.ts';
+import { ollamaSettings } from '../models/index.ts';
 import type { PackRegistry } from './packs/loader.ts';
 import { activeSkillDigests, evaluateSkillScenarios, promotedDigestOf, type ScenarioReport } from './packs/skills.ts';
 
@@ -62,10 +63,10 @@ export interface ReportInput {
 }
 
 export function providerReadiness(env: NodeJS.ProcessEnv = process.env): readonly ProviderReadiness[] {
-  const ctx = Number(env.OLLAMA_NUM_CTX);
+  const { contextTokens: ctx, modelId } = ollamaSettings(env);
   const url = env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
   return [
-    { id: 'ollama', configured: true, basis: 'environment', detail: `endpoint ${url} (not contacted)`, model: env.OLLAMA_MODEL ?? 'qwen3:8b', ...(Number.isSafeInteger(ctx) && ctx > 0 ? { declaredContextTokens: ctx } : {}) },
+    { id: 'ollama', configured: true, basis: 'environment', detail: `endpoint ${url} (not contacted)`, model: modelId, ...(ctx !== undefined ? { declaredContextTokens: ctx } : {}) },
     { id: 'claude', configured: false, basis: 'not-checked', detail: 'Claude Code is the Engineering Lead harness; availability is not probed by this report' },
     { id: 'codex', configured: false, basis: 'not-checked', detail: 'Codex readiness is checked by the provider registry when a task selects it; not probed here' },
   ];
@@ -80,7 +81,7 @@ export async function probeOllama(env: NodeJS.ProcessEnv = process.env, fetchImp
   try {
     // redirect: 'error' keeps the probe on the loopback address: a redirect to another host is a failure, never followed.
     const res = await fetchImpl(`${base.replace(/\/$/, '')}/api/tags`, { signal: AbortSignal.timeout(timeoutMs), redirect: 'error' });
-    const model = env.OLLAMA_MODEL ?? 'qwen3:8b';
+    const model = ollamaSettings(env).modelId;
     if (!res.ok) return { id: 'ollama', configured: true, basis: 'probe', detail: `endpoint answered HTTP ${res.status}`, model };
     let body: { models?: { name?: string }[] };
     try { body = (await res.json()) as { models?: { name?: string }[] }; } catch { return { id: 'ollama', configured: false, basis: 'probe', detail: 'endpoint answered with something that is not Ollama\'s model list', model }; }
@@ -151,17 +152,17 @@ export function buildEngineeringReport(input: ReportInput): EngineeringReport {
       return { id: s.id, version: s.version, category: s.category, state, bytes: Buffer.byteLength(JSON.stringify(s)) };
     });
     for (const id of active.keys()) if (!registry.skillById.has(id)) orphaned.push(id);
-    const ctx = Number(env.OLLAMA_NUM_CTX);
+    const ctx = ollamaSettings(env).contextTokens;
     agents = registry.agents.map((a) => {
       const pool = [...a.skills, ...a.optionalSkills];
-      const fit = negotiate(a, 'mastra', 'ollama', Number.isSafeInteger(ctx) && ctx > 0 ? ctx : undefined, { requireKnownContext: true });
+      const fit = negotiate(a, 'mastra', 'ollama', ctx, { requireKnownContext: true });
       return { id: a.id, version: a.version, name: a.name, tools: [...a.tools], taskTypes: [...a.taskTypes], languages: [...a.languages], skillPool: pool.length, skillsActive: pool.filter((id) => active.get(id) === promotedDigestOf(registry.skillById.get(id)!)).length, mastraOllama: fit.supported ? 'supported' : fit.reason };
     });
     if (active.size === 0) issues.push({ code: 'no_promoted_skills', level: 'warning', detail: 'No skills are promoted: specialists and workers run without skill guidance. Promotion needs a signed grant.' });
     if (stale.length) issues.push({ code: 'promoted_skill_stale', level: 'warning', detail: `Manifest changed after promotion (not selected until re-promoted): ${stale.join(', ')}` });
     if (orphaned.length) issues.push({ code: 'promoted_skill_orphaned', level: 'warning', detail: `Promoted but absent from the pack: ${orphaned.join(', ')}` });
     for (const a of agents) if (a.skillsActive === 0 && active.size > 0) issues.push({ code: 'agent_without_active_skills', level: 'info', detail: a.id });
-    if (!(Number.isSafeInteger(ctx) && ctx > 0)) issues.push({ code: 'model_context_undeclared', level: 'warning', detail: 'OLLAMA_NUM_CTX is not set: specialists are refused on the Mastra harness until the local model\'s context window is declared (they need at least 8192 tokens)' });
+    if (ctx === undefined) issues.push({ code: 'model_context_undeclared', level: 'warning', detail: 'OLLAMA_NUM_CTX is not set: specialists are refused on the Mastra harness until the local model\'s context window is declared (they need at least 8192 tokens)' });
     else for (const a of agents) if (a.mastraOllama !== 'supported') issues.push({ code: 'agent_unsupported_on_configured_model', level: 'warning', detail: `${a.id}: ${a.mastraOllama}` });
   }
 

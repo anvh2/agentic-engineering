@@ -46,7 +46,7 @@ export type Negotiation = Readonly<{ supported: true } | { supported: false; rea
  * With `requireKnownContext`, an undeclared context window is itself a refusal: the check is "does the prompt fit", and a
  * window nobody declared cannot be assumed to be large enough (local models often default to a few thousand tokens).
  */
-export function negotiate(m: AgentManifest, harness: Harness, provider: 'ollama' | 'claude' | 'codex', contextTokens?: number, options: { requireKnownContext?: boolean } = {}): Negotiation {
+export function negotiate(m: AgentManifest, harness: Harness, provider: string, contextTokens?: number, options: { requireKnownContext?: boolean } = {}): Negotiation {
   if (!m.compatibility.harnesses.includes(harness)) return { supported: false, reason: `${m.id} does not declare support for harness ${harness}` };
   const wanted = m.providers.find((p) => p.id === provider);
   if (!wanted) return { supported: false, reason: `${m.id} does not declare support for provider ${provider}` };
