@@ -13,6 +13,8 @@ const message = z.object({
   type: z.enum(['PROPOSAL', 'QUESTION', 'OBJECTION', 'RESPONSE', 'DECISION', 'ANSWER', 'SUPPORT', 'COMMENT', 'WITHDRAWAL', 'CORRECTION', 'PASS']),
   text: z.string(), replyTo: id.nullable(), references: z.array(ref),
   invocationId: id.nullable(), traceUrl: z.string().nullable(),
+  /** The Mastra trace id the invocation reported (an id to look up, not a link). */
+  traceId: z.string().nullable().default(null),
   objectionState: z.enum(['OPEN', 'RESOLVED', 'WITHDRAWN', 'UNKNOWN']).nullable(),
   /** Corrections and withdrawals append; the original message is never rewritten. */
   correctedBy: z.array(id).default([]), withdrawnBy: id.nullable().default(null),
@@ -43,6 +45,15 @@ export const collaborationSchema = z.object({
     tokensUsed: z.number().nonnegative().nullable().default(null),
     /** The meeting record's coverage of the event log; null while the session is open (no record exists yet). */
     provenance: z.object({ throughSeq: z.number().int().nonnegative(), throughHash: z.string(), recordHash: z.string(), messageCount: z.number().int().nonnegative() }).nullable().default(null),
+    /** Council meetings only: what the council recorded, shown only after it cross-checked against the verified events. */
+    council: z.object({
+      meetingId: id, mode: z.enum(['LIVE', 'SCRIPTED']), model: z.string(), recordPath: z.string(),
+      workflowRuns: z.array(z.object({ runId: id, url: z.string() })), traceIds: z.array(z.string()),
+      modelCalls: z.number().int().nonnegative(), toolCalls: z.array(z.object({ tool: z.string(), count: z.number().int().nonnegative() })),
+      integrity: z.literal('VERIFIED'),
+    }).nullable().default(null),
+    /** Why the council's own claims are not shown for this meeting (missing or mismatching council record). */
+    councilIssue: z.string().nullable().default(null),
   })),
 });
 export type Collaboration = z.infer<typeof collaborationSchema>;

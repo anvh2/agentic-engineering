@@ -35,6 +35,8 @@ Object.assign(env, {
   TURSO_DATABASE_URL: `file:${resolve(cwd, 'mastra.db')}`,
 });
 if (process.env.CONTROL_CENTER_CAPACITY_DB) env.CONTROL_CENTER_CAPACITY_DB = process.env.CONTROL_CENTER_CAPACITY_DB;
+// Read-only: another checkout's council records (<workdir>/council), e.g. the worktree where a council ran.
+if (process.env.CONTROL_CENTER_COUNCIL_WORKDIR) env.CONTROL_CENTER_COUNCIL_WORKDIR = resolve(process.env.CONTROL_CENTER_COUNCIL_WORKDIR);
 console.log(`Studio Organization preview: http://127.0.0.1:${port}/organization`);
 console.log('Scheduler reads are authoritative; preview Mastra trace storage is isolated and may not contain prior traces.');
 const child = spawn(process.execPath, [runtime], { cwd, env, stdio: 'inherit' });

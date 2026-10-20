@@ -21,3 +21,13 @@ test('evidence links never execute scripts or leak embedded URL credentials', ()
   assert.equal(safeReference('/observability'), '/observability');
   assert.equal(safeReference('https://example.com/evidence'), 'https://example.com/evidence');
 });
+test('council meetings: LIVE/SCRIPTED is a closed set, an unverified record carries no council claims', () => {
+  const fixture = structuredClone(collaborationFixture);
+  const council = { meetingId: 'm12', mode: 'LIVE', model: 'ollama/qwen3:8b-ctx8192', recordPath: '.workdir/council/m12/record.md', workflowRuns: [{ runId: 'c895fd2e', url: 'http://127.0.0.1:4111/workflows/engineering-council-workflow/graph/c895fd2e' }], traceIds: ['95cac200f1a7996601deb3c1b3b513d8'], modelCalls: 7, toolCalls: [{ tool: 'searchFiles', count: 2 }], integrity: 'VERIFIED' };
+  const live = collaborationSchema.parse({ ...fixture, meetings: [{ ...fixture.meetings[0], council }] });
+  assert.equal(live.meetings[0].council?.mode, 'LIVE');
+  assert.equal(live.meetings[0].councilIssue, null);
+  assert.equal(collaborationSchema.parse(fixture).meetings[0].council, null, 'scheduler meetings carry no council block');
+  assert.throws(() => collaborationSchema.parse({ ...fixture, meetings: [{ ...fixture.meetings[0], council: { ...council, mode: 'PAID' } }] }));
+  assert.throws(() => collaborationSchema.parse({ ...fixture, meetings: [{ ...fixture.meetings[0], council: { ...council, integrity: 'UNCHECKED' } }] }));
+});

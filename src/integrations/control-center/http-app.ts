@@ -4,12 +4,18 @@ import { redact } from '../../runtime/execution/coding-task-trace.ts';
 import { parseLastEventId } from '../../runtime/collaboration/read-model.ts';
 import type { Reader } from './adapter.ts';
 import { isCollaborationId, type CollaborationReader } from './collaboration-adapter.ts';
+import type { AgentRoster } from './agents-adapter.ts';
+import type { CouncilReader } from './council-adapter.ts';
 
 type Send = (name: string, data: unknown, id?: string) => void;
 
 /** Shared read-only transport. No runtime, scheduler or provider is constructed here. */
 export function createControlCenterApp(options: {
   reader: Reader; assetsDir: string; pollMs?: number; embedded?: boolean; collaboration?: CollaborationReader;
+  /** Council meetings: the same verified Core B reader over the council's own database, plus its derived records. */
+  council?: CouncilReader;
+  /** The agents this process registered, with their model bindings. */
+  agents?: () => AgentRoster;
 }) {
   const clients = new Set<() => void>();
   const wire = (value: unknown) => redact(JSON.stringify(value)).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
@@ -62,7 +68,7 @@ export function createControlCenterApp(options: {
    * bodies: clients re-read the verified snapshot. A reconnect resumes after Last-Event-ID; a cursor that is not a sequence
    * number or lies beyond the store gets `reset`, never a guessed position.
    */
-  function collaborationStream(request: Request, url: URL, collaboration: CollaborationReader): Response {
+  function collaborationStream(request: Request, url: URL, collaboration: Pick<CollaborationReader, 'cursor' | 'feed'>): Response {
     return stream(request, send => {
       const resume = request.headers.get('last-event-id') ?? url.searchParams.get('cursor');
       let cursor: number | null = null;
@@ -117,6 +123,15 @@ export function createControlCenterApp(options: {
         try { id = decodeURIComponent(item[2]); } catch { return json(400, { error: 'Invalid id' }); }
         if (!isCollaborationId(id)) return json(400, { error: 'Invalid id' });
         return collaborationRead(() => (item[1] === 'threads' ? collaboration.thread(id) : collaboration.session(id)));
+      }
+      if (url.pathname === `${api}/council`) {
+        if (!options.council) return json(200, { availability: 'NOT_AVAILABLE', source: 'unavailable', cursor: null, threads: [], meetings: [], reason: 'No council reader is configured for this Gateway.' });
+        return collaborationRead(() => options.council!.snapshot());
+      }
+      if (url.pathname === `${api}/council/events`) return options.council ? collaborationStream(request, url, options.council) : json(404, { error: 'Not found' });
+      if (url.pathname === `${api}/agents`) {
+        if (!options.agents) return json(200, { source: 'unavailable', agents: [], counts: { registered: 0, refused: 0, unavailable: 0 }, error: 'This Gateway is not running inside the Mastra server; no registration to read.' });
+        try { return json(200, options.agents()); } catch { return json(503, { error: 'Agent registration unavailable' }); }
       }
       if (url.pathname === `${api}/snapshot`) return json(200, options.reader.snapshot(objectiveId));
       if (url.pathname === `${api}/events`) {
