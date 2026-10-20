@@ -49,8 +49,10 @@ export const collaborationSchema = z.object({
     council: z.object({
       meetingId: id, mode: z.enum(['LIVE', 'SCRIPTED']), model: z.string(), recordPath: z.string(),
       workflowRuns: z.array(z.object({ runId: id, url: z.string() })), traceIds: z.array(z.string()),
-      modelCalls: z.number().int().nonnegative(), toolCalls: z.array(z.object({ tool: z.string(), count: z.number().int().nonnegative() })),
-      integrity: z.literal('VERIFIED'),
+      modelCalls: z.number().int().nonnegative().nullable(), failedCalls: z.number().int().nonnegative().nullable(),
+      toolCalls: z.array(z.object({ tool: z.string(), count: z.number().int().nonnegative() })).nullable(),
+      /** RECORD_VERIFIED: runs/calls/traces come from an intact council record matching the verified events. OPEN_UNRECORDED: none yet. */
+      integrity: z.enum(['RECORD_VERIFIED', 'OPEN_UNRECORDED']),
     }).nullable().default(null),
     /** Why the council's own claims are not shown for this meeting (missing or mismatching council record). */
     councilIssue: z.string().nullable().default(null),

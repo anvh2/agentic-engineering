@@ -14,7 +14,7 @@ The adapter was also run, read-only, over Session B's council store (`../agentic
 | File | Shows |
 | --- | --- |
 | `organization-agents.png` | Agents tab: registered agents, kinds, status, model binding, tools |
-| `organization-council-live.png` | Council tab, LIVE meeting: model, calls, tool use, record path, integrity, workflow run, trace, outcome, agenda, participants, budgets |
+| `organization-council-live.png` | Council tab, LIVE meeting: model, calls (failed separately), tool use, record path, record-integrity check, workflow run and trace (from the verified record), outcome, agenda, participants, budgets |
 | `organization-council-scripted.png` | Council tab, SCRIPTED meeting labelled as canned replies |
 
 The existing browser tests passed on the same runtime and build: `studio.test.mjs` 1/1 (Organization, Discussions, Meetings, Studio navigation) and `npm run test:ui` 3/3.

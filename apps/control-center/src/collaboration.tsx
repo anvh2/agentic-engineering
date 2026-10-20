@@ -40,12 +40,14 @@ function CouncilFacts({ meeting }: { meeting: Collaboration['meetings'][number] 
     <p className="notice">{c.mode === 'LIVE'
       ? <><span className="badge">LIVE</span> Replies were produced by the local model {c.model}. Advisory only; human approval pending.</>
       : <><span className="badge">SCRIPTED</span> Canned replies ({c.model}): this proves wiring and rules, not model output.</>}</p>
-    <dl className="details">
-      <div><dt>Model calls</dt><dd>{c.modelCalls}</dd></div>
-      <div><dt>Tool calls</dt><dd>{c.toolCalls.length ? c.toolCalls.map(t => `${t.tool} ×${t.count}`).join(', ') : 'none'}</dd></div>
-      <div><dt>Council record</dt><dd><code>{c.recordPath}</code> · <code>npm run council -- show {c.meetingId}</code></dd></div>
-      <div><dt>Integrity</dt><dd>{c.integrity}: record matches the verified event log</dd></div>
-    </dl>
+    {c.integrity === 'OPEN_UNRECORDED'
+      ? <p className="muted">OPEN: no council record yet. Mode and model are checked against the verified events; workflow runs and call counts appear once the meeting concludes and its record verifies.</p>
+      : <dl className="details">
+        <div><dt>Model calls</dt><dd>{c.modelCalls ?? 'UNKNOWN'}{c.failedCalls ? ` (${c.failedCalls} failed, no reply)` : ''}</dd></div>
+        <div><dt>Tool calls</dt><dd>{c.toolCalls?.length ? c.toolCalls.map(t => `${t.tool} ×${t.count}`).join(', ') : 'none'}</dd></div>
+        <div><dt>Council record</dt><dd><code>{c.recordPath}</code> · <code>npm run council -- show {c.meetingId}</code></dd></div>
+        <div><dt>Integrity</dt><dd>Council record intact and covering exactly the verified events (#{meeting.provenance?.throughSeq ?? '?'})</dd></div>
+      </dl>}
     <div className="source-links">{c.workflowRuns.map(r => <Reference key={r.runId} url={r.url} label={`Mastra workflow run ${r.runId}`} />)}</div>
     <p className="muted">Mastra trace{c.traceIds.length === 1 ? '' : 's'}: {c.traceIds.length ? c.traceIds.map(t => <code key={t}>{t} </code>) : 'none recorded'}</p>
   </section>;

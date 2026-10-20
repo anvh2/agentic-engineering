@@ -58,6 +58,7 @@ test('actual Studio: Organization shows registered agents with model bindings an
       for (const run of live.council.workflowRuns) assert.equal(await inspector.getByRole('link', { name: `Mastra workflow run ${run.runId}` }).getAttribute('href'), run.url);
       for (const trace of live.council.traceIds) await inspector.getByText(trace, { exact: false }).first().waitFor();
       await inspector.getByText(live.council.recordPath).waitFor();
+      await inspector.getByText(/Council record intact and covering exactly the verified events/).waitFor();
       assert.ok(await inspector.getByText(/^PROPOSAL · /).count() >= 3, 'independent proposals are shown');
       assert.ok(await inspector.getByText(/^OBJECTION · /).count() >= 1, 'objections are shown');
       await inspector.getByText(/grants no authority/).first().waitFor();
