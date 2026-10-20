@@ -87,6 +87,43 @@ describe('self-development: the runtime never delegates its own gates', () => {
   });
 });
 
+describe('review findings (PR #58)', () => {
+  let root: string;
+  beforeEach(async () => { root = await repo('agentic-engineering', ['src/runtime/sandbox', 'tools/calc']); });
+  afterEach(() => rm(root, { recursive: true, force: true }));
+
+  it('P1: a subdirectory of the runtime handed in as the repository is still the runtime', async () => {
+    assert.match((await nonDelegatableReasons(join(root, 'src'), ['runtime/sandbox/calc.go'])).join(), /non-delegatable in the runtime's own repository \(src\/\)/);
+    assert.equal((await routeTask(request('runtime/sandbox/calc.go', 'runtime/sandbox'), join(root, 'src'))).route, 'claude');
+    assert.deepEqual(await routeTask(request('calc/calc.go', 'calc'), join(root, 'tools')), { route: 'qwen' }, 'tools/ stays delegatable from a subdirectory too');
+  });
+
+  it('a target repository whose worktree lives under the runtime (.workdir/worktrees) is judged by its own identity', async () => {
+    const nested = join(root, '.workdir', 'worktrees', 'b1', 't1');
+    await mkdir(join(nested, 'calc'), { recursive: true });
+    await writeFile(join(nested, 'package.json'), JSON.stringify({ name: 'some-product' }));
+    await writeFile(join(nested, 'go.mod'), 'module example.com/p\n\ngo 1.22\n');
+    await writeFile(join(nested, 'calc', 'calc.go'), STUB);
+    await writeFile(join(nested, 'calc', 'calc_test.go'), TEST_SRC);
+    git(nested, 'init', '-q'); git(nested, 'add', '-A'); git(nested, 'commit', '-q', '-m', 'init');
+    assert.deepEqual(await nonDelegatableReasons(nested, ['calc/calc.go']), []);
+    assert.deepEqual(await routeTask(request('calc/calc.go', 'calc'), nested), { route: 'qwen' });
+  });
+
+  it('a ".." segment is refused even when its parent does not exist', async () => {
+    assert.match((await nonDelegatableReasons(root, ['tools/../src/nonexistent/x.go'])).join(), /"\.\." segments are not delegated/);
+  });
+
+  it('re-entry past routing repeats every static scope check, not only the deny-list', async () => {
+    const other = await repo('some-product', ['calc']);
+    try {
+      const result = await executeDelegation(request('calc/calc_test.go', 'calc'), { repoRoot: other, worker: neverCalled });
+      assert.equal(result.status, 'KEPT_BY_CLAUDE');
+      assert.match(result.reasons!.join(), /test files are the oracle/);
+    } finally { await rm(other, { recursive: true, force: true }); }
+  });
+});
+
 describe('other target repositories are unaffected', () => {
   it('the same paths in a repository that is not this runtime are delegated as before', async () => {
     const root = await repo('some-product', ['src/runtime/sandbox']);

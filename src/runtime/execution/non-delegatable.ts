@@ -1,5 +1,7 @@
+import { execFile } from 'node:child_process';
 import { readFile, realpath } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
+import { promisify } from 'node:util';
 import { isProjectManifest } from '../../core/paths.ts';
 
 /**
@@ -30,31 +32,51 @@ function matches(repoRelative: string): string | undefined {
   return NON_DELEGATABLE_FILES.find((f) => p === f.toLowerCase());
 }
 
-/** True when `repoRoot` is a checkout of this runtime (identified the way findProjectRoot identifies it: package.json name). */
-export async function isRuntimeRepository(repoRoot: string): Promise<boolean> {
+/**
+ * The root of this runtime's checkout when `repoRoot` is that checkout or a directory inside it; null otherwise.
+ *
+ * The repository is the git top-level of `repoRoot`, not the nearest ancestor with a package.json: a subdirectory of the runtime
+ * handed in as the "repository" resolves to the runtime, while a target repository's worktree that the scheduler keeps under the
+ * runtime's `.workdir/worktrees/` is its own top-level and is judged by its own package.json. Outside git, `repoRoot` itself.
+ */
+export async function runtimeRootOf(repoRoot: string): Promise<string | null> {
+  const real = await realpath(repoRoot).catch(() => null);
+  if (!real) return null;
+  const top = await promisify(execFile)('git', ['rev-parse', '--show-toplevel'], { cwd: real, timeout: 10_000 })
+    .then(({ stdout }) => realpath(stdout.trim()), () => real);
   try {
-    return isProjectManifest(JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8')));
+    return isProjectManifest(JSON.parse(await readFile(join(top, 'package.json'), 'utf8'))) ? top : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
+/** True when `repoRoot` is this runtime's checkout or lies inside one. */
+export async function isRuntimeRepository(repoRoot: string): Promise<boolean> {
+  return (await runtimeRootOf(repoRoot)) !== null;
+}
+
+const outside = (rel: string) => rel === '..' || rel.startsWith(`..${sep}`);
+
 /**
- * Why each allowed file is non-delegatable in this runtime's own repository; empty when the repository is another one or
- * every file is outside the protected set. A parent directory that cannot be resolved is not a reason here (the gate's
- * existence checks report it); a parent that resolves outside the repository is.
+ * Why each allowed file is non-delegatable when the repository is (inside) this runtime's checkout; empty for any other
+ * repository. Paths are judged relative to the runtime root, both literally and with the parent directory's symlinks resolved;
+ * a `..` segment is refused outright. A parent that cannot be resolved is not a reason here (the gate's existence checks report
+ * it); one that resolves outside the runtime is.
  */
 export async function nonDelegatableReasons(repoRoot: string, allowedFiles: readonly string[]): Promise<string[]> {
-  if (!(await isRuntimeRepository(repoRoot))) return [];
-  const root = await realpath(repoRoot).catch(() => repoRoot);
+  const root = await runtimeRootOf(repoRoot);
+  if (!root) return [];
+  const repo = await realpath(repoRoot);
   const reasons: string[] = [];
   for (const file of allowedFiles) {
-    const literal = matches(file);
+    if (file.split(/[\\/]+/).includes('..')) { reasons.push(`${file}: ".." segments are not delegated in the runtime's own repository`); continue; }
+    const literal = matches(relative(root, join(repo, file)));
     if (literal) { reasons.push(`${file}: non-delegatable in the runtime's own repository (${literal}); a worker never edits the runtime that judges it`); continue; }
-    const parent = await realpath(join(repoRoot, dirname(file))).catch(() => undefined);
+    const parent = await realpath(join(repo, dirname(file))).catch(() => undefined);
     if (!parent) continue;
     const rel = relative(root, parent);
-    if (rel === '..' || rel.startsWith(`..${sep}`)) { reasons.push(`${file}: its directory resolves outside the repository`); continue; }
+    if (outside(rel)) { reasons.push(`${file}: its directory resolves outside the repository`); continue; }
     const resolved = matches(join(rel, file.split(/[\\/]/).at(-1) ?? ''));
     if (resolved) reasons.push(`${file}: resolves through a symlink to a non-delegatable path (${resolved})`);
   }

@@ -140,6 +140,29 @@ export async function validateJsVerification(command: string[], contract: Coding
   return reasons;
 }
 
+/**
+ * The static checks on a worker's mutation scope: extension within the language ceiling, never a test file (the oracle), never a
+ * symlink, an existing parent, and, in this runtime's own repository, never a non-delegatable path. Run by routeTask and again
+ * by executeDelegation, which a re-entered workflow step can reach without routing.
+ */
+async function fileScopeReasons(allowedFiles: readonly string[], repoRoot: string, policy: DelegationPolicy): Promise<string[]> {
+  const reasons: string[] = [];
+  for (const file of allowedFiles) {
+    if (!policy.allowedExtensions.includes(extname(file))) reasons.push(`${file}: extension not in ${policy.allowedExtensions.join(', ')}`);
+    if (TEST_FILE.test(file)) reasons.push(`${file}: test files are the oracle and can never be worker-editable`);
+    const info = await lstat(join(repoRoot, file)).catch(() => undefined);
+    if (info?.isSymbolicLink()) reasons.push(`${file}: symlinks are not allowed`);
+    if (!info) {
+      const parent = await lstat(join(repoRoot, dirname(file))).catch(() => undefined);
+      if (!parent?.isDirectory()) reasons.push(`${file}: does not exist and its directory does not exist`);
+    }
+  }
+  // Self-development: in this runtime's own repository the gates, the worker, the oracles and the manifests are never a
+  // worker's mutation scope, whatever language adapter is enabled.
+  reasons.push(...(await nonDelegatableReasons(repoRoot, allowedFiles)));
+  return reasons;
+}
+
 export type Route = { route: 'qwen' } | { route: 'claude'; reasons: string[] };
 
 /** Deterministic gate. Anything it cannot positively clear stays with Claude. */
@@ -197,19 +220,7 @@ export async function routeTask(
     reasons.push('constraints must state that tests are immutable');
   }
 
-  for (const file of contract.allowedFiles) {
-    if (!policy.allowedExtensions.includes(extname(file))) reasons.push(`${file}: extension not in ${policy.allowedExtensions.join(', ')}`);
-    if (TEST_FILE.test(file)) reasons.push(`${file}: test files are the oracle and can never be worker-editable`);
-    const info = await lstat(join(repoRoot, file)).catch(() => undefined);
-    if (info?.isSymbolicLink()) reasons.push(`${file}: symlinks are not allowed`);
-    if (!info) {
-      const parent = await lstat(join(repoRoot, dirname(file))).catch(() => undefined);
-      if (!parent?.isDirectory()) reasons.push(`${file}: does not exist and its directory does not exist`);
-    }
-  }
-  // Self-development: in this runtime's own repository the gates, the worker, the oracles and the manifests are never a
-  // worker's mutation scope, whatever language adapter is enabled.
-  reasons.push(...(await nonDelegatableReasons(repoRoot, contract.allowedFiles)));
+  reasons.push(...(await fileScopeReasons(contract.allowedFiles, repoRoot, policy)));
   for (const file of contract.contextFiles) {
     if (!(await lstat(join(repoRoot, file)).catch(() => undefined))) reasons.push(`context file ${file} does not exist`);
   }
@@ -310,16 +321,16 @@ export interface DelegateOptions {
 /**
  * Runs an already-cleared delegation through the runtime-owned runner (the ONE source of coding execution
  * semantics), restores the tree on anything but PASS, and builds the result/escalation. Callers route first (routeTask);
- * the one check repeated here is the self-development deny-list, because a workflow step can be re-entered with input that
- * never passed the routing step. Used by delegateCodingTask and by the Mastra coding-task-workflow.
+ * the static mutation-scope checks (fileScopeReasons) are repeated here, because a workflow step can be re-entered with input
+ * that never passed the routing step. Used by delegateCodingTask and by the Mastra coding-task-workflow.
  */
 export async function executeDelegation(requestInput: DelegationRequest, options: DelegateOptions): Promise<EngineeringResult> {
   const { repoRoot } = options;
   const request = delegationRequestSchema.parse(requestInput);
-  const protectedFiles = await nonDelegatableReasons(repoRoot, request.contract.allowedFiles);
-  if (protectedFiles.length) return { taskId: request.contract.taskId, status: 'KEPT_BY_CLAUDE', reasons: protectedFiles, diff: '', restored: false };
-  // Only maxAttempts is read here, but it is clamped to the language ceiling like every other permission.
+  // Only maxAttempts is read from the policy below, but it is clamped to the language ceiling like every other permission.
   const policy = effectivePolicy(languageOf(request.contract.allowedFiles), options.policy);
+  const scope = await fileScopeReasons(request.contract.allowedFiles, repoRoot, policy);
+  if (scope.length) return { taskId: request.contract.taskId, status: 'KEPT_BY_CLAUDE', reasons: scope, diff: '', restored: false };
   const taskId = request.contract.taskId;
   const trace =
     options.trace ??
