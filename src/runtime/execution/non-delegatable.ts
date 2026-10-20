@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process';
 import { readFile, realpath } from 'node:fs/promises';
-import { dirname, join, relative, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { promisify } from 'node:util';
-import { isProjectManifest } from '../../core/paths.ts';
+import { findProjectRoot, isProjectManifest } from '../../core/paths.ts';
 
 /**
  * Paths a coding worker may never be given when the target repository is this runtime itself (self-development).
@@ -42,14 +42,22 @@ function matches(repoRelative: string): string | undefined {
 export async function runtimeRootOf(repoRoot: string): Promise<string | null> {
   const real = await realpath(repoRoot).catch(() => null);
   if (!real) return null;
-  const top = await promisify(execFile)('git', ['rev-parse', '--show-toplevel'], { cwd: real, timeout: 10_000 })
-    .then(({ stdout }) => realpath(stdout.trim()), () => real);
-  try {
-    return isProjectManifest(JSON.parse(await readFile(join(top, 'package.json'), 'utf8'))) ? top : null;
-  } catch {
-    return null;
-  }
+  // GIT_DIR / GIT_WORK_TREE / GIT_CEILING_DIRECTORIES in the environment would answer for another repository; they are dropped.
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_')));
+  const top = await promisify(execFile)('git', ['rev-parse', '--show-toplevel'], { cwd: real, timeout: 10_000, env })
+    .then(({ stdout }) => realpath(stdout.trim())).catch(() => null);
+  if (top && (await isRuntimeCheckout(top))) return top;
+  // Fail closed when git cannot answer or answers with a nested repository: a directory inside this runtime's checkout is the
+  // runtime, except its .workdir, where the scheduler keeps target repositories' worktrees (judged by their own identity above).
+  const ancestor = findProjectRoot(real);
+  if (ancestor && !isInside(join(ancestor, '.workdir'), real)) return ancestor;
+  return null;
 }
+
+async function isRuntimeCheckout(dir: string): Promise<boolean> {
+  try { return isProjectManifest(JSON.parse(await readFile(join(dir, 'package.json'), 'utf8'))); } catch { return false; }
+}
+const isInside = (parent: string, child: string): boolean => { const rel = relative(parent, child); return rel === '' || (!outside(rel) && !isAbsolute(rel)); };
 
 /** True when `repoRoot` is this runtime's checkout or lies inside one. */
 export async function isRuntimeRepository(repoRoot: string): Promise<boolean> {

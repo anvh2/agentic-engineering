@@ -110,6 +110,18 @@ describe('review findings (PR #58)', () => {
     assert.deepEqual(await routeTask(request('calc/calc.go', 'calc'), nested), { route: 'qwen' });
   });
 
+  it('fails closed when git cannot answer or is steered: GIT_* env, a broken .git file, a nested repository', async () => {
+    const saved = process.env.GIT_CEILING_DIRECTORIES;
+    process.env.GIT_CEILING_DIRECTORIES = root;
+    try { assert.match((await nonDelegatableReasons(join(root, 'src'), ['runtime/sandbox/calc.go'])).join(), /non-delegatable/); }
+    finally { if (saved === undefined) delete process.env.GIT_CEILING_DIRECTORIES; else process.env.GIT_CEILING_DIRECTORIES = saved; }
+    await writeFile(join(root, 'src', '.git'), 'gitdir: /nonexistent\n');
+    assert.match((await nonDelegatableReasons(join(root, 'src'), ['runtime/sandbox/calc.go'])).join(), /non-delegatable/, 'broken .git file');
+    await rm(join(root, 'src', '.git'));
+    git(join(root, 'src'), 'init', '-q');
+    assert.match((await nonDelegatableReasons(join(root, 'src'), ['runtime/sandbox/calc.go'])).join(), /non-delegatable/, 'nested repository');
+  });
+
   it('a ".." segment is refused even when its parent does not exist', async () => {
     assert.match((await nonDelegatableReasons(root, ['tools/../src/nonexistent/x.go'])).join(), /"\.\." segments are not delegated/);
   });
