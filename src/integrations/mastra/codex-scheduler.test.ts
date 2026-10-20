@@ -82,7 +82,9 @@ function harness(options: { provider?: string; fake?: Record<string, string>; sc
     capacity: capacityFor(),
     allowProviders: options.schedulerAllow ?? ['codex:T'],
     cancelGraceMs: 2_000,
-    config: { pollMs: 20, workerLeaseTimeoutMs: 1_000, taskTimeoutMs: 120_000, maxCapacityWaitMs: 120_000 },
+    // A 1s lease (three ~333ms heartbeats) expired mid-attempt on a loaded CI runner (CI run 39283415933). Lease expiry itself is
+    // covered with a fake clock in the fencing test below; these cases test attempt bounding, not lease timing.
+    config: { pollMs: 20, workerLeaseTimeoutMs: 10_000, taskTimeoutMs: 120_000, maxCapacityWaitMs: 120_000 },
   });
   const records = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
   const execCalls = () => records().filter((r) => r.args?.[0] === 'exec' && r.args.includes('--sandbox')) as { args: string[]; envKeys: string[] }[];
