@@ -35,20 +35,21 @@ test('actual Studio: Organization shows registered agents with model bindings an
     await page.goto(`${origin}/organization`);
     const org = page.frameLocator('iframe[title="Organization workspace"]');
     const tab = name => org.getByRole('navigation', { name: 'Organization views' }).getByRole('button', { name, exact: true });
-    await tab('Agent Chart').waitFor();
+    await tab('Overview').waitFor();
 
     // Agents: one row per registered/refused agent, model = binding.
-    await tab('Agents').click();
+    await org.getByText('Registered agent bindings', { exact: false }).click();
     await org.getByRole('heading', { name: 'Registered agents' }).waitFor();
     await org.getByText(`${roster.counts.registered} registered · ${roster.counts.refused} refused · ${roster.counts.unavailable} unavailable`).waitFor();
     const architect = roster.agents.find(a => a.agentId === 'specialist-architect');
     const row = org.getByRole('row', { name: new RegExp(`^${architect.name} ${architect.status}`) });
     assert.match(await row.innerText(), new RegExp(`specialist-architect[\\s\\S]*${architect.status.toUpperCase()}[\\s\\S]*${architect.model ?? 'none'}`));
-    assert.equal(await org.getByRole('row').count(), roster.agents.length + 1);
+    assert.equal(await org.getByRole('region', { name: 'Registered agents' }).getByRole('row').count(), roster.agents.length + 1);
     await page.screenshot({ path: `${out}/organization-agents.png`, fullPage: true });
 
     // Council: every meeting listed with its mode; the LIVE one opens with its model, record, workflow run and trace.
-    await tab('Council').click();
+    await tab('Collaboration').click();
+    await org.getByRole('navigation', { name: 'Collaboration views' }).getByRole('button', { name: 'Council', exact: true }).click();
     const list = org.getByRole('navigation', { name: 'Meetings' });
     for (const m of council.meetings) await list.getByRole('button', { name: `${m.council ? `[${m.council.mode}] ` : '[UNVERIFIED] '}${m.title}` }).waitFor();
     if (live) {
@@ -71,9 +72,9 @@ test('actual Studio: Organization shows registered agents with model bindings an
     }
 
     // Existing M8.4/M9 views are still there and still read the scheduler.
-    await tab('Meetings').click();
+    await org.getByRole('navigation', { name: 'Collaboration views' }).getByRole('button', { name: 'Meetings', exact: true }).click();
     await org.getByRole('navigation', { name: 'Meetings' }).waitFor();
-    await tab('Agent Chart').click();
-    await org.getByRole('heading', { name: 'Agent hierarchy', exact: false }).waitFor();
+    await tab('Overview').click();
+    await org.getByRole('heading', { name: 'Execution lanes by provider', exact: false }).waitFor();
     assert.deepEqual(errors, []);
   });

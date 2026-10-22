@@ -121,6 +121,21 @@ describe('scheduler -> codex adapter -> verifier (mock CLI)', () => {
     const attempts = JSON.parse(readFileSync(join(artifactDir, 'attempts.json'), 'utf8')) as { telemetry: { provider: string; model: string; usage: Record<string, unknown> }; verification: { exitCode: number } }[];
     assert.deepEqual([attempts[0].telemetry.provider, attempts[0].telemetry.model, attempts[0].verification.exitCode], ['codex', 'gpt-fake', 0]);
     assert.equal(attempts[0].telemetry.usage.costUsd, 'UNKNOWN');
+    // The same measurement reaches the scheduler record, attributed to the recorded run and lease owner.
+    const persisted = task.artifacts.modelCalls as { runId: string; workerId: string; attempt: number; provider: string; model: string; inputTokens: number | null; outputTokens: number | null; usageSupport: string; startedAt: number | null; inferenceMs: number }[];
+    assert.deepEqual(persisted.map((c) => [c.runId, c.attempt, c.provider, c.model, c.inputTokens, c.outputTokens, c.usageSupport]), [[task.runId, 1, 'codex', 'gpt-fake', 120, 34, 'tokens']]);
+    assert.equal(persisted[0].workerId, h.store.events('T').find((e) => e.to === 'CLAIMED')?.actor);
+    assert.ok(typeof persisted[0].startedAt === 'number' && persisted[0].inferenceMs >= 0);
+    assert.ok(!('costUsd' in persisted[0]), 'cost is not persisted: never guessed');
+  });
+
+  it('telemetry: a provider that reports no usage persists null counts, not zeros', async () => {
+    const h = harness({ fake: { FAKE_MODE: 'no-usage' } });
+    await h.scheduler.run();
+    const task = h.store.requireTask('T');
+    // This mode also makes no edit, so verification fails and the runner makes its two coding attempts: one record each.
+    const persisted = task.artifacts.modelCalls as { attempt: number; inputTokens: number | null; outputTokens: number | null }[];
+    assert.deepEqual(persisted.map((c) => [c.attempt, c.inputTokens, c.outputTokens]), [[1, null, null], [2, null, null]]);
   });
 
   it('the operator allow-list is required in the scheduler: a plan that names codex runs nothing', async () => {
@@ -177,6 +192,7 @@ describe('scheduler -> codex adapter -> verifier (mock CLI)', () => {
     const task = h.store.requireTask('T');
     assert.equal(task.state, 'RUNTIME_FAILURE');
     assert.equal(h.execCalls().length, 1);
+    assert.equal(task.artifacts.modelCalls, undefined, 'a call with no response has no usage to record');
     assert.equal(task.claims, 1);
     assert.deepEqual(summary.requeued, []);
     assert.equal(readFileSync(join(task.worktreePath!, 'calc/calc.go'), 'utf8'), STUB, 'the worktree was left as it was');
@@ -189,6 +205,7 @@ describe('scheduler -> codex adapter -> verifier (mock CLI)', () => {
     assert.equal(task.state, 'ESCALATED', `${task.state}: ${task.stateReason}`);
     assert.equal(task.failureCategory, 'coding_attempts_exhausted');
     assert.equal(h.execCalls().length, 2, 'two attempts, never three');
+    assert.deepEqual((task.artifacts.modelCalls as { runId: string; attempt: number }[]).map((c) => [c.runId, c.attempt]), [[task.runId, 1], [task.runId, 2]], 'one record per attempt, none double-counted');
     assert.equal(readFileSync(join(task.worktreePath!, 'calc/calc.go'), 'utf8'), STUB);
   });
 

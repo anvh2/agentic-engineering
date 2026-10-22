@@ -133,3 +133,177 @@ test('malformed stored data fails closed and missing provider capacity stays unk
   f.store.db.prepare("UPDATE tasks SET run_ids='broken json' WHERE id='task-a'").run();
   assert.equal(reader.snapshot('B1').source, 'disconnected');
 });
+
+test('execution projection preserves task counters and filters free-form categories without writing', t => {
+  const f = fixture(); t.after(f.close);
+  f.store.db.prepare('UPDATE tasks SET attempts=3, runtime_retries=2, runtime_requeues=1, failure_category=?, review_outcome=? WHERE id=?').run('lease_expired', 'APPROVED', 'task-a');
+  const before = f.store.db.prepare('SELECT * FROM tasks').all();
+  const task = f.reader.snapshot('B1').tasks.find(t => t.id === 'task-a')!;
+  assert.equal(task.execution?.attempts, 3);
+  assert.equal(task.execution?.runtimeRetries, 2);
+  assert.equal(task.execution?.runtimeRequeues, 1);
+  assert.equal(task.execution?.failureCategory, 'lease_expired');
+  assert.equal(task.execution?.reviewOutcome, 'APPROVED');
+  assert.equal(task.execution?.finishedAt, null);
+  assert.deepEqual(f.store.db.prepare('SELECT * FROM tasks').all(), before);
+  f.store.db.prepare('UPDATE tasks SET failure_category=?, review_outcome=? WHERE id=?').run('private-reason', 'private-feedback', 'task-a');
+  const wire = JSON.stringify(f.reader.snapshot('B1'));
+  assert.ok(!wire.includes('private-reason'));
+  assert.ok(!wire.includes('private-feedback'));
+});
+
+test('recognized recovery operations preserve event IDs without exposing free-form reasons', t => {
+  const f = fixture(); t.after(f.close);
+  f.store.audit('task-a', 'private-actor', 'claim budget raised 1 -> 2: private justification');
+  f.store.audit('task-a', 'private-actor', 'private unknown operation');
+  const snapshot = f.reader.snapshot('B1');
+  assert.equal(snapshot.events.at(-2)?.operation, 'claims.extended');
+  assert.equal(snapshot.events.at(-1)?.operation, null);
+  assert.ok(!JSON.stringify(snapshot).includes('private'));
+  const first = snapshot.events[0]!;
+  const replay = f.reader.eventsAfter('B1', first.id);
+  assert.deepEqual(replay.events, snapshot.events.filter(e => e.sequence > first.sequence));
+});
+
+test('verification and findings expose only measured exit code and bounded recognized code/severity', t => {
+  const f = fixture(); t.after(f.close);
+  const findings = Array.from({ length: 55 }, () => ({ code: 'security_block', severity: 'block', detail: 'private code snippet' }));
+  findings.push({ code: 'private unknown code', severity: 'warn', detail: 'private detail' });
+  f.store.db.prepare('UPDATE tasks SET result=? WHERE id=?').run(JSON.stringify({ verifier: { command: ['private command'], exitCode: 0, output: 'private output' }, findings }), 'task-a');
+  const snapshot = f.reader.snapshot('B1');
+  const execution = snapshot.tasks.find(t => t.id === 'task-a')!.execution!;
+  assert.equal(execution.verifierExitCode, 0);
+  assert.equal(execution.findings?.length, 50);
+  assert.equal(execution.findingsOmitted, 6);
+  assert.deepEqual(execution.findings?.[0], { code: 'security_block', severity: 'block' });
+  assert.ok(!JSON.stringify(snapshot).includes('private'));
+});
+
+test('non-array findings and a non-integer exit code project as absent instead of failing the snapshot', t => {
+  const f = fixture(); t.after(f.close);
+  f.store.db.prepare('UPDATE tasks SET result=? WHERE id=?').run(JSON.stringify({ verifier: { exitCode: 'private' }, findings: 'private scalar' }), 'task-a');
+  const snapshot = f.reader.snapshot('B1');
+  assert.notEqual(snapshot.source, 'disconnected');
+  const execution = snapshot.tasks.find(t => t.id === 'task-a')!.execution!;
+  assert.equal(execution.verifierExitCode, null);
+  assert.equal(execution.findings, null);
+  assert.equal(execution.findingsOmitted, 0);
+  assert.ok(!JSON.stringify(snapshot).includes('private'));
+});
+
+test('execution lanes come only from persisted providers: no static names, no inferred role, ACTIVE only on a live lease', t => {
+  const f = fixture(); t.after(f.close);
+  assert.deepEqual(f.reader.snapshot().agents, []);
+  assert.deepEqual(createReader({ dbPath: join(f.directory, 'missing.db') }).snapshot().agents, []);
+  let snapshot = f.reader.snapshot('B1');
+  const providers = [...new Set(snapshot.tasks.map(t => t.provider))].sort();
+  assert.deepEqual(snapshot.agents.map(a => a.id), providers);
+  assert.deepEqual(snapshot.providers.map(p => p.id), providers);
+  for (const a of snapshot.agents) {
+    assert.equal(a.name, a.provider);
+    assert.equal(a.role, null);
+    assert.equal(a.parentId, null);
+    assert.equal(a.modelId, null);
+    assert.equal(a.evidence, 'OBSERVED');
+  }
+  const wire = JSON.stringify(snapshot.agents);
+  for (const name of ['Qwen', 'Claude Engineering Lead', 'Codex', 'Gemini']) assert.ok(!wire.includes(name), name);
+  const claim = f.claim();
+  f.store.transition('task-a', 'CODING', { actor: 'worker-1', fence: claim.fence });
+  snapshot = f.reader.snapshot('B1');
+  assert.equal(snapshot.agents.find(a => a.assignmentIds.includes('task-a'))?.evidence, 'ACTIVE');
+  f.advance(1001);
+  snapshot = f.reader.snapshot('B1');
+  assert.ok(snapshot.agents.every(a => a.evidence === 'OBSERVED' && a.availability === 'UNKNOWN' && a.configured === null));
+  assert.equal(snapshotSchema.safeParse(snapshot).success, true);
+});
+
+const persisted = (runId: string, attempt: number, extra: Record<string, unknown> = {}) => ({
+  runId, workerId: 'worker-7', attempt, provider: 'ollama', model: 'qwen-test', startedAt: 1_000_000 + attempt, inferenceMs: 400, inputTokens: 100, outputTokens: 10, usageSupport: 'tokens', ...extra,
+});
+const setCalls = (f: ReturnType<typeof fixture>, id: string, runIds: string[], calls: unknown, retries = 0) =>
+  f.store.db.prepare("UPDATE tasks SET run_ids=?, runtime_retries=?, artifacts=json_set(artifacts, '$.modelCalls', json(?)) WHERE id=?").run(JSON.stringify(runIds), retries, JSON.stringify(calls), id);
+
+test('recorded worker invocations project with run, worker, provider and model identity; totals are complete only with full coverage', t => {
+  const f = fixture(); t.after(f.close);
+  setCalls(f, 'task-a', ['run-1', 'run-2'], [persisted('run-1', 1), persisted('run-1', 2, { inputTokens: 50, outputTokens: 5 }), persisted('run-2', 1, { workerId: 'worker-8' })]);
+  const snapshot = f.reader.snapshot('B1');
+  assert.equal(snapshotSchema.safeParse(snapshot).success, true);
+  assert.deepEqual(snapshot.calls.map(c => [c.id, c.runId, c.workerId, c.provider, c.modelId, c.attempt, c.status]), [
+    ['task-a:run-1:1', 'run-1', 'worker-7', 'ollama', 'qwen-test', 1, 'COMPLETED'],
+    ['task-a:run-1:2', 'run-1', 'worker-7', 'ollama', 'qwen-test', 2, 'COMPLETED'],
+    ['task-a:run-2:1', 'run-2', 'worker-8', 'ollama', 'qwen-test', 1, 'COMPLETED'],
+  ]);
+  const task = snapshot.tasks.find(x => x.id === 'task-a')!;
+  assert.deepEqual([task.usage.inputTokens, task.usage.outputTokens, task.usage.latencyMs, task.usage.source, task.usage.completeness], [250, 25, 1200, 'core.model-call', 'complete']);
+  assert.equal(task.usage.actualCostUsd, null, 'cost is never projected');
+  assert.equal(task.usage.estimatedCost, null);
+  // The other task has no runs and no calls: no gap from it, and its own usage is not recorded rather than zero.
+  assert.equal(snapshot.tasks.find(x => x.id !== 'task-a')!.usage.source, 'unavailable');
+  assert.equal(snapshot.usage.inputTokens, 250);
+  assert.equal(snapshot.providers.find(p => p.id === 'ollama')!.usage.inputTokens, 250);
+});
+
+test('telemetry never double-counts and never presents partial coverage as complete', t => {
+  const f = fixture(); t.after(f.close);
+  // A duplicated (run, attempt) is counted once and marks the data damaged.
+  setCalls(f, 'task-a', ['run-1'], [persisted('run-1', 1), persisted('run-1', 1, { inputTokens: 999 })]);
+  let task = f.reader.snapshot('B1').tasks.find(x => x.id === 'task-a')!;
+  assert.deepEqual([task.usage.inputTokens, task.usage.completeness], [100, 'partial']);
+  // A run with no recorded invocation (crashed, in flight, older runtime) keeps the total partial.
+  setCalls(f, 'task-a', ['run-1', 'run-2'], [persisted('run-1', 1)]);
+  task = f.reader.snapshot('B1').tasks.find(x => x.id === 'task-a')!;
+  assert.deepEqual([task.usage.inputTokens, task.usage.completeness], [100, 'partial']);
+  // Failed runtime retries report no usage: partial.
+  setCalls(f, 'task-a', ['run-1'], [persisted('run-1', 1)], 1);
+  assert.equal(f.reader.snapshot('B1').tasks.find(x => x.id === 'task-a')!.usage.completeness, 'partial');
+  // A call for a run the task never recorded, or without a measured start, is dropped, not attributed.
+  setCalls(f, 'task-a', ['run-1'], [persisted('run-1', 1), persisted('run-other', 1), persisted('run-1', 2, { startedAt: null }), { runId: 'run-1', attempt: 3 }]);
+  let snapshot = f.reader.snapshot('B1');
+  assert.deepEqual(snapshot.calls.map(c => c.id), ['task-a:run-1:1']);
+  assert.equal(snapshot.usage.completeness, 'partial');
+  // Unreported counts stay null for that dimension; never summed as zero.
+  setCalls(f, 'task-a', ['run-1'], [persisted('run-1', 1), persisted('run-1', 2, { inputTokens: null, outputTokens: null, usageSupport: 'none' })]);
+  snapshot = f.reader.snapshot('B1');
+  task = snapshot.tasks.find(x => x.id === 'task-a')!;
+  assert.deepEqual([task.usage.inputTokens, task.usage.outputTokens, task.usage.latencyMs, task.usage.completeness], [null, null, 800, 'partial']);
+  assert.equal(snapshot.calls.find(c => c.attempt === 2)!.usageSupport, 'none');
+  // A call that ran on another provider than its lane leaves that lane's total incomplete.
+  setCalls(f, 'task-a', ['run-1'], [persisted('run-1', 1, { provider: 'unknown' })]);
+  snapshot = f.reader.snapshot('B1');
+  assert.equal(snapshot.providers.find(p => p.id === 'ollama')!.usage.source, 'unavailable');
+  assert.equal(snapshot.tasks.find(x => x.id === 'task-a')!.usage.inputTokens, 100);
+  // Malformed persisted JSON shapes never fail the snapshot.
+  f.store.db.prepare(`UPDATE tasks SET artifacts=json_set(artifacts, '$.modelCalls', 'not an array') WHERE id='task-a'`).run();
+  snapshot = f.reader.snapshot('B1');
+  assert.equal(snapshot.source, 'connected');
+  assert.deepEqual(snapshot.calls, []);
+});
+
+test('no scope lists no providers rather than a static set', t => {
+  const f = fixture(); t.after(f.close);
+  assert.deepEqual(f.reader.snapshot().providers, []);
+  assert.deepEqual(createReader({ dbPath: join(f.directory, 'missing.db') }).snapshot().providers, []);
+});
+
+test('hardening: a list at the 100-entry cap is never complete; out-of-range counts are rejected without failing the snapshot', t => {
+  const f = fixture(); t.after(f.close);
+  // 100 entries across runs: a trimmed run may keep some of its attempts, so full coverage cannot be claimed.
+  const runs = Array.from({ length: 34 }, (_, i) => `run-${i}`);
+  const capped = runs.flatMap(r => [1, 2, 3].map(a => persisted(r, a))).slice(-100);
+  setCalls(f, 'task-a', runs, capped);
+  assert.ok(runs.every(r => capped.some(c => c.runId === r)), 'every run still has an entry: coverage looks complete without the cap rule');
+  let task = f.reader.snapshot('B1').tasks.find(x => x.id === 'task-a')!;
+  assert.equal(capped.length, 100);
+  assert.equal(task.usage.completeness, 'partial');
+  // Below the cap with full coverage, the same data is complete.
+  setCalls(f, 'task-a', ['run-1'], [persisted('run-1', 1), persisted('run-1', 2)]);
+  assert.equal(f.reader.snapshot('B1').tasks.find(x => x.id === 'task-a')!.usage.completeness, 'complete');
+  // Counts beyond the safe-integer range (e.g. a buggy provider report) are rejected; the snapshot stays connected and partial.
+  setCalls(f, 'task-a', ['run-1'], [persisted('run-1', 1, { inputTokens: 1e308 }), persisted('run-1', 2, { inputTokens: 1e308 })]);
+  const snapshot = f.reader.snapshot('B1');
+  task = snapshot.tasks.find(x => x.id === 'task-a')!;
+  assert.equal(snapshot.source, 'connected');
+  assert.deepEqual(snapshot.calls, []);
+  assert.equal(task.usage.inputTokens, null);
+});

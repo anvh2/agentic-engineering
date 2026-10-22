@@ -101,3 +101,45 @@ export function priced(usage: Usage): boolean {
   const price = usage.estimatedCost;
   return !!price && !!price.modelId.trim() && price.modelId !== 'UNKNOWN' && !!price.pricingSource.trim();
 }
+
+/** Why a value is absent. A missing value is labelled, never shown as zero. */
+export type Absence = 'NOT RECORDED' | 'UNAVAILABLE' | 'NOT APPLICABLE' | 'NO ACTIVE RUN' | 'UNKNOWN';
+/** Usage with no telemetry source is NOT RECORDED; a disconnected source is UNAVAILABLE; partial gaps stay UNKNOWN. */
+export function usageAbsence(usage: Usage, connected: boolean): Absence {
+  if (!connected) return 'UNAVAILABLE';
+  if (usage.source === 'unavailable' || usage.completeness === 'unavailable') return 'NOT RECORDED';
+  return 'UNKNOWN';
+}
+export function usageValue(value: number | null, usage: Usage, connected: boolean): number | Absence {
+  return value === null ? usageAbsence(usage, connected) : value;
+}
+const leased = new Set(['CLAIMED', 'CODING', 'VERIFYING']);
+/** Claim elapsed applies only to a leased task; an expired lease is UNKNOWN, not idle. */
+export function claimElapsedOrAbsence(task: ControlTask, now: number, connected: boolean): number | Absence {
+  if (!connected) return 'UNAVAILABLE';
+  if (!leased.has(task.state)) return 'NOT APPLICABLE';
+  return claimElapsed(task, now, connected) ?? 'UNKNOWN';
+}
+/** States an operator must act on or inspect: work stopped without a passing integration. */
+export const ATTENTION_STATES: readonly ControlTask['state'][] = ['BLOCKED', 'ESCALATED', 'RUNTIME_FAILURE', 'REVIEW_REJECTED'];
+export const needsAttention = (task: ControlTask) => ATTENTION_STATES.includes(task.state);
+/**
+ * Lane evidence as displayed: the snapshot's ACTIVE holds only while a current assignment's lease is unexpired at `now`.
+ * A lease that lapses between snapshots emits no scheduler event, so the badge must not outlive it.
+ */
+export function laneEvidence(agent: ControlAgent, snapshot: Snapshot, connected: boolean, now: number): 'ACTIVE' | 'OBSERVED' | 'UNAVAILABLE' | 'UNKNOWN' {
+  if (!connected) return 'UNAVAILABLE';
+  if (!agent.evidence) return 'UNKNOWN';
+  if (agent.evidence === 'ACTIVE' && currentTasks(snapshot, agent).some((t) => t.leaseExpiresAt !== null && t.leaseExpiresAt > now)) return 'ACTIVE';
+  return 'OBSERVED';
+}
+/** Runs status filter: '' is every task, ATTENTION is the needs-attention set, anything else one exact scheduler state. */
+export const ATTENTION = '__attention';
+export function filterByStatus(tasks: readonly ControlTask[], status: string): ControlTask[] {
+  return tasks.filter((t) => !status || (status === ATTENTION ? needsAttention(t) : t.state === status));
+}
+/** A recorded call's token count, or why it is absent: the provider cannot report usage, or it did not report it this time. */
+export function callTokens(value: number | null, call: ModelCall): number | 'NOT SUPPORTED' | 'NOT REPORTED' {
+  if (value !== null) return value;
+  return call.usageSupport === 'none' ? 'NOT SUPPORTED' : 'NOT REPORTED';
+}

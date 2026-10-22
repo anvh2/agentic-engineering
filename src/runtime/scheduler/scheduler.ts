@@ -25,6 +25,59 @@ export interface ExecutorOutcome {
   /** Verifier command/exit for PASS (evidence shown to the reviewer). */
   verifier?: { command: string[]; exitCode: number | null } | null;
   diff?: string;
+  /** Per-attempt worker invocation telemetry the runner recorded (one per attempt that got a model response). */
+  modelCalls?: ExecutorModelCall[];
+}
+
+/**
+ * One worker invocation as the runner measured it: the provider-reported totals of one attempt's model call, which may
+ * span several agent steps. Failed tries inside an attempt (runtime retries) report no usage and are not listed.
+ */
+export interface ExecutorModelCall {
+  attempt: number;
+  provider: string;
+  model: string;
+  startedAt: number | null;
+  inferenceMs: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  usageSupport: 'tokens' | 'tokens-and-cost' | 'none' | 'unknown';
+}
+
+/** Persisted under `artifacts.modelCalls` (no schema change): the invocation plus the run and lease owner it belongs to. */
+export interface PersistedModelCall extends ExecutorModelCall {
+  runId: string;
+  workerId: string;
+}
+
+const MAX_PERSISTED_MODEL_CALLS = 100;
+const count = (v: unknown): number | null => (typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : null);
+const text = (v: unknown): string | null => (typeof v === 'string' && v.trim() && v.length <= 200 ? v : null);
+
+/**
+ * Merges one run's invocations into a task's persisted list. Keyed by (runId, attempt): completing the same run again
+ * replaces its entries instead of adding them, so a retried completion never double-counts. Malformed entries are dropped,
+ * never repaired; without a run id nothing is recorded, because the measurement could not be attributed.
+ */
+export function mergeModelCalls(existing: unknown, runId: string | null | undefined, workerId: string, calls: readonly ExecutorModelCall[] | undefined): PersistedModelCall[] {
+  const prior = (Array.isArray(existing) ? existing : []).filter((c): c is PersistedModelCall => !!c && typeof c === 'object' && typeof c.runId === 'string');
+  if (!runId || !calls?.length) return prior;
+  const fresh: PersistedModelCall[] = [];
+  for (const c of calls) {
+    const attempt = count(c?.attempt);
+    const provider = text(c?.provider);
+    const model = text(c?.model);
+    const inferenceMs = count(c?.inferenceMs);
+    if (!attempt || !provider || !model || inferenceMs === null || fresh.some((f) => f.attempt === attempt)) continue;
+    fresh.push({
+      runId, workerId, attempt, provider, model, inferenceMs,
+      startedAt: count(c.startedAt),
+      inputTokens: count(c.inputTokens),
+      outputTokens: count(c.outputTokens),
+      usageSupport: (['tokens', 'tokens-and-cost', 'none'] as const).find((u) => u === c.usageSupport) ?? 'unknown',
+    });
+  }
+  return [...prior.filter((p) => p.runId !== runId), ...fresh].slice(-MAX_PERSISTED_MODEL_CALLS);
 }
 
 export interface ExecutorInput {
@@ -406,7 +459,8 @@ export class Scheduler {
       runtimeRetries: current.runtimeRetries + outcome.runtimeRetries,
       codingMs: store.now() - startedAt,
     };
-    const artifacts = { ...(outcome.artifactDir ? { artifactDir: outcome.artifactDir } : {}), ...(outcome.studioUrl ? { studioUrl: outcome.studioUrl } : {}), ...(capacityWaitMs !== undefined ? { capacityWaitMs } : {}) };
+    const modelCalls = mergeModelCalls(current.artifacts.modelCalls, outcome.runId ?? current.runId, fence.owner, outcome.modelCalls);
+    const artifacts = { ...(outcome.artifactDir ? { artifactDir: outcome.artifactDir } : {}), ...(outcome.studioUrl ? { studioUrl: outcome.studioUrl } : {}), ...(capacityWaitMs !== undefined ? { capacityWaitMs } : {}), ...(modelCalls.length ? { modelCalls } : {}) };
 
     if (outcome.status === 'PASS') {
       store.transition(taskId, 'VERIFYING', { actor: fence.owner, reason: 'runtime PASS; running post-run change checks', expectFrom: 'CODING', fence, patch: { ...patchBase, artifacts } });

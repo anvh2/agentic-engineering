@@ -572,7 +572,9 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
           record.telemetry = {
             provider: descriptor?.identity.id ?? 'unknown',
             model: descriptor?.identity.model ?? modelLabel,
+            startedAt: inferenceStart,
             inferenceMs: Date.now() - inferenceStart,
+            usageSupport: descriptor?.capabilities.usage ?? 'unknown',
             usage: normalizeUsage(response.usage, descriptor?.capabilities.billing),
           };
           trace.emit('model_finished', {

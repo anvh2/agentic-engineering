@@ -56,6 +56,18 @@ const attemptSummarySchema = z.object({
   durationMs: z.number(),
   verificationExitCode: z.number().nullable().optional(),
   runtimeRetries: z.number(),
+  /** The runner's measurement of this attempt's model call; absent when no response arrived. Unreported counts are null. */
+  telemetry: z
+    .object({
+      provider: z.string(),
+      model: z.string(),
+      startedAt: z.number().nullable(),
+      inferenceMs: z.number(),
+      inputTokens: z.number().nullable(),
+      outputTokens: z.number().nullable(),
+      usageSupport: z.enum(['tokens', 'tokens-and-cost', 'none', 'unknown']),
+    })
+    .optional(),
 });
 
 export const codingTaskResultSchema = z.object({
@@ -144,6 +156,20 @@ function summarize(result: EngineeringResult): Omit<CodingTaskWorkflowResult, 'p
       durationMs: r.durationMs,
       verificationExitCode: r.verification?.exitCode ?? null,
       runtimeRetries: r.runtimeRetries,
+      ...(r.telemetry
+        ? {
+            telemetry: {
+              provider: r.telemetry.provider,
+              model: r.telemetry.model,
+              startedAt: r.telemetry.startedAt ?? null,
+              inferenceMs: r.telemetry.inferenceMs,
+              // 'UNKNOWN' (not reported) stays null; never a zero.
+              inputTokens: typeof r.telemetry.usage.inputTokens === 'number' ? r.telemetry.usage.inputTokens : null,
+              outputTokens: typeof r.telemetry.usage.outputTokens === 'number' ? r.telemetry.usage.outputTokens : null,
+              usageSupport: r.telemetry.usageSupport ?? 'unknown',
+            },
+          }
+        : {}),
     })),
     verifier: run?.verifier ? { command: run.verifier.command, exitCode: run.verifier.exitCode, output: run.verifier.output } : null,
     escalation: result.escalation,

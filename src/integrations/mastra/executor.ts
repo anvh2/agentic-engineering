@@ -1,5 +1,5 @@
 import { attachToCodingTaskRun, cancelCodingTaskRunConfirmed, runCodingTaskWorkflow, type WorkflowRunResult } from './client.ts';
-import type { Executor, ExecutorOutcome } from '../../runtime/scheduler/scheduler.ts';
+import type { Executor, ExecutorModelCall, ExecutorOutcome } from '../../runtime/scheduler/scheduler.ts';
 
 /**
  * The production Executor: every task runs through the registered Mastra `coding-task-workflow` on a running Mastra
@@ -8,7 +8,7 @@ import type { Executor, ExecutorOutcome } from '../../runtime/scheduler/schedule
  * result. The run id is reported the moment the run exists so a crash can be reconciled against it.
  */
 
-function toOutcome(run: WorkflowRunResult): ExecutorOutcome {
+export function toOutcome(run: WorkflowRunResult): ExecutorOutcome {
   const r = run.result;
   if (!r) throw new Error(run.error ?? `workflow run ${run.runId} produced no result`);
   return {
@@ -22,6 +22,12 @@ function toOutcome(run: WorkflowRunResult): ExecutorOutcome {
     artifactDir: r.artifactDir,
     verifier: r.verifier ? { command: r.verifier.command, exitCode: r.verifier.exitCode } : null,
     diff: r.diff,
+    // Server JSON: shape is not trusted here; the scheduler's mergeModelCalls validates every field before persisting.
+    modelCalls: Array.isArray(r.attempts)
+      ? r.attempts.flatMap((a: { attempt?: unknown; telemetry?: Record<string, unknown> } | null) =>
+          a?.telemetry && typeof a.telemetry === 'object' ? [{ ...a.telemetry, attempt: a.attempt } as ExecutorModelCall] : [],
+        )
+      : [],
   };
 }
 

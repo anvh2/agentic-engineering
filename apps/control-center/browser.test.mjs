@@ -34,10 +34,23 @@ test(
     await page.goto(`http://127.0.0.1:${gateway.server.address().port}`);
     await page.getByText('Scheduler connected', { exact: true }).waitFor();
     assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
-    assert.equal(await page.getByText('No usage aggregated', { exact: true }).count(), 1);
-    await page.getByLabel('Objective', { exact: true }).selectOption('B1');
-    await page.getByRole('button', { name: 'Qwen' }).waitFor();
-    const qwen = page.getByRole('button', { name: 'Qwen' });
+    assert.deepEqual(await page.getByRole('navigation', { name: 'Primary' }).getByRole('button').allTextContents(), ['Overview', 'Runs', 'Collaboration', 'Usage']);
+    await page.getByRole('button', { name: 'Runs', exact: true }).click();
+    await page.getByLabel('Objective / scheduler batch', { exact: true }).selectOption('B1');
+    // Separate scheduler state, outcome and trace evidence; a task without a run says so.
+    await page.getByRole('columnheader', { name: 'Outcome (failure · review)' }).waitFor();
+    await page.getByText('No run recorded', { exact: true }).first().waitFor();
+    await page.getByLabel('Task status', { exact: true }).selectOption('__attention');
+    await page.getByText('No tasks in this scope.', { exact: false }).waitFor();
+    await page.getByLabel('Task status', { exact: true }).selectOption('');
+    await page.getByRole('button', { name: 'Overview', exact: true }).click();
+    // Lanes are persisted providers only: no model names as workers, no assumed lead identity.
+    await page.getByRole('heading', { name: 'Execution lanes by provider', exact: false }).waitFor();
+    for (const name of ['Qwen', 'Claude Engineering Lead', 'Codex', 'Gemini']) assert.equal(await page.locator('.agent-table').getByText(name, { exact: false }).count(), 0, name);
+    await page.locator('.agent-table').getByText('OBSERVED', { exact: true }).first().waitFor();
+    assert.ok((await page.locator('.agent-table').innerText()).includes('NO ACTIVE RUN'));
+    const qwen = page.getByRole('button', { name: /^ollama/ });
+    await qwen.waitFor();
     await qwen.focus();
     await page.keyboard.press('Enter');
     await page.getByRole('complementary', { name: 'Details inspector' }).waitFor();
@@ -66,6 +79,7 @@ test(
     f.store.transition('task-a', 'CODING', { actor: 'worker-1', fence: claim.fence });
     f.store.transition('task-a', 'VERIFYING', { actor: 'worker-1', fence: claim.fence });
     await page.locator('.agent-table').getByText('VERIFYING', { exact: true }).waitFor();
+    await page.locator('.agent-table').getByText('ACTIVE', { exact: true }).waitFor();
     await qwen.click();
     const inspector = page.getByRole('complementary');
     await inspector.getByText('Implement scoped parser', { exact: true }).waitFor();
@@ -75,27 +89,34 @@ test(
     );
     await page.screenshot({ path: `${output}/organization-dark-inspector.png`, fullPage: true });
     f.store.transition('task-a', 'REVIEW_PENDING', { actor: 'worker-1', fence: claim.fence, review: {} });
-    await inspector.getByText('Historically verified in this objective.', { exact: false }).waitFor();
+    await inspector.getByText('reached review or later in this batch', { exact: false }).waitFor();
     assert.ok((await inspector.innerText()).includes('UNKNOWN'));
     await page.getByRole('button', { name: 'Close inspector' }).click();
     await page.getByRole('button', { name: 'Overview', exact: true }).click();
-    assert.deepEqual(await page.getByRole('table', { name: 'Agent activity' }).locator('th').allTextContents(), [
-      'Agent',
-      'Activity',
-      'Current Task',
-      'Elapsed',
-      'Tokens',
-      'Last Outcome',
-    ]);
-    await page.getByRole('button', { name: /^Reviews/ }).click();
-    await page.getByRole('button', { name: 'task-a', exact: true }).waitFor();
     await page.getByRole('button', { name: 'Runs', exact: true }).click();
+    await page.getByRole('heading', { name: 'Review queue' }).waitFor();
     await page.getByText('synthetic-run-a', { exact: true }).waitFor();
-    await page.getByRole('button', { name: 'Objectives', exact: true }).click();
+    // Recorded worker invocations: run/worker/provider/model identity and reported counts; attempt 2 reported none.
+    f.store.db.prepare("UPDATE tasks SET artifacts=json_set(artifacts, '$.modelCalls', json(?)) WHERE id='task-a'").run(JSON.stringify([
+      { runId: 'synthetic-run-a', workerId: 'worker-1', attempt: 1, provider: 'ollama', model: 'qwen-test', startedAt: Date.now() - 5000, inferenceMs: 1200, inputTokens: 321, outputTokens: 45, usageSupport: 'tokens' },
+      { runId: 'synthetic-run-a', workerId: 'worker-1', attempt: 2, provider: 'ollama', model: 'qwen-test', startedAt: Date.now() - 2000, inferenceMs: 800, inputTokens: null, outputTokens: null, usageSupport: 'tokens' },
+    ]));
+    f.store.audit('task-a', 'test', 'telemetry seeded');
+    await page.getByText('PARTIAL', { exact: true }).first().waitFor();
+    await page.getByRole('button', { name: 'Implement scoped parser', exact: true }).first().click();
+    const invocations = page.getByRole('table', { name: 'Recorded worker invocations' });
+    await invocations.waitFor();
+    assert.equal(await invocations.locator('tbody tr').count(), 2);
+    const recorded = await invocations.innerText();
+    for (const value of ['synthetic-run-a', 'worker-1', 'ollama · qwen-test', '321', '45', 'NOT REPORTED']) assert.ok(recorded.includes(value), value);
+    await page.getByText('Task total is PARTIAL', { exact: false }).waitFor();
+    assert.ok((await page.getByRole('complementary').innerText()).includes('NO ACTIVE RUN · see recorded invocations'), 'current model is not claimed unrecorded when invocations record it');
+    await page.screenshot({ path: `${output}/organization-invocations-fixture.png`, fullPage: true });
+    await page.getByRole('button', { name: 'Close inspector' }).click();
     await page.getByRole('button', { name: 'Verify parser behavior', exact: true }).click();
     assert.ok((await page.getByRole('complementary').innerText()).includes('task-a'));
     await page.getByRole('button', { name: 'Close inspector' }).click();
-    await page.getByRole('button', { name: 'Organization', exact: true }).click();
+    await page.getByRole('button', { name: 'Overview', exact: true }).click();
     await page.setViewportSize({ width: 768, height: 1000 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.setViewportSize({ width: 390, height: 844 });
@@ -174,8 +195,10 @@ test(
     page.setDefaultTimeout(15000);
     await page.goto(`http://127.0.0.1:${gateway.server.address().port}`);
     await page.getByText('Scheduler connected', { exact: true }).waitFor();
-    await page.getByLabel('Objective', { exact: true }).selectOption('B1');
-    await page.getByRole('button', { name: 'Qwen' }).click();
+    await page.getByRole('button', { name: 'Runs', exact: true }).click();
+    await page.getByLabel('Objective / scheduler batch', { exact: true }).selectOption('B1');
+    await page.getByRole('button', { name: 'Overview', exact: true }).click();
+    await page.getByRole('button', { name: /^ollama/ }).click();
     await page.getByRole('tab', { name: 'Usage', exact: true }).click();
     const panel = page.getByRole('tabpanel');
     await panel.getByText('31', { exact: true }).waitFor();
@@ -207,6 +230,7 @@ test('discussion and meeting inspectors: unavailable production, attributed fixt
     t.after(async () => { await browser.close(); gateway.closeStreams(); gateway.server.closeAllConnections(); await new Promise(r => gateway.server.close(r)); f.close(); });
     const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
     await page.goto(`http://127.0.0.1:${gateway.server.address().port}`);
+    await page.getByRole('button', { name: 'Collaboration', exact: true }).click();
     await page.getByRole('button', { name: 'Discussions', exact: true }).click();
     await page.getByText('NOT AVAILABLE', { exact: true }).waitFor();
     assert.equal(await page.getByText('SYNTHETIC TEST DATA', { exact: false }).count(), 0);
