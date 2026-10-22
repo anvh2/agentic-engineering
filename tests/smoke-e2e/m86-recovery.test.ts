@@ -9,7 +9,8 @@ import { sandboxRunner } from '../../src/lead/lifecycle/exec.ts';
 import { LifecycleStore } from '../../src/lead/lifecycle/store.ts';
 import { Scheduler, type Executor } from '../../src/runtime/scheduler/scheduler.ts';
 import { SchedulerStore } from '../../src/runtime/scheduler/store.ts';
-import { tempDir } from '../../src/runtime/scheduler/test-helpers.ts';
+import { budgetsMirroring, tempDir } from '../../src/runtime/scheduler/test-helpers.ts';
+import { codexDescriptor } from '../../src/workers/providers/codex.ts';
 import { WorktreeManager } from '../../src/runtime/worktree/worktree.ts';
 import { OBJECTIVE_ID, TASK_A, TASK_B, judge, runM85Objective, sandboxPath, summarizeTelemetry } from '../provider-smoke/m85-objective.ts';
 import { readIsolationCanary } from '../provider-smoke/read-isolation-canary.ts';
@@ -86,7 +87,7 @@ function reopen(outDir: string) {
     },
   };
   const config = { maxConcurrentWorkers: 1, pollMs: 50, workerLeaseTimeoutMs: 60_000, taskTimeoutMs: 60_000, maxCapacityWaitMs: 1_000, maxTasksPerBatch: 5, maxReviewCorrections: 2 };
-  const scheduler = new Scheduler({ store, executor, workspace: worktrees, config, allowProviders: ALLOW });
+  const scheduler = new Scheduler({ store, executor, workspace: worktrees, config, allowProviders: ALLOW, providerBudgets: budgetsMirroring(ALLOW), describeProvider: (id) => (id === 'codex' ? codexDescriptor() : undefined) });
   const deps = { store, worktrees, lifecycle, scheduler, executor, run: sandboxRunner(300_000), config, maxRounds: 4 };
   return { store, lifecycle, deps, dispatched };
 }

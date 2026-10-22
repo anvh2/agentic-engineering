@@ -1,8 +1,9 @@
 import { StoreError, type Fence, type SchedulerStore, type TaskRow } from './store.ts';
-import { providerOfSpec, resolveConfig, type FailureCategory, type SchedulerConfig } from './types.ts';
+import { languageOfSpec, providerOfSpec, resolveConfig, type FailureCategory, type SchedulerConfig } from './types.ts';
 import { WorkspaceError, type Workspace } from '../worktree/worktree.ts';
 import { ExecutionClock } from './execution-clock.ts';
-import { authorizeProvider, DEFAULT_PROVIDER_ID } from '../execution/worker-provider.ts';
+import { DEFAULT_PROVIDER_ID, type ProviderDescriptor } from '../execution/worker-provider.ts';
+import { decideRoute, type ProviderBudgetEntry, type RoutingCode, type RoutingDecision } from '../execution/provider-routing.ts';
 import { cancelTaskRun, type CancelReport, type CancelRunResult } from './cancel.ts';
 
 /**
@@ -125,6 +126,22 @@ export interface RunSummary {
   stillActive: CancelRunResult[];
 }
 
+/** A refused routing decision fails the task with an existing category (the persisted vocabulary is unchanged). */
+const ROUTING_FAILURE: Record<Exclude<RoutingCode, 'local_default' | 'local_authorized' | 'authorized_within_budget'>, FailureCategory> = {
+  unknown_provider: 'provider_unavailable',
+  language_unsupported: 'not_eligible',
+  provider_not_authorized: 'provider_not_authorized',
+  budget_not_approved: 'provider_not_authorized',
+  budget_exhausted: 'provider_not_authorized',
+};
+
+/** What a scheduler without `describeProvider` knows: the default provider is the local model, which spends nothing. */
+const LOCAL_DEFAULT_DESCRIPTOR: ProviderDescriptor = Object.freeze({
+  identity: { id: DEFAULT_PROVIDER_ID, kind: 'local', model: 'UNKNOWN' },
+  capabilities: { taskTypes: ['go', 'js'], editsFiles: 'via-runtime-tools', fileScope: 'tool-enforced', cancellation: 'abort-signal', usage: 'tokens', billing: 'local-free' },
+  capacity: { resource: DEFAULT_PROVIDER_ID, defaultPermits: 1 },
+}) as ProviderDescriptor;
+
 export interface SchedulerDeps {
   store: SchedulerStore;
   executor: Executor;
@@ -141,6 +158,16 @@ export interface SchedulerDeps {
   cancelGraceMs?: number;
   /** The operator's allow-list for non-default worker providers (`codex` or `codex:<taskId>`). Empty: only the local model runs. */
   allowProviders?: readonly string[];
+  /**
+   * The operator's budgets, in claims, for providers that are not local-free (provider-routing.ts). Without an applicable entry
+   * such a provider is refused even when allow-listed. Empty: nothing that costs money or quota runs.
+   */
+  providerBudgets?: readonly ProviderBudgetEntry[];
+  /**
+   * Static descriptor of a registered provider (contacts nothing). A provider it does not describe is refused as unknown. Absent:
+   * only the default local provider is known, as local-free.
+   */
+  describeProvider?: (id: string) => ProviderDescriptor | undefined;
   /** Called when a task's executor starts (tests/measurement). */
   onExecutorStart?: (task: TaskRow) => void;
 }
@@ -156,6 +183,8 @@ export class Scheduler {
   private abort = new AbortController();
   private cancelGraceMs?: number;
   private allowProviders: readonly string[];
+  private providerBudgets: readonly ProviderBudgetEntry[];
+  private describeProvider: (id: string) => ProviderDescriptor | undefined;
   private stillActive: CancelRunResult[] = [];
   /** Tasks this scheduler is executing right now, with their run id once known (what a forced exit must report). */
   private live = new Map<string, { taskId: string; epoch: number; runId?: string }>();
@@ -170,6 +199,33 @@ export class Scheduler {
     this.capacity = deps.capacity;
     this.cancelGraceMs = deps.cancelGraceMs;
     this.allowProviders = deps.allowProviders ?? [];
+    this.providerBudgets = deps.providerBudgets ?? [];
+    this.describeProvider = deps.describeProvider ?? ((id) => (id === DEFAULT_PROVIDER_ID ? LOCAL_DEFAULT_DESCRIPTOR : undefined));
+  }
+
+  /**
+   * Decides the claimed task's provider (provider-routing.ts) and records the decision, in ONE store transaction: the budget
+   * spent so far is read, the decision made and, when it spends a claim, charged, so two schedulers (threads or processes)
+   * can never both take the last claim of a budget. Every decision, selected or refused, is a `provider_routing` row and the
+   * task's `artifacts.routing`; it is deliberately not an event, because readers take the event trajectory as state history.
+   */
+  private route(task: TaskRow, actor: string): RoutingDecision {
+    return this.store.transact(() => {
+      const requested = providerOfSpec(task.spec);
+      const taskId = task.spec.request?.contract.taskId ?? task.id;
+      const decision = decideRoute({
+        taskId,
+        language: languageOfSpec(task.spec),
+        requested,
+        descriptor: this.describeProvider(requested),
+        allow: this.allowProviders,
+        budgets: this.providerBudgets,
+        spent: this.store.chargedProviderClaims(requested, task.id),
+      });
+      this.store.recordRouting(task.id, actor, decision);
+      this.store.setArtifacts(task.id, { routing: decision });
+      return decision;
+    });
   }
 
   /**
@@ -344,14 +400,17 @@ export class Scheduler {
       const batch = store.getBatch(claimed.batchId);
       if (!batch) return fail('RUNTIME_FAILURE', 'executor_error', `batch ${claimed.batchId} missing`);
 
-      // Cloud execution needs the operator's allow-list, checked before a worktree is prepared or any executor is called.
-      // (The workflow checks again on its own side: the executor may be a server this process does not control.)
-      const provider = providerOfSpec(claimed.spec);
-      if (provider !== DEFAULT_PROVIDER_ID) {
-        const auth = authorizeProvider(provider, claimed.spec.request?.contract.taskId ?? claimed.id, this.allowProviders);
-        if (!auth.ok) return fail('RUNTIME_FAILURE', 'provider_not_authorized', auth.reason);
-        this.log(`${claimed.id}: runs on provider "${provider}" (operator-authorized)`);
+      // Provider routing: decided, recorded and (for a paid provider) charged before a worktree is prepared or any executor is
+      // called. A refusal never falls back to another provider. (The workflow re-checks authorization and capability on its
+      // own side: the executor may be a server this process does not control.)
+      let routing: RoutingDecision;
+      try {
+        routing = this.route(claimed, fence.owner);
+      } catch (err) {
+        return fail('RUNTIME_FAILURE', 'executor_error', `provider routing could not be recorded: ${(err as Error).message}`);
       }
+      if (routing.outcome === 'refused') return fail('RUNTIME_FAILURE', ROUTING_FAILURE[routing.code as keyof typeof ROUTING_FAILURE], routing.reason);
+      if (routing.provider !== DEFAULT_PROVIDER_ID) this.log(`${claimed.id}: runs on provider "${routing.provider}" (${routing.reason})`);
 
       // A previous claim may have started (and even finished) a Mastra run before it was lost. Re-attach to its
       // worktree WITHOUT resetting it and try to adopt that run's outcome; only if there is nothing to adopt is the

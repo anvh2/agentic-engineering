@@ -5,6 +5,8 @@ import { dirname, join } from 'node:path';
 import type { Executor, ExecutorInput, ExecutorOutcome } from './scheduler.ts';
 import { SchedulerStore } from './store.ts';
 import type { BatchPlanInput, TaskSpecInput } from './types.ts';
+import type { ProviderBudgetEntry } from '../execution/provider-routing.ts';
+import type { ProviderDescriptor } from '../execution/worker-provider.ts';
 
 const GIT_ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' };
 
@@ -140,4 +142,21 @@ export function maxOverlap(intervals: { start: number; end: number | null }[]): 
     max = Math.max(max, cur);
   }
   return max;
+}
+
+/**
+ * Harnesses that exercise a paid provider through the scheduler: the operator budget (provider-routing.ts) that matches an
+ * allow-list entry for entry (`codex:T` -> `codex:T=<claims>`, `codex` -> `codex=<claims>`), so the test states its spend
+ * explicitly instead of relying on the allow-list alone.
+ */
+export function budgetsMirroring(allow: readonly string[], claims = 10): ProviderBudgetEntry[] {
+  return allow.map((entry) => {
+    const [provider, taskId] = entry.split(':');
+    return { provider, ...(taskId ? { taskId } : {}), claims };
+  });
+}
+
+/** `describeProvider` for a Scheduler, backed by a provider registry (static descriptors; nothing is contacted). */
+export function describeFrom(registry: { ids(): string[]; get(id: string): { describe(): ProviderDescriptor } }): (id: string) => ProviderDescriptor | undefined {
+  return (id) => (registry.ids().includes(id) ? registry.get(id).describe() : undefined);
 }
