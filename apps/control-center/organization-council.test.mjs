@@ -38,7 +38,7 @@ test('actual Studio: Organization shows registered agents with model bindings an
     await tab('Overview').waitFor();
 
     // Agents: one row per registered/refused agent, model = binding.
-    await org.getByText('Registered agent bindings', { exact: true }).click();
+    await org.getByText('Registered agent bindings', { exact: false }).click();
     await org.getByRole('heading', { name: 'Registered agents' }).waitFor();
     await org.getByText(`${roster.counts.registered} registered · ${roster.counts.refused} refused · ${roster.counts.unavailable} unavailable`).waitFor();
     const architect = roster.agents.find(a => a.agentId === 'specialist-architect');
@@ -75,6 +75,6 @@ test('actual Studio: Organization shows registered agents with model bindings an
     await org.getByRole('navigation', { name: 'Collaboration views' }).getByRole('button', { name: 'Meetings', exact: true }).click();
     await org.getByRole('navigation', { name: 'Meetings' }).waitFor();
     await tab('Overview').click();
-    await org.getByRole('heading', { name: 'Agent hierarchy', exact: false }).waitFor();
+    await org.getByRole('heading', { name: 'Execution lanes by provider', exact: false }).waitFor();
     assert.deepEqual(errors, []);
   });

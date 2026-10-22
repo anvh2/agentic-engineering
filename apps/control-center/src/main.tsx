@@ -21,11 +21,13 @@ import {
   type Snapshot,
   type Usage,
 } from '../../../src/integrations/control-center/contract.ts';
-import { claimElapsed, currentTasks, inspectorObservations, observedActivity, priced, taskUsage } from './observations.ts';
+import { claimElapsed, claimElapsedOrAbsence, currentTasks, inspectorObservations, needsAttention, observedActivity, priced, taskUsage, usageAbsence, usageValue, type Absence } from './observations.ts';
+const show = (v: number | Absence) => (typeof v === 'number' ? v.toLocaleString() : v);
 import { CollaborationView } from './collaboration.tsx';
 import { AgentsView } from './agents.tsx';
 import './style.css';
 const embedded = window.location.pathname.startsWith('/organization-app/');
+const ATTENTION = '__attention';
 const apiBase = embedded ? '/control-center/v1' : '/api/v1';
 
 type Page = 'Overview' | 'Runs' | 'Collaboration' | 'Usage';
@@ -62,15 +64,15 @@ function Trace({ task }: { task: ControlTask }) {
       Mastra run <ArrowUpRight size={12} />
     </a>
   ) : (
-    <span className="muted">Trace unavailable</span>
+    <span className="muted">{task.runIds.length ? 'Run recorded · trace link unavailable' : 'No run recorded'}</span>
   );
 }
-function UsageView({ usage, title = 'Token usage', callCount }: { usage: Usage; title?: string; callCount?: number | null }) {
+function UsageView({ usage, title = 'Token usage', callCount, connected }: { usage: Usage; title?: string; callCount?: number | null; connected: boolean }) {
   return (
     <>
       <div className="section-heading">
         <h3>{title}</h3>
-        <Badge value={usage.completeness.toUpperCase()} />
+        <Badge value={usageAbsence(usage, connected) === 'UNKNOWN' ? usage.completeness.toUpperCase() : usageAbsence(usage, connected)} />
       </div>
       <dl className="metrics">
         {(
@@ -85,7 +87,7 @@ function UsageView({ usage, title = 'Token usage', callCount }: { usage: Usage; 
         ).map(([label, value]) => (
           <div key={label}>
             <dt>{label}</dt>
-            <dd className={value === null ? 'muted' : ''}>{number(value)}</dd>
+            <dd className={value === null ? 'muted' : ''}>{show(usageValue(value, usage, connected))}</dd>
           </div>
         ))}
       </dl>
@@ -104,7 +106,7 @@ function UsageView({ usage, title = 'Token usage', callCount }: { usage: Usage; 
           <dd>
             {priced(usage)
               ? `$${usage.estimatedCost!.usd} · ${usage.estimatedCost!.modelId} · ${usage.estimatedCost!.pricingSource}`
-              : 'UNKNOWN · model/pricing unavailable'}
+              : `${usageAbsence(usage, connected)} · no reliable usage and pricing evidence; never estimated`}
           </dd>
         </div>
         <div>
@@ -200,7 +202,7 @@ function AgentMeasurements({
             {part !== 'tokens' && <span className="mono">{duration(claimElapsed(t, now, connected))}</span>}
             {part !== 'elapsed' && (
               <small>
-                {number(usage.inputTokens)} in / {number(usage.outputTokens)} out
+                {show(usageValue(usage.inputTokens, usage, connected))} in / {show(usageValue(usage.outputTokens, usage, connected))} out
               </small>
             )}
           </div>
@@ -208,10 +210,10 @@ function AgentMeasurements({
       })}
     </>
   ) : (
-    <span className="muted">UNKNOWN</span>
+    <span className="muted">{connected ? 'NO ACTIVE RUN' : 'UNAVAILABLE'}</span>
   );
 }
-function TaskTable({ tasks, onSelect, now }: { tasks: ControlTask[]; onSelect: (id: string) => void; now: number }) {
+function TaskTable({ tasks, onSelect, now, connected }: { tasks: ControlTask[]; onSelect: (id: string) => void; now: number; connected: boolean }) {
   if (!tasks.length) return <Empty>No tasks in this scope. Select an objective with persisted scheduler data.</Empty>;
   return (
     <div className="table-scroll">
@@ -221,9 +223,10 @@ function TaskTable({ tasks, onSelect, now }: { tasks: ControlTask[]; onSelect: (
             <th>Task</th>
             <th>Provider / worker</th>
             <th>Scheduler state</th>
+            <th>Outcome (failure · review)</th>
             <th>Claim elapsed</th>
             <th>Usage</th>
-            <th>Execution</th>
+            <th>Trace</th>
           </tr>
         </thead>
         <tbody>
@@ -240,9 +243,14 @@ function TaskTable({ tasks, onSelect, now }: { tasks: ControlTask[]; onSelect: (
                 <Badge value={t.state} />
                 {t.stale && <small className="warning">Lease expired · activity unknown</small>}
               </td>
-              <td className="mono">{duration(t.activeSince === null ? null : Math.max(0, now - t.activeSince))}</td>
+              <td>
+                {t.execution?.failureCategory && <span className="mono">{t.execution.failureCategory}</span>}
+                {t.execution?.reviewOutcome && <small><Badge value={t.execution.reviewOutcome} /></small>}
+                {!t.execution?.failureCategory && !t.execution?.reviewOutcome && <span className="muted">None recorded</span>}
+              </td>
+              <td className="mono">{(v => (typeof v === 'number' ? duration(v) : v))(claimElapsedOrAbsence(t, now, connected))}</td>
               <td className="muted">
-                {t.usage.inputTokens === null ? 'UNKNOWN' : `${number(t.usage.inputTokens)} in / ${number(t.usage.outputTokens)} out`}
+                {t.usage.inputTokens === null ? usageAbsence(t.usage, connected) : `${number(t.usage.inputTokens)} in / ${number(t.usage.outputTokens)} out`}
               </td>
               <td>
                 <Trace task={t} />
@@ -366,7 +374,7 @@ function Inspector({
                     (observations.current.length && observations.current.every((c) => c.modelId === observations.current[0]!.modelId)
                       ? observations.current[0]!.modelId
                       : null) ??
-                    'UNKNOWN'}
+                    'NOT RECORDED'}
                 </dd>
               </div>
               <div>
@@ -378,7 +386,7 @@ function Inspector({
                 <dd>{agent?.availability ?? 'UNKNOWN'}</dd>
               </div>
               <div>
-                <dt>Last outcome</dt>
+                <dt>Last scheduler state</dt>
                 <dd>
                   {agent?.lastOutcome ??
                     (task && !['READY', 'CLAIMED', 'CODING', 'VERIFYING', 'BACKLOG'].includes(task.state) ? task.state : 'Unknown')}
@@ -391,8 +399,8 @@ function Inspector({
             </dl>
             <p className="footnote">
               {agent?.historicallyVerified
-                ? 'Historically verified in this objective. This does not indicate online presence.'
-                : 'No live worker heartbeat is exposed by Core.'}
+                ? 'A task in this lane reached review or later in this batch (runtime verification passed then). This does not indicate online presence.'
+                : 'No live worker heartbeat is exposed by Core. Registration and lanes never imply online presence.'}
             </p>
             {task && <section aria-label="Task execution evidence">
               <h3>Task execution evidence</h3>
@@ -402,6 +410,7 @@ function Inspector({
                 <div><dt>Coding attempts (all runs)</dt><dd>{task.execution?.attempts ?? 'UNKNOWN'}</dd></div>
                 <div><dt>Runtime retries</dt><dd>{task.execution?.runtimeRetries ?? 'UNKNOWN'}</dd></div>
                 <div><dt>Runtime requeues</dt><dd>{task.execution?.runtimeRequeues ?? 'UNKNOWN'}</dd></div>
+                <div><dt>Counter semantics</dt><dd>Independent scheduler counters for one task; never summed into a task or run count.</dd></div>
                 <div><dt>Created</dt><dd>{date(task.execution?.createdAt ?? null)}</dd></div>
                 <div><dt>Claimed</dt><dd>{date(task.claimedAt)}</dd></div>
                 <div><dt>Updated</dt><dd>{date(task.updatedAt)}</dd></div>
@@ -468,13 +477,14 @@ function Inspector({
         )}
         {tab === 'Usage' && (
           <>
-            <UsageView title="Current run usage" usage={observations.currentUsage} callCount={observations.current.length || null} />
+            <UsageView title="Current run usage" usage={observations.currentUsage} callCount={observations.current.length || null} connected={!disconnected} />
             <p className="footnote">Current assignment runs only. Task totals are not substituted for run usage.</p>
             <section>
               <UsageView
                 title="Historical reported usage"
                 usage={observations.historicalUsage}
                 callCount={observations.historical.length || null}
+                connected={!disconnected}
               />
               <p className="footnote">
                 Other runs in this selected objective only. Reported call observations may be incomplete; retries and cancelled calls are
@@ -556,7 +566,7 @@ function Timeline({ events }: { events: Snapshot['events'] }) {
     <p className="muted">No persisted events in this scope.</p>
   );
 }
-function Providers({ snapshot }: { snapshot: Snapshot }) {
+function Providers({ snapshot, connected }: { snapshot: Snapshot; connected: boolean }) {
   return (
     <section className="panel">
       <div className="panel-heading">
@@ -580,14 +590,14 @@ function Providers({ snapshot }: { snapshot: Snapshot }) {
             {snapshot.providers.map((p) => (
               <tr key={p.id}>
                 <td>{p.id}</td>
-                <td className="muted">{number(p.usage.inputTokens)}</td>
-                <td className="muted">{number(p.usage.outputTokens)}</td>
-                <td className="muted">{number(p.usage.cachedInputTokens)}</td>
-                <td className="muted">{number(p.usage.reasoningTokens)}</td>
+                <td className="muted">{show(usageValue(p.usage.inputTokens, p.usage, connected))}</td>
+                <td className="muted">{show(usageValue(p.usage.outputTokens, p.usage, connected))}</td>
+                <td className="muted">{show(usageValue(p.usage.cachedInputTokens, p.usage, connected))}</td>
+                <td className="muted">{show(usageValue(p.usage.reasoningTokens, p.usage, connected))}</td>
                 <td className="muted">
-                  {number(priced(p.usage) ? p.usage.actualCostUsd : null)} / {number(p.quota)}
+                  {priced(p.usage) && p.usage.actualCostUsd !== null ? number(p.usage.actualCostUsd) : usageAbsence(p.usage, connected)} / {p.quota === null ? 'NOT RECORDED' : number(p.quota)}
                 </td>
-                <td className="mono">{p.permits === null ? 'UNKNOWN' : `${p.permitsInUse} / ${p.permits}`}</td>
+                <td className="mono">{p.permits === null ? 'UNAVAILABLE' : `${p.permitsInUse ?? 'UNKNOWN'} / ${p.permits}`}</td>
               </tr>
             ))}
           </tbody>
@@ -733,6 +743,7 @@ function App() {
               <label htmlFor="task-status">Task status</label>
               <select id="task-status" value={status} onChange={e => { setStatus(e.target.value); setSelected(null); }}>
                 <option value="">All statuses</option>
+                <option value={ATTENTION}>Needs attention (blocked · escalated · runtime failure · rejected)</option>
                 {[...new Set(snapshot?.tasks.map(t => t.state) ?? [])].sort().map(s => <option key={s}>{s}</option>)}
               </select>
             </div>}
@@ -768,38 +779,45 @@ function App() {
                     <section className="panel">
                       <div className="panel-heading">
                         <h2>
-                          Agent hierarchy <span className="count">{snapshot.agents.length}</span>
+                          Execution lanes by provider <span className="count">{snapshot.agents.length}</span>
                         </h2>
-                        <span className="muted">Lead → coding workers</span>
+                        <span className="muted">From persisted tasks in the selected batch</span>
                       </div>
                       <div className="table-scroll">
                         <table className="agent-table">
                           <thead>
                             <tr>
-                              <th>Agent / provider</th>
-                              <th>Current activity</th>
+                              <th>Provider lane</th>
+                              <th>Evidence</th>
+                              <th>Scheduler activity</th>
                               <th>Current assignment</th>
                               <th>Elapsed / task tokens</th>
-                              <th>Last outcome</th>
+                              <th>Last scheduler state</th>
                               <th>Last event</th>
                             </tr>
                           </thead>
                           <tbody>
+                            {!snapshot.agents.length && (
+                              <tr><td colSpan={7} className="muted">No persisted execution lanes in scope. Select a scheduler batch in Runs; a lane appears only for a provider its tasks name.</td></tr>
+                            )}
                             {snapshot.agents.map((a) => (
                               <tr key={a.id} className={selected?.id === a.id ? 'selected' : ''}>
                                 <td>
                                   <button
-                                    className={`agent-name ${a.role === 'worker' ? 'child' : ''}`}
+                                    className="agent-name"
                                     onClick={() => setSelected({ kind: 'agent', id: a.id })}
                                   >
-                                    {a.role === 'worker' ? <GitBranch size={15} /> : <Network size={15} />}
+                                    <GitBranch size={15} />
                                     <span>
                                       {a.name}
                                       <small>
-                                        {a.provider} · model {a.modelId ?? 'UNKNOWN'}
+                                        provider · model {a.modelId ?? 'NOT RECORDED'}
                                       </small>
                                     </span>
                                   </button>
+                                </td>
+                                <td>
+                                  <Badge value={connected ? (a.evidence ?? 'UNKNOWN') : 'UNAVAILABLE'} />
                                 </td>
                                 <td>
                                   <Badge value={observedActivity(a, currentTasks(snapshot, a), connected, now)} />
@@ -812,24 +830,24 @@ function App() {
                                       </button>
                                     ))
                                   ) : (
-                                    <span className="muted">No assignment observed</span>
+                                    <span className="muted">{connected ? 'NO ACTIVE RUN' : 'UNAVAILABLE'}</span>
                                   )}
                                 </td>
                                 <td>
                                   <AgentMeasurements agent={a} snapshot={snapshot} now={now} connected={connected} />
                                 </td>
-                                <td>{a.lastOutcome ? <Badge value={a.lastOutcome} /> : <span className="muted">Unknown</span>}</td>
+                                <td>{a.lastOutcome ? <Badge value={a.lastOutcome} /> : <span className="muted">None recorded</span>}</td>
                                 <td className="muted">{date(a.lastEventAt)}</td>
                               </tr>
                             ))}
                           </tbody>
                         </table>
                       </div>
-                      <p className="panel-note">Activity and outcome are separate. A completed run does not make a worker online.</p>
+                      <p className="panel-note">A lane is a provider named by persisted tasks, not an agent identity; model is not recorded by the scheduler. ACTIVE means a current, non-expired lease, never online presence. OBSERVED means persisted tasks only.</p>
                       <div className="panel-note" aria-label="Verifier role"><strong>Verifier</strong> · Deterministic runtime verification role · Activity UNKNOWN. Individual verifier identity and heartbeat are not exposed by Core.</div>
                     </section>
-                    <details><summary>Registered agent bindings</summary><AgentsView apiBase={apiBase} /></details>
-                    <Providers snapshot={snapshot} />
+                    <details><summary>Registered agent bindings (registration only · not activity or online state)</summary><AgentsView apiBase={apiBase} /></details>
+                    <Providers snapshot={snapshot} connected={connected} />
                     <section className="panel compact">
                       <h2>Observation coverage</h2>
                       <p>
@@ -856,9 +874,9 @@ function App() {
                           {snapshot.tasks.length} tasks · {snapshot.reviews.length} pending reviews
                         </span>
                       </div>
-                      <TaskTable tasks={snapshot.tasks} onSelect={pickTask} now={connected ? now : snapshot.observedAt} />
+                      <TaskTable tasks={snapshot.tasks} onSelect={pickTask} now={connected ? now : snapshot.observedAt} connected={connected} />
                     </section>
-                    <Providers snapshot={snapshot} />
+                    <Providers snapshot={snapshot} connected={connected} />
                     <section className="panel compact">
                       <h2>Recent transitions</h2>
                       <Timeline events={snapshot.events.slice(-12)} />
@@ -870,16 +888,16 @@ function App() {
                     <section className="panel">
                       <div className="panel-heading">
                         <h2>Tasks & dependencies</h2>
-                        <span className="muted">{objectiveId || 'No objective selected'}</span>
+                        <span className="muted">{snapshot.tasks.filter(needsAttention).length ? <strong className="warning">{snapshot.tasks.filter(needsAttention).length} need attention · </strong> : null}{objectiveId || 'No objective selected'}</span>
                       </div>
-                      <TaskTable tasks={snapshot.tasks.filter(t => !status || t.state === status)} onSelect={pickTask} now={connected ? now : snapshot.observedAt} />
+                      <TaskTable tasks={snapshot.tasks.filter(t => !status || (status === ATTENTION ? needsAttention(t) : t.state === status))} onSelect={pickTask} now={connected ? now : snapshot.observedAt} connected={connected} />
                     </section>
                     <section className="panel">
                       <div className="panel-heading"><h2>Objective DAG</h2><span className="muted">Persisted dependency edges</span></div>
                       {snapshot.tasks.length ? <div className="table-scroll"><table aria-label="Objective DAG"><thead><tr><th>Task</th><th>Depends on</th></tr></thead><tbody>{snapshot.tasks.map(t => <tr key={t.id}><td><button className="text-button" onClick={() => pickTask(t.id)}>{t.id}</button></td><td>{t.dependsOn.length ? t.dependsOn.map(id => <button className="text-button assignment-link" key={id} onClick={() => pickTask(id)}>{id}</button>) : 'None'}</td></tr>)}</tbody></table></div> : <Empty>No dependency graph in this scope.</Empty>}
                     </section>
                     <section className="panel compact">
-                      <UsageView usage={snapshot.usage} />
+                      <UsageView usage={snapshot.usage} connected={connected} />
                     </section>
                     <section className="panel compact">
                       <h2>Objective timeline</h2>
@@ -933,7 +951,7 @@ function App() {
                     )}
                   </section>
                 )}
-                {page === 'Usage' && <><section className="panel usage-panel"><UsageView usage={snapshot.usage} title="Objective usage" /></section><Providers snapshot={snapshot} /></>}
+                {page === 'Usage' && <><section className="panel usage-panel"><UsageView usage={snapshot.usage} title="Objective usage" connected={connected} /></section><Providers snapshot={snapshot} connected={connected} /></>}
                 {page === 'Runs' && (
                   <section className="panel">
                     <div className="panel-heading">

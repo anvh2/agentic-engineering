@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { fixture } from '../../../src/integrations/control-center/__testing__/fixture.ts';
 import { unknownUsage, type ModelCall } from '../../../src/integrations/control-center/contract.ts';
-import { currentTasks, inspectorObservations, observedActivity, priced, taskUsage, usageForCalls } from './observations.ts';
+import { claimElapsedOrAbsence, currentTasks, inspectorObservations, needsAttention, observedActivity, priced, taskUsage, usageAbsence, usageForCalls, usageValue } from './observations.ts';
 
 function call(id: string, runId: string, input: number | null, extra: Partial<ModelCall> = {}): ModelCall {
   return {
@@ -104,4 +104,20 @@ test('in-flight calls retain pending telemetry without inventing token values', 
   assert.equal(usage.completeness, 'pending');
   assert.equal(usage.inputTokens, null);
   assert.equal(usage.outputTokens, null);
+});
+
+test('absent evidence is labelled by cause and never becomes zero', (t) => {
+  const f = fixture(); t.after(f.close);
+  const snapshot = f.reader.snapshot('B1');
+  const task = snapshot.tasks[0]!;
+  assert.equal(usageAbsence(unknownUsage(), true), 'NOT RECORDED');
+  assert.equal(usageAbsence(unknownUsage(), false), 'UNAVAILABLE');
+  assert.equal(usageAbsence({ ...unknownUsage(), source: 'core.model-call', completeness: 'partial' }, true), 'UNKNOWN');
+  assert.equal(usageValue(null, unknownUsage(), true), 'NOT RECORDED');
+  assert.equal(usageValue(0, { ...unknownUsage(), source: 'core.model-call', completeness: 'complete', inputTokens: 0 }, true), 0);
+  assert.equal(claimElapsedOrAbsence({ ...task, state: 'DONE' }, Date.now(), true), 'NOT APPLICABLE');
+  assert.equal(claimElapsedOrAbsence({ ...task, state: 'CODING', stale: true }, Date.now(), true), 'UNKNOWN');
+  assert.equal(claimElapsedOrAbsence({ ...task, state: 'CODING' }, Date.now(), false), 'UNAVAILABLE');
+  assert.equal(needsAttention({ ...task, state: 'ESCALATED' }), true);
+  assert.equal(needsAttention({ ...task, state: 'DONE' }), false);
 });

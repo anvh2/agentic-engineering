@@ -33,3 +33,16 @@ Final candidate, after the last code change:
 - Fixture browser suite `npm run test:ui`: 3/3.
 - After review scoped the agent row count in `organization-council.test.mjs` to the Registered agents region (an exact count again, no longer `>=`), that test re-ran against the actual Studio 1/1, with root typecheck and the focused suite 42/42 on the committed tree.
 - Full `npm test`: 1504 of 1507 passed, 2 failed, 1 cancelled. That run started before the final verifier/findings projection and the hardening edits; the focused suite above covers those. The three failing suites, `tests/autonomy/autonomous-demonstration.test.ts`, `tests/smoke-e2e/codex-http-smoke.test.ts` and `tests/smoke-e2e/m85-objective.test.ts`, failed on timing: "timed out waiting for", a 300 s test timeout, and "bounded attempts, saw 0". At the time, two Mastra builds and two Chrome suites were running on the same machine. None of them imports control-center code. Re-run in isolation on the final candidate, they passed 24/24.
+
+## Sprint follow-up (2026-10-22): identity and evidence semantics
+
+The same actual-Studio setup, main scheduler DB, batch `M5-ESHOP-2A`:
+
+| File | Shows |
+| --- | --- |
+| `overview-execution-lanes.png` | The static Claude/Qwen/Codex/Gemini roster is replaced by execution lanes for the providers the batch's persisted tasks name (`claude`, `ollama`). Evidence `OBSERVED`, no role, model NOT RECORDED. Usage reads NOT RECORDED and permits UNAVAILABLE (no capacity DB in this preview), never zero |
+| `runs-needs-attention.png` | "Needs attention" filter: 7 blocked or failed tasks, with scheduler state, outcome (`dependency_failed`, `source_tree_dirty`, `task_timeout`) and trace (`No run recorded` vs a run link) in separate columns. Claim elapsed reads NOT APPLICABLE for unleased tasks |
+
+Contract note: `agents[].role` is now nullable. A UI bundle built before this change rejects the new snapshot. The Gateway serves its own bundle from the same build, so that only affects mixing old assets with a new backend, as the optional before-screenshot step of `organization-runs.test.mjs` does.
+
+Verification for this follow-up: root and UI typecheck pass; UI build and `npm run build -- --studio` pass; focused suite 44/44; `npm run test:ui` 3/3; actual Studio `studio.test.mjs` and `organization-council.test.mjs` 2/2 and `organization-runs.test.mjs` 1/1 (without the baseline step). The full regression was not re-run.

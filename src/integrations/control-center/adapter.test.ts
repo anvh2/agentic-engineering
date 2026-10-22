@@ -190,3 +190,30 @@ test('non-array findings and a non-integer exit code project as absent instead o
   assert.equal(execution.findingsOmitted, 0);
   assert.ok(!JSON.stringify(snapshot).includes('private'));
 });
+
+test('execution lanes come only from persisted providers: no static names, no inferred role, ACTIVE only on a live lease', t => {
+  const f = fixture(); t.after(f.close);
+  assert.deepEqual(f.reader.snapshot().agents, []);
+  assert.deepEqual(createReader({ dbPath: join(f.directory, 'missing.db') }).snapshot().agents, []);
+  let snapshot = f.reader.snapshot('B1');
+  const providers = [...new Set(snapshot.tasks.map(t => t.provider))].sort();
+  assert.deepEqual(snapshot.agents.map(a => a.id), providers);
+  assert.deepEqual(snapshot.providers.map(p => p.id), providers);
+  for (const a of snapshot.agents) {
+    assert.equal(a.name, a.provider);
+    assert.equal(a.role, null);
+    assert.equal(a.parentId, null);
+    assert.equal(a.modelId, null);
+    assert.equal(a.evidence, 'OBSERVED');
+  }
+  const wire = JSON.stringify(snapshot.agents);
+  for (const name of ['Qwen', 'Claude Engineering Lead', 'Codex', 'Gemini']) assert.ok(!wire.includes(name), name);
+  const claim = f.claim();
+  f.store.transition('task-a', 'CODING', { actor: 'worker-1', fence: claim.fence });
+  snapshot = f.reader.snapshot('B1');
+  assert.equal(snapshot.agents.find(a => a.assignmentIds.includes('task-a'))?.evidence, 'ACTIVE');
+  f.advance(1001);
+  snapshot = f.reader.snapshot('B1');
+  assert.ok(snapshot.agents.every(a => a.evidence === 'OBSERVED' && a.availability === 'UNKNOWN' && a.configured === null));
+  assert.equal(snapshotSchema.safeParse(snapshot).success, true);
+});

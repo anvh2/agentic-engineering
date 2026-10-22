@@ -124,10 +124,13 @@ export type ControlTask = z.infer<typeof taskSchema>;
 export const agentSchema = z.object({
   id: z.string(),
   name: z.string(),
-  role: z.enum(['lead', 'worker']),
+  /** Null: an execution lane is a provider, not an identity; no role is inferred from its name. */
+  role: z.enum(['lead', 'worker']).nullable(),
   parentId: z.string().nullable(),
   provider: z.string(),
   modelId: z.string().nullable(),
+  /** ACTIVE: a current, non-expired lease. OBSERVED: persisted tasks only. Never an online state. */
+  evidence: z.enum(['ACTIVE', 'OBSERVED']).optional(),
   activity: activitySchema,
   configured: z.boolean().nullable(),
   availability: z.enum(['UNKNOWN', 'AVAILABLE', 'UNAVAILABLE']),

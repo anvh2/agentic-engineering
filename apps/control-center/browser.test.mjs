@@ -37,9 +37,20 @@ test(
     assert.deepEqual(await page.getByRole('navigation', { name: 'Primary' }).getByRole('button').allTextContents(), ['Overview', 'Runs', 'Collaboration', 'Usage']);
     await page.getByRole('button', { name: 'Runs', exact: true }).click();
     await page.getByLabel('Objective / scheduler batch', { exact: true }).selectOption('B1');
+    // Separate scheduler state, outcome and trace evidence; a task without a run says so.
+    await page.getByRole('columnheader', { name: 'Outcome (failure · review)' }).waitFor();
+    await page.getByText('No run recorded', { exact: true }).first().waitFor();
+    await page.getByLabel('Task status', { exact: true }).selectOption('__attention');
+    await page.getByText('No tasks in this scope.', { exact: false }).waitFor();
+    await page.getByLabel('Task status', { exact: true }).selectOption('');
     await page.getByRole('button', { name: 'Overview', exact: true }).click();
-    await page.getByRole('button', { name: 'Qwen' }).waitFor();
-    const qwen = page.getByRole('button', { name: 'Qwen' });
+    // Lanes are persisted providers only: no model names as workers, no assumed lead identity.
+    await page.getByRole('heading', { name: 'Execution lanes by provider', exact: false }).waitFor();
+    for (const name of ['Qwen', 'Claude Engineering Lead', 'Codex', 'Gemini']) assert.equal(await page.locator('.agent-table').getByText(name, { exact: false }).count(), 0, name);
+    await page.locator('.agent-table').getByText('OBSERVED', { exact: true }).first().waitFor();
+    assert.ok((await page.locator('.agent-table').innerText()).includes('NO ACTIVE RUN'));
+    const qwen = page.getByRole('button', { name: /^ollama/ });
+    await qwen.waitFor();
     await qwen.focus();
     await page.keyboard.press('Enter');
     await page.getByRole('complementary', { name: 'Details inspector' }).waitFor();
@@ -68,6 +79,7 @@ test(
     f.store.transition('task-a', 'CODING', { actor: 'worker-1', fence: claim.fence });
     f.store.transition('task-a', 'VERIFYING', { actor: 'worker-1', fence: claim.fence });
     await page.locator('.agent-table').getByText('VERIFYING', { exact: true }).waitFor();
+    await page.locator('.agent-table').getByText('ACTIVE', { exact: true }).waitFor();
     await qwen.click();
     const inspector = page.getByRole('complementary');
     await inspector.getByText('Implement scoped parser', { exact: true }).waitFor();
@@ -77,7 +89,7 @@ test(
     );
     await page.screenshot({ path: `${output}/organization-dark-inspector.png`, fullPage: true });
     f.store.transition('task-a', 'REVIEW_PENDING', { actor: 'worker-1', fence: claim.fence, review: {} });
-    await inspector.getByText('Historically verified in this objective.', { exact: false }).waitFor();
+    await inspector.getByText('reached review or later in this batch', { exact: false }).waitFor();
     assert.ok((await inspector.innerText()).includes('UNKNOWN'));
     await page.getByRole('button', { name: 'Close inspector' }).click();
     await page.getByRole('button', { name: 'Overview', exact: true }).click();
@@ -169,7 +181,7 @@ test(
     await page.getByRole('button', { name: 'Runs', exact: true }).click();
     await page.getByLabel('Objective / scheduler batch', { exact: true }).selectOption('B1');
     await page.getByRole('button', { name: 'Overview', exact: true }).click();
-    await page.getByRole('button', { name: 'Qwen' }).click();
+    await page.getByRole('button', { name: /^ollama/ }).click();
     await page.getByRole('tab', { name: 'Usage', exact: true }).click();
     const panel = page.getByRole('tabpanel');
     await panel.getByText('31', { exact: true }).waitFor();

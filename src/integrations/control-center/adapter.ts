@@ -44,27 +44,24 @@ const supported = new Set([
   'task.audit',
 ]);
 export const eventSupport = Object.fromEntries(eventNames.map((n) => [n, supported.has(n)]));
-const roster = [
-  ['claude', 'Claude Engineering Lead', 'lead'],
-  ['ollama', 'Qwen', 'worker'],
-  ['codex', 'Codex', 'worker'],
-  ['gemini', 'Gemini', 'worker'],
-] as const;
+/**
+ * Execution lanes, one per provider that persisted tasks in scope actually name. No static roster:
+ * provider ids are not agent identities, model names are not workers, and a lane exists only
+ * when the scheduler database records work for it. Role is not inferred from a provider name.
+ */
 function agents(tasks: ControlTask[]): ControlAgent[] {
-  const entries: { id: string; name: string; role: 'lead' | 'worker' }[] = roster.map(([id, name, role]) => ({ id, name, role }));
-  for (const provider of new Set(tasks.map((t) => t.provider)))
-    if (!entries.some((a) => a.id === provider)) entries.push({ id: provider, name: provider, role: 'worker' });
-  return entries.map(({ id, name, role }) => {
+  return [...new Set(tasks.map((t) => t.provider))].sort().map((id) => {
     const own = tasks.filter((t) => t.provider === id).sort((a, b) => b.updatedAt - a.updatedAt);
     const assigned = own.filter((t) => (LEASED_STATES as readonly string[]).includes(t.state) && !t.stale);
     const last = own.find((t) => !['BACKLOG', 'READY', 'CLAIMED', 'CODING', 'VERIFYING'].includes(t.state));
     return {
       id,
-      name,
-      role,
-      parentId: role === 'lead' ? null : 'claude',
+      name: id,
+      role: null,
+      parentId: null,
       provider: id,
       modelId: null,
+      evidence: assigned.length ? ('ACTIVE' as const) : ('OBSERVED' as const),
       activity: assigned.some((t) => t.activity === 'VERIFYING')
         ? 'VERIFYING'
         : assigned.length
@@ -240,7 +237,6 @@ export function createReader(options: ReaderOptions) {
           ).map((r) => ({ id: r.id, taskId: r.task_id, createdAt: r.created_at, round: r.round }));
           out.agents = agents(out.tasks);
           out.providers = out.agents
-            .filter((a) => a.role === 'worker')
             .map((a) => ({ id: a.provider, usage: unknownUsage(), quota: null, permits: null, permitsInUse: null }));
           return out;
         });

@@ -101,3 +101,25 @@ export function priced(usage: Usage): boolean {
   const price = usage.estimatedCost;
   return !!price && !!price.modelId.trim() && price.modelId !== 'UNKNOWN' && !!price.pricingSource.trim();
 }
+
+/** Why a value is absent. A missing value is labelled, never shown as zero. */
+export type Absence = 'NOT RECORDED' | 'UNAVAILABLE' | 'NOT APPLICABLE' | 'NO ACTIVE RUN' | 'UNKNOWN';
+/** Usage with no telemetry source is NOT RECORDED; a disconnected source is UNAVAILABLE; partial gaps stay UNKNOWN. */
+export function usageAbsence(usage: Usage, connected: boolean): Absence {
+  if (!connected) return 'UNAVAILABLE';
+  if (usage.source === 'unavailable' || usage.completeness === 'unavailable') return 'NOT RECORDED';
+  return 'UNKNOWN';
+}
+export function usageValue(value: number | null, usage: Usage, connected: boolean): number | Absence {
+  return value === null ? usageAbsence(usage, connected) : value;
+}
+const leased = new Set(['CLAIMED', 'CODING', 'VERIFYING']);
+/** Claim elapsed applies only to a leased task; an expired lease is UNKNOWN, not idle. */
+export function claimElapsedOrAbsence(task: ControlTask, now: number, connected: boolean): number | Absence {
+  if (!connected) return 'UNAVAILABLE';
+  if (!leased.has(task.state)) return 'NOT APPLICABLE';
+  return claimElapsed(task, now, connected) ?? 'UNKNOWN';
+}
+/** States an operator must act on or inspect: work stopped without a passing integration. */
+export const ATTENTION_STATES: readonly ControlTask['state'][] = ['BLOCKED', 'ESCALATED', 'RUNTIME_FAILURE', 'REVIEW_REJECTED'];
+export const needsAttention = (task: ControlTask) => ATTENTION_STATES.includes(task.state);

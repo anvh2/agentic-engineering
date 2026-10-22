@@ -31,14 +31,15 @@ test('actual Studio: Organization sidebar, refresh, same-origin Gateway/SSE and 
     await page.getByRole('link', { name: 'Organization', exact: true }).first().click();
     await page.waitForURL('**/organization');
     const workspace = page.frameLocator('iframe[title="Organization workspace"]');
-    await workspace.getByRole('heading', { name: 'Agent hierarchy', exact: false }).waitFor();
-    // The card's accessible name also carries the provider/model line, e.g. 'Claude Engineering Leadclaude · model UNKNOWN'.
-    await workspace.getByRole('button', { name: /^Claude Engineering Lead/ }).waitFor();
+    await workspace.getByRole('heading', { name: 'Execution lanes by provider', exact: false }).waitFor();
+    // No batch in scope: no lanes and no assumed identities, rather than a static roster.
+    await workspace.getByText('No persisted execution lanes in scope.', { exact: false }).waitFor();
+    assert.equal(await workspace.getByText('Claude Engineering Lead', { exact: false }).count(), 0);
     await workspace.getByLabel('Verifier role').waitFor();
     assert.ok((await workspace.locator('main').innerText()).includes('UNKNOWN'));
     await page.screenshot({ path: `${out}/studio-organization.png`, fullPage: true });
     await page.reload();
-    await workspace.getByRole('heading', { name: 'Agent hierarchy', exact: false }).waitFor();
+    await workspace.getByRole('heading', { name: 'Execution lanes by provider', exact: false }).waitFor();
     // The UI must show exactly what the Gateway reads from Core B's store: records when present, NOT AVAILABLE otherwise.
     const collab = await (await fetch(`${origin}/control-center/v1/collaboration`)).json();
     await workspace.getByRole('button', { name: 'Collaboration', exact: true }).click();
