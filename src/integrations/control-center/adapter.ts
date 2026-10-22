@@ -84,7 +84,9 @@ function taskCalls(raw: string | null, taskId: string, objectiveId: string, runI
       usage: { ...unknownUsage(), inputTokens, outputTokens, latencyMs: inferenceMs, source: 'core.model-call', completeness: inputTokens !== null && outputTokens !== null ? 'complete' : 'partial' },
     });
   }
-  return { calls, rejected: rejected || (Array.isArray(entries) && entries.length > 100) };
+  // The scheduler keeps at most 100 entries by dropping the oldest, which can remove part of a run: a list at the cap may
+  // be truncated, so its coverage is never presented as complete.
+  return { calls, rejected: rejected || (Array.isArray(entries) && entries.length >= 100) };
 }
 /** A total over incomplete coverage is reported, but never as complete. */
 const coverage = (usage: Usage, gap: boolean): Usage => (gap && usage.completeness === 'complete' ? { ...usage, completeness: 'partial' } : usage);

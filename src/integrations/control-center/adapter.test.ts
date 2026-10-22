@@ -285,3 +285,25 @@ test('no scope lists no providers rather than a static set', t => {
   assert.deepEqual(f.reader.snapshot().providers, []);
   assert.deepEqual(createReader({ dbPath: join(f.directory, 'missing.db') }).snapshot().providers, []);
 });
+
+test('hardening: a list at the 100-entry cap is never complete; out-of-range counts are rejected without failing the snapshot', t => {
+  const f = fixture(); t.after(f.close);
+  // 100 entries across runs: a trimmed run may keep some of its attempts, so full coverage cannot be claimed.
+  const runs = Array.from({ length: 34 }, (_, i) => `run-${i}`);
+  const capped = runs.flatMap(r => [1, 2, 3].map(a => persisted(r, a))).slice(-100);
+  setCalls(f, 'task-a', runs, capped);
+  assert.ok(runs.every(r => capped.some(c => c.runId === r)), 'every run still has an entry: coverage looks complete without the cap rule');
+  let task = f.reader.snapshot('B1').tasks.find(x => x.id === 'task-a')!;
+  assert.equal(capped.length, 100);
+  assert.equal(task.usage.completeness, 'partial');
+  // Below the cap with full coverage, the same data is complete.
+  setCalls(f, 'task-a', ['run-1'], [persisted('run-1', 1), persisted('run-1', 2)]);
+  assert.equal(f.reader.snapshot('B1').tasks.find(x => x.id === 'task-a')!.usage.completeness, 'complete');
+  // Counts beyond the safe-integer range (e.g. a buggy provider report) are rejected; the snapshot stays connected and partial.
+  setCalls(f, 'task-a', ['run-1'], [persisted('run-1', 1, { inputTokens: 1e308 }), persisted('run-1', 2, { inputTokens: 1e308 })]);
+  const snapshot = f.reader.snapshot('B1');
+  task = snapshot.tasks.find(x => x.id === 'task-a')!;
+  assert.equal(snapshot.source, 'connected');
+  assert.deepEqual(snapshot.calls, []);
+  assert.equal(task.usage.inputTokens, null);
+});

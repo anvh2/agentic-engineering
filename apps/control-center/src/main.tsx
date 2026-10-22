@@ -427,7 +427,7 @@ function Inspector({
               {snapshot.calls.some((c) => c.taskId === task.id) ? (
                 <div className="table-scroll">
                   <table aria-label="Recorded worker invocations">
-                    <thead><tr><th>Run</th><th>Attempt</th><th>Worker</th><th>Provider · model</th><th>Input</th><th>Output</th><th>Latency</th></tr></thead>
+                    <thead><tr><th>Run</th><th>Attempt</th><th>Completing worker (lease owner)</th><th>Provider · model</th><th>Input</th><th>Output</th><th>Latency</th></tr></thead>
                     <tbody>
                       {snapshot.calls.filter((c) => c.taskId === task.id).map((c) => (
                         <tr key={c.id}>
@@ -447,7 +447,7 @@ function Inspector({
                 <p className="muted">{task.runIds.length ? 'NOT RECORDED · no invocation telemetry persisted for these runs' : 'No run recorded'}</p>
               )}
               {task.usage.source !== 'unavailable' && task.usage.completeness !== 'complete' && <p className="notice">Task total is PARTIAL: a run has no recorded invocation, a runtime retry reported no usage, or a record was rejected.</p>}
-              <p className="footnote">One row per attempt that got a model response: the provider-reported totals of that call, which may span several agent steps. Failed runtime retries report no usage. Model is the one the provider was invoked with. Cost is not recorded and never estimated.</p>
+              <p className="footnote">One row per attempt that got a model response: the provider-reported totals of that call, which may span several agent steps. Failed runtime retries report no usage. The worker is the lease owner that completed the run; after a lease change or restart adoption it may not be the worker that drove every attempt. Model is the one the provider was invoked with. Cost is not recorded and never estimated.</p>
               <p className="footnote">Recorded verifier exit code and change-review findings describe the persisted task result, not every workflow run. Acceptance artifacts, finding details and free-form failure reasons are unavailable in this safe projection. Task state is not a verifier PASS. Agent/model identity and historical worker assignments are not inferred from provider or current worker.</p>
               <p className="footnote">Associated Council meetings: unavailable without a verified task-to-meeting correlation. Inspect preserved records in Collaboration → Council.</p>
             </section>}
