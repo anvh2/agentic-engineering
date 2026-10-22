@@ -34,8 +34,10 @@ test(
     await page.goto(`http://127.0.0.1:${gateway.server.address().port}`);
     await page.getByText('Scheduler connected', { exact: true }).waitFor();
     assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
-    assert.equal(await page.getByText('No usage aggregated', { exact: true }).count(), 1);
-    await page.getByLabel('Objective', { exact: true }).selectOption('B1');
+    assert.deepEqual(await page.getByRole('navigation', { name: 'Primary' }).getByRole('button').allTextContents(), ['Overview', 'Runs', 'Collaboration', 'Usage']);
+    await page.getByRole('button', { name: 'Runs', exact: true }).click();
+    await page.getByLabel('Objective / scheduler batch', { exact: true }).selectOption('B1');
+    await page.getByRole('button', { name: 'Overview', exact: true }).click();
     await page.getByRole('button', { name: 'Qwen' }).waitFor();
     const qwen = page.getByRole('button', { name: 'Qwen' });
     await qwen.focus();
@@ -79,23 +81,13 @@ test(
     assert.ok((await inspector.innerText()).includes('UNKNOWN'));
     await page.getByRole('button', { name: 'Close inspector' }).click();
     await page.getByRole('button', { name: 'Overview', exact: true }).click();
-    assert.deepEqual(await page.getByRole('table', { name: 'Agent activity' }).locator('th').allTextContents(), [
-      'Agent',
-      'Activity',
-      'Current Task',
-      'Elapsed',
-      'Tokens',
-      'Last Outcome',
-    ]);
-    await page.getByRole('button', { name: /^Reviews/ }).click();
-    await page.getByRole('button', { name: 'task-a', exact: true }).waitFor();
     await page.getByRole('button', { name: 'Runs', exact: true }).click();
+    await page.getByRole('heading', { name: 'Review queue' }).waitFor();
     await page.getByText('synthetic-run-a', { exact: true }).waitFor();
-    await page.getByRole('button', { name: 'Objectives', exact: true }).click();
     await page.getByRole('button', { name: 'Verify parser behavior', exact: true }).click();
     assert.ok((await page.getByRole('complementary').innerText()).includes('task-a'));
     await page.getByRole('button', { name: 'Close inspector' }).click();
-    await page.getByRole('button', { name: 'Organization', exact: true }).click();
+    await page.getByRole('button', { name: 'Overview', exact: true }).click();
     await page.setViewportSize({ width: 768, height: 1000 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.setViewportSize({ width: 390, height: 844 });
@@ -174,7 +166,9 @@ test(
     page.setDefaultTimeout(15000);
     await page.goto(`http://127.0.0.1:${gateway.server.address().port}`);
     await page.getByText('Scheduler connected', { exact: true }).waitFor();
-    await page.getByLabel('Objective', { exact: true }).selectOption('B1');
+    await page.getByRole('button', { name: 'Runs', exact: true }).click();
+    await page.getByLabel('Objective / scheduler batch', { exact: true }).selectOption('B1');
+    await page.getByRole('button', { name: 'Overview', exact: true }).click();
     await page.getByRole('button', { name: 'Qwen' }).click();
     await page.getByRole('tab', { name: 'Usage', exact: true }).click();
     const panel = page.getByRole('tabpanel');
@@ -207,6 +201,7 @@ test('discussion and meeting inspectors: unavailable production, attributed fixt
     t.after(async () => { await browser.close(); gateway.closeStreams(); gateway.server.closeAllConnections(); await new Promise(r => gateway.server.close(r)); f.close(); });
     const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
     await page.goto(`http://127.0.0.1:${gateway.server.address().port}`);
+    await page.getByRole('button', { name: 'Collaboration', exact: true }).click();
     await page.getByRole('button', { name: 'Discussions', exact: true }).click();
     await page.getByText('NOT AVAILABLE', { exact: true }).waitFor();
     assert.equal(await page.getByText('SYNTHETIC TEST DATA', { exact: false }).count(), 0);

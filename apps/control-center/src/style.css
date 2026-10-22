@@ -765,3 +765,12 @@ dd {
 .meeting-inspector h3 { margin-top: 20px; }
 .usage-panel { padding: 16px; }
 @media (max-width: 720px) { .collaboration-layout { grid-template-columns: 1fr; } }
+
+/* Keep long persisted task titles from pushing operational columns out of view. */
+.task-table td:first-child {
+  min-width: 180px;
+  max-width: 280px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.task-table td:first-child button { text-align: left; }

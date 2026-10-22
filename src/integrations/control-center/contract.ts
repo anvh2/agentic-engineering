@@ -82,6 +82,7 @@ export const eventSchema = z.object({
   from: z.enum(TASK_STATES).nullable(),
   to: z.enum(TASK_STATES),
   source: z.literal('scheduler.events'),
+  operation: z.enum(['workflow.started', 'lease.requeued', 'claims.extended']).nullable().optional(),
 });
 export type ControlEvent = z.infer<typeof eventSchema>;
 export const taskSchema = z.object({
@@ -93,6 +94,18 @@ export const taskSchema = z.object({
   state: z.enum(TASK_STATES),
   activity: activitySchema,
   stage: z.string(),
+  execution: z.object({
+    attempts: z.number().int().nonnegative(),
+    runtimeRetries: z.number().int().nonnegative(),
+    runtimeRequeues: z.number().int().nonnegative(),
+    createdAt: time,
+    finishedAt: time.nullable(),
+    failureCategory: z.string().nullable(),
+    reviewOutcome: z.string().nullable(),
+    verifierExitCode: z.number().int().nullable().optional(),
+    findings: z.array(z.object({ code: z.string(), severity: z.enum(['block', 'warn']) })).nullable().optional(),
+    findingsOmitted: z.number().int().nonnegative().optional(),
+  }).optional(),
   dependsOn: z.array(z.string()),
   runId: z.string().nullable(),
   runIds: z.array(z.string()),

@@ -12,6 +12,8 @@ import {
   type ControlTask,
   type Snapshot,
 } from './contract.ts';
+import type { FailureCategory } from '../../runtime/scheduler/types.ts';
+import type { FindingCode } from '../../runtime/review/change-review.ts';
 
 type Row = Record<string, any>;
 export interface ReaderOptions {
@@ -27,6 +29,10 @@ const limitations = [
   'Capacity counts are machine-wide and sampled separately; they cannot identify an active task or worker.',
   'Timeline contains the latest 200 persisted scheduler events. Provider and inner verification events require a Core read model.',
 ];
+// Closed vocabulary only: never expose free-form state reasons, feedback or artifacts.
+const failureCategories = new Set<string>(['coding_attempts_exhausted', 'forbidden_mutation', 'runtime_unavailable', 'task_timeout', 'capacity_wait_timeout', 'executor_error', 'lease_expired', 'review_gate_blocked', 'review_rejected', 'escalated_by_reviewer', 'integration_conflict', 'integration_verification_failed', 'diverged_after_review', 'dependency_failed', 'source_tree_dirty', 'not_eligible', 'provider_not_authorized', 'provider_unavailable', 'cancelled'] satisfies FailureCategory[]);
+const findingCodes = new Set<string>(['out_of_scope_file', 'eof_newline', 'whitespace_only_change', 'whitespace_reindent', 'too_large', 'capacity_exceeded', 'security_block', 'security_warn', 'comment_removed', 'allowed_file_deleted', 'evidence_incomplete', 'no_change'] satisfies FindingCode[]);
+const reviewOutcomes = new Set(['APPROVED', 'REJECTED_WITH_FEEDBACK', 'ESCALATED_TO_HUMAN']);
 const supported = new Set([
   'task.claimed',
   'task.queued',
@@ -116,6 +122,10 @@ function mapEvent(r: Row, databaseId: string): ControlEvent {
     from: r.from_state,
     to: r.to_state,
     source: 'scheduler.events',
+    operation: r.from_state === r.to_state && r.reason === 'workflow run started' ? 'workflow.started'
+      : r.to_state === 'READY' && (r.reason === 'lease expired; requeued' || /^lease expired; requeued \(claim refunded \d+\/\d+\)$/.test(r.reason ?? '')) ? 'lease.requeued'
+      : r.from_state === r.to_state && /^claim budget raised \d+ -> \d+: /.test(r.reason ?? '') ? 'claims.extended'
+      : null,
   };
 }
 /** No SchedulerStore constructor, provider registry, workflow client or write-capable runtime import. */
@@ -165,7 +175,8 @@ export function createReader(options: ReaderOptions) {
           if (objectiveId === null) return out;
           const rows = db
             .prepare(
-              `SELECT t.id, t.batch_id, t.title, t.executor, t.state, t.assigned_worker, t.lease_expires_at, t.claimed_at, t.updated_at, t.run_id, t.run_ids,
+              `SELECT t.id, t.batch_id, t.title, t.executor, t.state, t.assigned_worker, t.lease_expires_at, t.claimed_at, t.updated_at, t.run_id, t.run_ids, t.attempts, t.runtime_retries, t.runtime_requeues, t.created_at, t.finished_at, t.failure_category, t.review_outcome,
+            json_extract(t.result, '$.verifier.exitCode') AS verifier_exit_code, CASE WHEN json_type(t.result, '$.findings')='array' THEN json_extract(t.result, '$.findings') END AS findings,
             json_extract(t.spec, '$.dependsOn') AS dependencies, json_extract(t.spec, '$.request.provider') AS provider,
             (SELECT MAX(e.at) FROM events e WHERE e.task_id=t.id) AS last_event_at
             FROM tasks t WHERE t.batch_id=? ORDER BY t.created_at, t.id`,
@@ -175,6 +186,8 @@ export function createReader(options: ReaderOptions) {
             if (!(TASK_STATES as readonly string[]).includes(r.state)) throw new Error('unsupported state');
             const leased = (LEASED_STATES as readonly string[]).includes(r.state);
             const validLease = leased && r.lease_expires_at !== null && r.lease_expires_at > at;
+            const rawFindings: unknown = r.findings === null ? null : JSON.parse(r.findings);
+            const findings = Array.isArray(rawFindings) ? rawFindings.filter(f => f && findingCodes.has(f.code) && ['block', 'warn'].includes(f.severity)).slice(0, 50).map(f => ({ code: f.code, severity: f.severity })) : null;
             const task: ControlTask = {
               id: r.id,
               objectiveId: r.batch_id,
@@ -184,6 +197,15 @@ export function createReader(options: ReaderOptions) {
               state: r.state,
               activity: validLease && r.state === 'VERIFYING' ? 'VERIFYING' : r.state === 'READY' ? 'QUEUED' : 'UNKNOWN',
               stage: r.state,
+              execution: {
+                attempts: r.attempts, runtimeRetries: r.runtime_retries, runtimeRequeues: r.runtime_requeues,
+                createdAt: r.created_at, finishedAt: r.finished_at,
+                failureCategory: failureCategories.has(r.failure_category) ? r.failure_category : null,
+                reviewOutcome: reviewOutcomes.has(r.review_outcome) ? r.review_outcome : null,
+                verifierExitCode: Number.isInteger(r.verifier_exit_code) ? r.verifier_exit_code : null,
+                findings,
+                findingsOmitted: Array.isArray(rawFindings) ? rawFindings.length - (findings?.length ?? 0) : 0,
+              },
               dependsOn: JSON.parse(r.dependencies ?? '[]'),
               runId: r.run_id,
               runIds: JSON.parse(r.run_ids),
@@ -203,7 +225,7 @@ export function createReader(options: ReaderOptions) {
           out.events = (
             db
               .prepare(
-                'SELECT e.seq,e.task_id,e.at,e.from_state,e.to_state FROM events e JOIN tasks t ON t.id=e.task_id WHERE t.batch_id=? ORDER BY e.seq DESC LIMIT 200',
+                'SELECT e.seq,e.task_id,e.at,e.from_state,e.to_state,e.reason FROM events e JOIN tasks t ON t.id=e.task_id WHERE t.batch_id=? ORDER BY e.seq DESC LIMIT 200',
               )
               .all(objectiveId) as Row[]
           )
@@ -245,7 +267,7 @@ export function createReader(options: ReaderOptions) {
           return { reset: true, cursor: `${databaseId}:${head}`, events: [] };
         const rows = db
           .prepare(
-            'SELECT e.seq,e.task_id,e.at,e.from_state,e.to_state FROM events e JOIN tasks t ON t.id=e.task_id WHERE t.batch_id=? AND e.seq>? ORDER BY e.seq LIMIT 201',
+            'SELECT e.seq,e.task_id,e.at,e.from_state,e.to_state,e.reason FROM events e JOIN tasks t ON t.id=e.task_id WHERE t.batch_id=? AND e.seq>? ORDER BY e.seq LIMIT 201',
           )
           .all(objectiveId, Number(match[2])) as Row[];
         if (rows.length > 200) return { reset: true, cursor: `${databaseId}:${head}`, events: [] };

@@ -41,6 +41,7 @@ test('actual Studio: Organization sidebar, refresh, same-origin Gateway/SSE and 
     await workspace.getByRole('heading', { name: 'Agent hierarchy', exact: false }).waitFor();
     // The UI must show exactly what the Gateway reads from Core B's store: records when present, NOT AVAILABLE otherwise.
     const collab = await (await fetch(`${origin}/control-center/v1/collaboration`)).json();
+    await workspace.getByRole('button', { name: 'Collaboration', exact: true }).click();
     await workspace.getByRole('button', { name: 'Discussions', exact: true }).click();
     if (collab.availability === 'AVAILABLE' && collab.threads.length) {
       const thread = collab.threads[0];

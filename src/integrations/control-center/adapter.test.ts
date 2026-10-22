@@ -133,3 +133,60 @@ test('malformed stored data fails closed and missing provider capacity stays unk
   f.store.db.prepare("UPDATE tasks SET run_ids='broken json' WHERE id='task-a'").run();
   assert.equal(reader.snapshot('B1').source, 'disconnected');
 });
+
+test('execution projection preserves task counters and filters free-form categories without writing', t => {
+  const f = fixture(); t.after(f.close);
+  f.store.db.prepare('UPDATE tasks SET attempts=3, runtime_retries=2, runtime_requeues=1, failure_category=?, review_outcome=? WHERE id=?').run('lease_expired', 'APPROVED', 'task-a');
+  const before = f.store.db.prepare('SELECT * FROM tasks').all();
+  const task = f.reader.snapshot('B1').tasks.find(t => t.id === 'task-a')!;
+  assert.equal(task.execution?.attempts, 3);
+  assert.equal(task.execution?.runtimeRetries, 2);
+  assert.equal(task.execution?.runtimeRequeues, 1);
+  assert.equal(task.execution?.failureCategory, 'lease_expired');
+  assert.equal(task.execution?.reviewOutcome, 'APPROVED');
+  assert.equal(task.execution?.finishedAt, null);
+  assert.deepEqual(f.store.db.prepare('SELECT * FROM tasks').all(), before);
+  f.store.db.prepare('UPDATE tasks SET failure_category=?, review_outcome=? WHERE id=?').run('private-reason', 'private-feedback', 'task-a');
+  const wire = JSON.stringify(f.reader.snapshot('B1'));
+  assert.ok(!wire.includes('private-reason'));
+  assert.ok(!wire.includes('private-feedback'));
+});
+
+test('recognized recovery operations preserve event IDs without exposing free-form reasons', t => {
+  const f = fixture(); t.after(f.close);
+  f.store.audit('task-a', 'private-actor', 'claim budget raised 1 -> 2: private justification');
+  f.store.audit('task-a', 'private-actor', 'private unknown operation');
+  const snapshot = f.reader.snapshot('B1');
+  assert.equal(snapshot.events.at(-2)?.operation, 'claims.extended');
+  assert.equal(snapshot.events.at(-1)?.operation, null);
+  assert.ok(!JSON.stringify(snapshot).includes('private'));
+  const first = snapshot.events[0]!;
+  const replay = f.reader.eventsAfter('B1', first.id);
+  assert.deepEqual(replay.events, snapshot.events.filter(e => e.sequence > first.sequence));
+});
+
+test('verification and findings expose only measured exit code and bounded recognized code/severity', t => {
+  const f = fixture(); t.after(f.close);
+  const findings = Array.from({ length: 55 }, () => ({ code: 'security_block', severity: 'block', detail: 'private code snippet' }));
+  findings.push({ code: 'private unknown code', severity: 'warn', detail: 'private detail' });
+  f.store.db.prepare('UPDATE tasks SET result=? WHERE id=?').run(JSON.stringify({ verifier: { command: ['private command'], exitCode: 0, output: 'private output' }, findings }), 'task-a');
+  const snapshot = f.reader.snapshot('B1');
+  const execution = snapshot.tasks.find(t => t.id === 'task-a')!.execution!;
+  assert.equal(execution.verifierExitCode, 0);
+  assert.equal(execution.findings?.length, 50);
+  assert.equal(execution.findingsOmitted, 6);
+  assert.deepEqual(execution.findings?.[0], { code: 'security_block', severity: 'block' });
+  assert.ok(!JSON.stringify(snapshot).includes('private'));
+});
+
+test('non-array findings and a non-integer exit code project as absent instead of failing the snapshot', t => {
+  const f = fixture(); t.after(f.close);
+  f.store.db.prepare('UPDATE tasks SET result=? WHERE id=?').run(JSON.stringify({ verifier: { exitCode: 'private' }, findings: 'private scalar' }), 'task-a');
+  const snapshot = f.reader.snapshot('B1');
+  assert.notEqual(snapshot.source, 'disconnected');
+  const execution = snapshot.tasks.find(t => t.id === 'task-a')!.execution!;
+  assert.equal(execution.verifierExitCode, null);
+  assert.equal(execution.findings, null);
+  assert.equal(execution.findingsOmitted, 0);
+  assert.ok(!JSON.stringify(snapshot).includes('private'));
+});
