@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { createCodingTaskWorkflow } from '../workflows/coding-task-workflow.ts';
-import type { Executor, ExecutorOutcome } from '../../../runtime/scheduler/scheduler.ts';
+import type { Executor } from '../../../runtime/scheduler/scheduler.ts';
+import { toOutcome } from '../executor.ts';
 
 /**
  * An Executor that runs the REAL coding-task-workflow in this process instead of over HTTP to a Mastra server. It mirrors
@@ -27,18 +28,8 @@ export function createInProcessExecutor(workflow: ReturnType<typeof createCoding
       });
       const r = (await Promise.race([pending, aborted])) as { status: string; result?: Record<string, any>; error?: unknown };
       if (r.status !== 'success' || !r.result) throw new Error(`workflow run ${runId} did not complete: status=${r.status} ${JSON.stringify(r.error ?? '').slice(0, 300)}`);
-      const x = r.result;
-      return {
-        runId,
-        status: x.status,
-        reasons: x.reasons ?? [],
-        codingAttempts: x.codingAttempts ?? 0,
-        runtimeRetries: x.runtimeRetries ?? 0,
-        failureCategory: x.failureCategory,
-        artifactDir: x.artifactDir,
-        verifier: x.verifier ? { command: x.verifier.command, exitCode: x.verifier.exitCode } : null,
-        diff: x.diff,
-      } satisfies ExecutorOutcome;
+      // The production mapping, so these end-to-end tests exercise exactly what the HTTP executor hands the scheduler.
+      return toOutcome({ runId, studioUrl: '', status: r.status, result: r.result });
     },
     async cancel({ runId }) {
       const entry = live.get(runId);

@@ -96,6 +96,23 @@ test(
     await page.getByRole('button', { name: 'Runs', exact: true }).click();
     await page.getByRole('heading', { name: 'Review queue' }).waitFor();
     await page.getByText('synthetic-run-a', { exact: true }).waitFor();
+    // Recorded worker invocations: run/worker/provider/model identity and reported counts; attempt 2 reported none.
+    f.store.db.prepare("UPDATE tasks SET artifacts=json_set(artifacts, '$.modelCalls', json(?)) WHERE id='task-a'").run(JSON.stringify([
+      { runId: 'synthetic-run-a', workerId: 'worker-1', attempt: 1, provider: 'ollama', model: 'qwen-test', startedAt: Date.now() - 5000, inferenceMs: 1200, inputTokens: 321, outputTokens: 45, usageSupport: 'tokens' },
+      { runId: 'synthetic-run-a', workerId: 'worker-1', attempt: 2, provider: 'ollama', model: 'qwen-test', startedAt: Date.now() - 2000, inferenceMs: 800, inputTokens: null, outputTokens: null, usageSupport: 'tokens' },
+    ]));
+    f.store.audit('task-a', 'test', 'telemetry seeded');
+    await page.getByText('PARTIAL', { exact: true }).first().waitFor();
+    await page.getByRole('button', { name: 'Implement scoped parser', exact: true }).first().click();
+    const invocations = page.getByRole('table', { name: 'Recorded worker invocations' });
+    await invocations.waitFor();
+    assert.equal(await invocations.locator('tbody tr').count(), 2);
+    const recorded = await invocations.innerText();
+    for (const value of ['synthetic-run-a', 'worker-1', 'ollama · qwen-test', '321', '45', 'NOT REPORTED']) assert.ok(recorded.includes(value), value);
+    await page.getByText('Task total is PARTIAL', { exact: false }).waitFor();
+    assert.ok((await page.getByRole('complementary').innerText()).includes('NO ACTIVE RUN · see recorded invocations'), 'current model is not claimed unrecorded when invocations record it');
+    await page.screenshot({ path: `${output}/organization-invocations-fixture.png`, fullPage: true });
+    await page.getByRole('button', { name: 'Close inspector' }).click();
     await page.getByRole('button', { name: 'Verify parser behavior', exact: true }).click();
     assert.ok((await page.getByRole('complementary').innerText()).includes('task-a'));
     await page.getByRole('button', { name: 'Close inspector' }).click();

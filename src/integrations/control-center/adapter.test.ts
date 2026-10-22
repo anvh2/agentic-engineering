@@ -217,3 +217,71 @@ test('execution lanes come only from persisted providers: no static names, no in
   assert.ok(snapshot.agents.every(a => a.evidence === 'OBSERVED' && a.availability === 'UNKNOWN' && a.configured === null));
   assert.equal(snapshotSchema.safeParse(snapshot).success, true);
 });
+
+const persisted = (runId: string, attempt: number, extra: Record<string, unknown> = {}) => ({
+  runId, workerId: 'worker-7', attempt, provider: 'ollama', model: 'qwen-test', startedAt: 1_000_000 + attempt, inferenceMs: 400, inputTokens: 100, outputTokens: 10, usageSupport: 'tokens', ...extra,
+});
+const setCalls = (f: ReturnType<typeof fixture>, id: string, runIds: string[], calls: unknown, retries = 0) =>
+  f.store.db.prepare("UPDATE tasks SET run_ids=?, runtime_retries=?, artifacts=json_set(artifacts, '$.modelCalls', json(?)) WHERE id=?").run(JSON.stringify(runIds), retries, JSON.stringify(calls), id);
+
+test('recorded worker invocations project with run, worker, provider and model identity; totals are complete only with full coverage', t => {
+  const f = fixture(); t.after(f.close);
+  setCalls(f, 'task-a', ['run-1', 'run-2'], [persisted('run-1', 1), persisted('run-1', 2, { inputTokens: 50, outputTokens: 5 }), persisted('run-2', 1, { workerId: 'worker-8' })]);
+  const snapshot = f.reader.snapshot('B1');
+  assert.equal(snapshotSchema.safeParse(snapshot).success, true);
+  assert.deepEqual(snapshot.calls.map(c => [c.id, c.runId, c.workerId, c.provider, c.modelId, c.attempt, c.status]), [
+    ['task-a:run-1:1', 'run-1', 'worker-7', 'ollama', 'qwen-test', 1, 'COMPLETED'],
+    ['task-a:run-1:2', 'run-1', 'worker-7', 'ollama', 'qwen-test', 2, 'COMPLETED'],
+    ['task-a:run-2:1', 'run-2', 'worker-8', 'ollama', 'qwen-test', 1, 'COMPLETED'],
+  ]);
+  const task = snapshot.tasks.find(x => x.id === 'task-a')!;
+  assert.deepEqual([task.usage.inputTokens, task.usage.outputTokens, task.usage.latencyMs, task.usage.source, task.usage.completeness], [250, 25, 1200, 'core.model-call', 'complete']);
+  assert.equal(task.usage.actualCostUsd, null, 'cost is never projected');
+  assert.equal(task.usage.estimatedCost, null);
+  // The other task has no runs and no calls: no gap from it, and its own usage is not recorded rather than zero.
+  assert.equal(snapshot.tasks.find(x => x.id !== 'task-a')!.usage.source, 'unavailable');
+  assert.equal(snapshot.usage.inputTokens, 250);
+  assert.equal(snapshot.providers.find(p => p.id === 'ollama')!.usage.inputTokens, 250);
+});
+
+test('telemetry never double-counts and never presents partial coverage as complete', t => {
+  const f = fixture(); t.after(f.close);
+  // A duplicated (run, attempt) is counted once and marks the data damaged.
+  setCalls(f, 'task-a', ['run-1'], [persisted('run-1', 1), persisted('run-1', 1, { inputTokens: 999 })]);
+  let task = f.reader.snapshot('B1').tasks.find(x => x.id === 'task-a')!;
+  assert.deepEqual([task.usage.inputTokens, task.usage.completeness], [100, 'partial']);
+  // A run with no recorded invocation (crashed, in flight, older runtime) keeps the total partial.
+  setCalls(f, 'task-a', ['run-1', 'run-2'], [persisted('run-1', 1)]);
+  task = f.reader.snapshot('B1').tasks.find(x => x.id === 'task-a')!;
+  assert.deepEqual([task.usage.inputTokens, task.usage.completeness], [100, 'partial']);
+  // Failed runtime retries report no usage: partial.
+  setCalls(f, 'task-a', ['run-1'], [persisted('run-1', 1)], 1);
+  assert.equal(f.reader.snapshot('B1').tasks.find(x => x.id === 'task-a')!.usage.completeness, 'partial');
+  // A call for a run the task never recorded, or without a measured start, is dropped, not attributed.
+  setCalls(f, 'task-a', ['run-1'], [persisted('run-1', 1), persisted('run-other', 1), persisted('run-1', 2, { startedAt: null }), { runId: 'run-1', attempt: 3 }]);
+  let snapshot = f.reader.snapshot('B1');
+  assert.deepEqual(snapshot.calls.map(c => c.id), ['task-a:run-1:1']);
+  assert.equal(snapshot.usage.completeness, 'partial');
+  // Unreported counts stay null for that dimension; never summed as zero.
+  setCalls(f, 'task-a', ['run-1'], [persisted('run-1', 1), persisted('run-1', 2, { inputTokens: null, outputTokens: null, usageSupport: 'none' })]);
+  snapshot = f.reader.snapshot('B1');
+  task = snapshot.tasks.find(x => x.id === 'task-a')!;
+  assert.deepEqual([task.usage.inputTokens, task.usage.outputTokens, task.usage.latencyMs, task.usage.completeness], [null, null, 800, 'partial']);
+  assert.equal(snapshot.calls.find(c => c.attempt === 2)!.usageSupport, 'none');
+  // A call that ran on another provider than its lane leaves that lane's total incomplete.
+  setCalls(f, 'task-a', ['run-1'], [persisted('run-1', 1, { provider: 'unknown' })]);
+  snapshot = f.reader.snapshot('B1');
+  assert.equal(snapshot.providers.find(p => p.id === 'ollama')!.usage.source, 'unavailable');
+  assert.equal(snapshot.tasks.find(x => x.id === 'task-a')!.usage.inputTokens, 100);
+  // Malformed persisted JSON shapes never fail the snapshot.
+  f.store.db.prepare(`UPDATE tasks SET artifacts=json_set(artifacts, '$.modelCalls', 'not an array') WHERE id='task-a'`).run();
+  snapshot = f.reader.snapshot('B1');
+  assert.equal(snapshot.source, 'connected');
+  assert.deepEqual(snapshot.calls, []);
+});
+
+test('no scope lists no providers rather than a static set', t => {
+  const f = fixture(); t.after(f.close);
+  assert.deepEqual(f.reader.snapshot().providers, []);
+  assert.deepEqual(createReader({ dbPath: join(f.directory, 'missing.db') }).snapshot().providers, []);
+});

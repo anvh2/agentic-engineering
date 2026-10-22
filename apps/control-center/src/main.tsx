@@ -21,13 +21,12 @@ import {
   type Snapshot,
   type Usage,
 } from '../../../src/integrations/control-center/contract.ts';
-import { claimElapsed, claimElapsedOrAbsence, currentTasks, inspectorObservations, needsAttention, observedActivity, priced, taskUsage, usageAbsence, usageValue, type Absence } from './observations.ts';
-const show = (v: number | Absence) => (typeof v === 'number' ? v.toLocaleString() : v);
+import { ATTENTION, callTokens, claimElapsed, claimElapsedOrAbsence, currentTasks, filterByStatus, inspectorObservations, laneEvidence, needsAttention, observedActivity, priced, taskUsage, usageAbsence, usageValue } from './observations.ts';
+const show = (v: number | string) => (typeof v === 'number' ? v.toLocaleString() : v);
 import { CollaborationView } from './collaboration.tsx';
 import { AgentsView } from './agents.tsx';
 import './style.css';
 const embedded = window.location.pathname.startsWith('/organization-app/');
-const ATTENTION = '__attention';
 const apiBase = embedded ? '/control-center/v1' : '/api/v1';
 
 type Page = 'Overview' | 'Runs' | 'Collaboration' | 'Usage';
@@ -251,6 +250,7 @@ function TaskTable({ tasks, onSelect, now, connected }: { tasks: ControlTask[]; 
               <td className="mono">{(v => (typeof v === 'number' ? duration(v) : v))(claimElapsedOrAbsence(t, now, connected))}</td>
               <td className="muted">
                 {t.usage.inputTokens === null ? usageAbsence(t.usage, connected) : `${number(t.usage.inputTokens)} in / ${number(t.usage.outputTokens)} out`}
+                {t.usage.source !== 'unavailable' && t.usage.completeness !== 'complete' && <small>PARTIAL</small>}
               </td>
               <td>
                 <Trace task={t} />
@@ -374,7 +374,7 @@ function Inspector({
                     (observations.current.length && observations.current.every((c) => c.modelId === observations.current[0]!.modelId)
                       ? observations.current[0]!.modelId
                       : null) ??
-                    'NOT RECORDED'}
+                    (task && snapshot.calls.some((c) => c.taskId === task.id) ? 'NO ACTIVE RUN · see recorded invocations' : 'NOT RECORDED')}
                 </dd>
               </div>
               <div>
@@ -423,6 +423,31 @@ function Inspector({
               <h3>Recorded change-review findings</h3>
               {task.execution?.findings == null ? <p className="muted">UNKNOWN · no findings record exposed</p> : task.execution.findings.length ? <ul>{task.execution.findings.map((f, i) => <li key={i}><Badge value={f.severity.toUpperCase()} /> {f.code}</li>)}</ul> : <p className="muted">No recognized findings in the recorded result.</p>}
               {!!task.execution?.findingsOmitted && <p className="notice">{task.execution.findingsOmitted} findings omitted (unrecognized or beyond the 50-finding limit).</p>}
+              <h3>Recorded worker invocations</h3>
+              {snapshot.calls.some((c) => c.taskId === task.id) ? (
+                <div className="table-scroll">
+                  <table aria-label="Recorded worker invocations">
+                    <thead><tr><th>Run</th><th>Attempt</th><th>Worker</th><th>Provider · model</th><th>Input</th><th>Output</th><th>Latency</th></tr></thead>
+                    <tbody>
+                      {snapshot.calls.filter((c) => c.taskId === task.id).map((c) => (
+                        <tr key={c.id}>
+                          <td className="mono">{c.runId}</td>
+                          <td>{c.attempt}</td>
+                          <td className="mono">{c.workerId ?? 'NOT RECORDED'}</td>
+                          <td>{c.provider} · {c.modelId ?? 'NOT RECORDED'}</td>
+                          <td>{show(callTokens(c.usage.inputTokens, c))}</td>
+                          <td>{show(callTokens(c.usage.outputTokens, c))}</td>
+                          <td className="mono">{duration(c.usage.latencyMs)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="muted">{task.runIds.length ? 'NOT RECORDED · no invocation telemetry persisted for these runs' : 'No run recorded'}</p>
+              )}
+              {task.usage.source !== 'unavailable' && task.usage.completeness !== 'complete' && <p className="notice">Task total is PARTIAL: a run has no recorded invocation, a runtime retry reported no usage, or a record was rejected.</p>}
+              <p className="footnote">One row per attempt that got a model response: the provider-reported totals of that call, which may span several agent steps. Failed runtime retries report no usage. Model is the one the provider was invoked with. Cost is not recorded and never estimated.</p>
               <p className="footnote">Recorded verifier exit code and change-review findings describe the persisted task result, not every workflow run. Acceptance artifacts, finding details and free-form failure reasons are unavailable in this safe projection. Task state is not a verifier PASS. Agent/model identity and historical worker assignments are not inferred from provider or current worker.</p>
               <p className="footnote">Associated Council meetings: unavailable without a verified task-to-meeting correlation. Inspect preserved records in Collaboration → Council.</p>
             </section>}
@@ -817,7 +842,7 @@ function App() {
                                   </button>
                                 </td>
                                 <td>
-                                  <Badge value={connected ? (a.evidence ?? 'UNKNOWN') : 'UNAVAILABLE'} />
+                                  <Badge value={laneEvidence(a, snapshot, connected, now)} />
                                 </td>
                                 <td>
                                   <Badge value={observedActivity(a, currentTasks(snapshot, a), connected, now)} />
@@ -890,7 +915,7 @@ function App() {
                         <h2>Tasks & dependencies</h2>
                         <span className="muted">{snapshot.tasks.filter(needsAttention).length ? <strong className="warning">{snapshot.tasks.filter(needsAttention).length} need attention · </strong> : null}{objectiveId || 'No objective selected'}</span>
                       </div>
-                      <TaskTable tasks={snapshot.tasks.filter(t => !status || (status === ATTENTION ? needsAttention(t) : t.state === status))} onSelect={pickTask} now={connected ? now : snapshot.observedAt} connected={connected} />
+                      <TaskTable tasks={filterByStatus(snapshot.tasks, status)} onSelect={pickTask} now={connected ? now : snapshot.observedAt} connected={connected} />
                     </section>
                     <section className="panel">
                       <div className="panel-heading"><h2>Objective DAG</h2><span className="muted">Persisted dependency edges</span></div>

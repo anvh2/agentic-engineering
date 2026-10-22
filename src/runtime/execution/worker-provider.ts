@@ -94,7 +94,11 @@ export interface ProviderUsage {
 export interface ProviderTelemetry {
   provider: string;
   model: string;
+  /** Epoch ms when the model permit was held and the call began (queueing excluded, like inferenceMs). */
+  startedAt?: number;
   inferenceMs: number;
+  /** What the provider declares it can report; 'unknown' for the default in-process worker without a descriptor. */
+  usageSupport?: ProviderCapabilities['usage'] | 'unknown';
   usage: ProviderUsage;
 }
 

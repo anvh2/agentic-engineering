@@ -71,6 +71,8 @@ export const modelCallSchema = z.object({
   finishedAt: time.nullable(),
   status: z.enum(['RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED']),
   usage: usageSchema,
+  /** What the provider declares it can report: 'none' makes missing counts NOT SUPPORTED rather than NOT REPORTED. */
+  usageSupport: z.enum(['tokens', 'tokens-and-cost', 'none', 'unknown']).optional(),
 });
 export type ModelCall = z.infer<typeof modelCallSchema>;
 export const eventSchema = z.object({
