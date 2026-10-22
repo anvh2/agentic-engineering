@@ -21,7 +21,7 @@ export function createControlCenterRoutes(registration?: RosterInput) {
     assetsDir: resolve(process.env.CONTROL_CENTER_ASSETS_DIR ?? 'apps/control-center/dist'),
     reader: createReader({ dbPath, capacityDbPath: process.env.CONTROL_CENTER_CAPACITY_DB, studioOrigin }),
     // Core B's collab_events live in the same scheduler database; read only, never a second store.
-    collaboration: createCollaborationReader({ dbPath }),
+    collaboration: createCollaborationReader({ dbPath, schedulerOfRecord: true }),
     // The council's meetings are Core B meetings in their own database: read with the same verified reader, never merged.
     ...(councilWorkdir ? { council: createCouncilReader({ workdir: resolve(councilWorkdir), studioOrigin }) } : {}),
     ...(registration ? { agents: () => agentRoster(registration) } : {}),

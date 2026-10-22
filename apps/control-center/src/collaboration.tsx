@@ -1,5 +1,13 @@
 import { useEffect, useState } from 'react';
 import { collaborationSchema, orderedMessages, safeReference, type Collaboration, type Thread } from './collaboration-model.ts';
+import { EMPTY_TEXT, emptyReason, filterMeetings, inScope, type ViewState } from './view-state.ts';
+
+/** The persisted association, or why there is none. Never derived from a title, label, time or model. */
+function AttributionLine({ attribution }: { attribution: Thread['attribution'] }) {
+  return attribution.status === 'ATTRIBUTED'
+    ? <p className="collaboration-meta">Scope: project {attribution.project} · batch {attribution.batchId} (persisted reference)</p>
+    : <p className="collaboration-meta"><span className="badge">UNATTRIBUTED</span> {attribution.reason}</p>;
+}
 
 const known = (value: unknown) => value === null || value === undefined ? 'UNKNOWN' : String(value);
 function Reference({ url, label }: { url: string | null; label: string }) {
@@ -16,7 +24,8 @@ function Transcript({ thread, messageId }: { thread: Thread; messageId?: string 
   const messages = orderedMessages(thread);
   return <section className="panel transcript" aria-label="Discussion transcript">
     <div className="panel-heading"><h2>{thread.title}</h2><span>{thread.synthetic && <span className="badge">FAKE PARTICIPANTS</span>} {messages.filter(m => m.type === 'OBJECTION' && m.objectionState !== 'RESOLVED' && m.objectionState !== 'WITHDRAWN').length} open or unknown objections</span></div>
-    <p className="collaboration-meta">Objective: {known(thread.objectiveId)} · Task: {known(thread.taskId)}</p>
+    <p className="collaboration-meta">Objective label: {known(thread.objectiveId)} · Task: {known(thread.taskId)}</p>
+    <AttributionLine attribution={thread.attribution} />
     <p className="collaboration-meta">{thread.participants.map(p => `${p.name} (${p.role})`).join(' · ') || 'Participants UNKNOWN'}</p>
     {messages.length === 0 && <p className="empty">No reported messages.</p>}
     {messages.map(m => <article key={m.id} id={`message-${m.id}`} tabIndex={-1} className={`message ${messageId === m.id ? 'selected-message' : ''}`}>
@@ -52,7 +61,7 @@ function CouncilFacts({ meeting }: { meeting: Collaboration['meetings'][number] 
     <p className="muted">Mastra trace{c.traceIds.length === 1 ? '' : 's'}: {c.traceIds.length ? c.traceIds.map(t => <code key={t}>{t} </code>) : 'none recorded'}</p>
   </section>;
 }
-export function CollaborationView({ kind, apiBase }: { kind: 'Discussions' | 'Meetings' | 'Council'; apiBase: string }) {
+export function CollaborationView({ kind, apiBase, view, setView }: { kind: 'Discussions' | 'Meetings' | 'Council'; apiBase: string; view: ViewState; setView: (patch: Partial<ViewState>) => void }) {
   const endpoint = kind === 'Council' ? 'council' : 'collaboration';
   const [data, setData] = useState<Collaboration | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'disconnected'>('loading');
@@ -105,24 +114,51 @@ export function CollaborationView({ kind, apiBase }: { kind: 'Discussions' | 'Me
   if (state === 'disconnected') return <p role="alert" className="notice">Collaboration connection unavailable. No live records displayed. Retrying automatically.</p>;
   if (data?.availability === 'CORRUPT') return <section className="panel"><div className="panel-heading"><h2>{kind}</h2><span className="badge">INTEGRITY FAILURE</span></div><p role="alert" className="notice">{data.reason}</p><p className="empty">No collaboration records are shown until the store verifies.</p></section>;
   if (!data || data.availability === 'NOT_AVAILABLE') return <section className="panel"><div className="panel-heading"><h2>{kind}</h2><span className="badge">NOT AVAILABLE</span></div><p className="empty">{data?.reason ?? 'Authoritative Core B records are unavailable.'}</p></section>;
-  const thread = data.threads.find(t => t.id === threadId) ?? data.threads[0];
-  const meeting = data.meetings.find(m => m.id === meetingId) ?? data.meetings[0];
+  // Scope first (persisted attribution only), then the section's filters. Counts let the empty state say which removed what.
+  const scopedThreads = inScope(data.threads, view);
+  const scopedMeetings = inScope(data.meetings, view);
+  const threads = scopedThreads.filter(t => !view.participant || t.participants.some(p => p.id === view.participant));
+  const meetings = filterMeetings(scopedMeetings, view);
+  const hiddenUnattributed = !view.unattributed && (view.project || view.objective)
+    ? [...data.threads, ...data.meetings].filter(i => i.attribution.status === 'UNATTRIBUTED').length : 0;
+  const thread = threads.find(t => t.id === threadId) ?? threads[0];
+  const meeting = meetings.find(m => m.id === meetingId) ?? meetings[0];
   const meetingThread = data.threads.find(t => t.id === meeting?.threadId);
   const discussionMode = kind === 'Discussions' || showThread;
+  const listed = discussionMode ? threads : meetings;
+  const reason = emptyReason({ connected: true, scoped: true, inScope: (discussionMode ? scopedThreads : scopedMeetings).length, shown: listed.length });
+  const people = [...new Map([...scopedThreads.flatMap(t => t.participants), ...scopedMeetings.flatMap(m => m.participants)].map(p => [p.id, p])).values()];
   return <>
     {data.source === 'test-fixture' && <p role="status" className="notice">SYNTHETIC TEST DATA · not connected to live collaboration</p>}
     {data.source === 'core' && data.threads.some(t => t.synthetic) && <p role="status" className="notice">DETERMINISTIC FAKE PARTICIPANTS · Persisted collaboration events authored by scripted test identities (provider: fake). Not live model output.</p>}
     {data.source === 'core' && data.reason && <p className="muted">{data.reason}</p>}
     {kind === 'Council' && data.source === 'core' && <p role="status" className="muted">Engineering council meetings, read from the council's own Core B store with the same hash-chain verification. LIVE and SCRIPTED meetings are labelled on each meeting.</p>}
+    <div className="scope-bar" role="group" aria-label="Collaboration filters">
+      <label htmlFor="collab-participant">Participant</label>
+      <select id="collab-participant" value={view.participant} onChange={e => setView({ participant: e.target.value })}>
+        <option value="">All participants</option>
+        {people.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+      </select>
+      {kind === 'Council' && <><label htmlFor="collab-mode">Mode</label>
+        <select id="collab-mode" value={view.mode} onChange={e => setView({ mode: e.target.value as ViewState['mode'] })}>
+          <option value="">LIVE and SCRIPTED</option><option value="LIVE">LIVE</option><option value="SCRIPTED">SCRIPTED</option>
+        </select></>}
+      {kind !== 'Discussions' && <><label htmlFor="collab-decision">Decision status</label>
+        <select id="collab-decision" value={view.decision} onChange={e => setView({ decision: e.target.value as ViewState['decision'] })}>
+          <option value="">Any</option><option value="recorded">Decision recorded</option><option value="none">No decision recorded</option><option value="contested">Unresolved disagreement</option>
+        </select></>}
+    </div>
+    {hiddenUnattributed > 0 && <p className="notice" role="status">{hiddenUnattributed} unattributed record{hiddenUnattributed === 1 ? '' : 's'} in this source {hiddenUnattributed === 1 ? 'is' : 'are'} not assigned to the selected scope. Select the Unattributed scope to see {hiddenUnattributed === 1 ? 'it' : 'them'}.</p>}
     {showThread && kind !== 'Discussions' && <button className="text-button" onClick={() => setShowThread(false)}>Back to meeting</button>}
     <div className="collaboration-layout">
       <nav className="panel thread-list" aria-label={discussionMode ? 'Discussion threads' : 'Meetings'}>
-        {(discussionMode ? data.threads : data.meetings).map(item => <button key={item.id} aria-current={item.id === (discussionMode ? thread?.id : meeting?.id) ? 'true' : undefined} onClick={() => discussionMode ? open(item.id) : setMeeting(item.id)}>{'council' in item && item.council ? `[${item.council.mode}] ` : ''}{'councilIssue' in item && item.councilIssue ? '[UNVERIFIED] ' : ''}{item.title}</button>)}
-        {(discussionMode ? data.threads : data.meetings).length === 0 && <p className="empty">No reported {discussionMode ? 'threads' : 'meetings'}.</p>}
+        {listed.map(item => <button key={item.id} aria-current={item.id === (discussionMode ? thread?.id : meeting?.id) ? 'true' : undefined} onClick={() => discussionMode ? open(item.id) : setMeeting(item.id)}>{'council' in item && item.council ? `[${item.council.mode}] ` : ''}{'councilIssue' in item && item.councilIssue ? '[UNVERIFIED] ' : ''}{item.title}</button>)}
+        {reason && <p className="empty">{EMPTY_TEXT[reason]}</p>}
       </nav>
       {discussionMode ? thread && <Transcript thread={thread} messageId={messageId} /> : meeting && <section className="panel meeting-inspector" aria-label="Meeting inspector">
         <div className="panel-heading"><h2>{meeting.title}</h2><span className="badge">READ ONLY</span></div>
         <CouncilFacts meeting={meeting} />
+        <AttributionLine attribution={meeting.attribution} />
         <p>Status: {known(meeting.status)} · Outcome: {meeting.outcome ?? 'none yet'}{meeting.reason ? ` · ${meeting.reason}` : ''}</p>
         <h3>Agenda</h3><ul>{meeting.agenda.map((a, i) => <li key={i}>{a}</li>)}</ul>
         <h3>Participants and roles</h3><p>{meeting.participants.map(p => `${p.name} (${p.role})`).join(' · ') || 'UNKNOWN'}</p>

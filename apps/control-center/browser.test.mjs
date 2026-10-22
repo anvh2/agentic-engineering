@@ -41,7 +41,7 @@ test(
     await page.getByRole('columnheader', { name: 'Outcome (failure · review)' }).waitFor();
     await page.getByText('No run recorded', { exact: true }).first().waitFor();
     await page.getByLabel('Task status', { exact: true }).selectOption('__attention');
-    await page.getByText('No tasks in this scope.', { exact: false }).waitFor();
+    await page.getByText('Records exist in this scope, but none match the current filters.', { exact: false }).waitFor();
     await page.getByLabel('Task status', { exact: true }).selectOption('');
     await page.getByRole('button', { name: 'Overview', exact: true }).click();
     // Lanes are persisted providers only: no model names as workers, no assumed lead identity.
@@ -171,7 +171,8 @@ test(
       ...f.reader,
       snapshot: (id) => {
         const snapshot = f.reader.snapshot(id);
-        if (id === 'B1') {
+        // The reader takes a scope ({ project, objectiveId }) or, from older callers, a bare objective id.
+        if ((typeof id === 'string' ? id : id?.objectiveId) === 'B1') {
           snapshot.calls = [current, current, { ...current, id: 'call-old', runId: 'old', usage: { ...usage, inputTokens: 97 } }];
           const agent = snapshot.agents.find((a) => a.id === 'ollama');
           agent.activity = completed ? 'UNKNOWN' : 'RUNNING';
@@ -266,4 +267,81 @@ test('discussion and meeting inspectors: unavailable production, attributed fixt
     await page.route('**/api/v1/collaboration', route => route.abort());
     await page.getByText('Collaboration connection unavailable.', { exact: false }).waitFor();
     assert.equal(await page.locator('.message').count(), 0);
+  });
+
+test('shared scope: URL-restored project and objective, all objectives of a project, unattributed records and exact aggregation',
+  { skip: !process.env.CHROME_EXECUTABLE && 'Set CHROME_EXECUTABLE' }, async t => {
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const { collabHarness, openMeeting } = await import('../../src/runtime/collaboration/__testing__/harness.ts');
+    const { plan, workerTask } = await import('../../src/runtime/scheduler/test-helpers.ts');
+    const { createReader } = await import('../../src/integrations/control-center/adapter.ts');
+    const { createCollaborationReader } = await import('../../src/integrations/control-center/collaboration-adapter.ts');
+    const directory = mkdtempSync(join(tmpdir(), 'cc-scope-'));
+    const dbPath = join(directory, 'scheduler.db');
+    const h = collabHarness({ path: dbPath });
+    h.scheduler.createBatch(plan('/repo', [workerTask('a1-task', { title: 'Alpha one' })], { batchId: 'A1', project: 'alpha' }));
+    h.scheduler.createBatch(plan('/repo', [workerTask('a2-task', { title: 'Alpha two' })], { batchId: 'A2', project: 'alpha' }));
+    h.scheduler.createBatch(plan('/repo', [workerTask('b-task', { title: 'Beta task' })], { batchId: 'B1', project: 'beta' }));
+    openMeeting(h.store, { threadId: 't-alpha', sessionId: 's-alpha', refs: { batchId: 'A1' } });
+    openMeeting(h.store, { threadId: 't-label', sessionId: 's-label', refs: { objectiveId: 'ALPHA' } });
+    const calls = (runId, input, output) => JSON.stringify([{ runId, workerId: 'worker-1', attempt: 1, provider: 'ollama', model: 'qwen-test', startedAt: Date.now() - 1000, inferenceMs: 10, inputTokens: input, outputTokens: output, usageSupport: 'tokens' }]);
+    const seed = h.scheduler.db.prepare("UPDATE tasks SET run_ids=?, artifacts=json_set(artifacts, '$.modelCalls', json(?)) WHERE id=?");
+    seed.run('["r-a1"]', calls('r-a1', 100, 10), 'a1-task');
+    seed.run('["r-a2"]', calls('r-a2', 23, 3), 'a2-task');
+    seed.run('["r-b"]', calls('r-b', 5000, 5000), 'b-task');
+    h.scheduler.close();
+    const gateway = createGateway({ reader: createReader({ dbPath }), collaboration: createCollaborationReader({ dbPath, schedulerOfRecord: true }), assetsDir: fileURLToPath(new URL('./dist/', import.meta.url)), pollMs: 100 });
+    gateway.server.listen(0, '127.0.0.1'); await once(gateway.server, 'listening');
+    const browser = await chromium.launch({ executablePath: process.env.CHROME_EXECUTABLE, headless: true });
+    t.after(async () => { await browser.close(); gateway.closeStreams(); gateway.server.closeAllConnections(); await new Promise(r => gateway.server.close(r)); rmSync(directory, { recursive: true, force: true }); });
+    const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+    page.setDefaultTimeout(15000);
+    const errors = [];
+    page.on('pageerror', e => errors.push(e.message));
+    const project = page.getByLabel('Project', { exact: true });
+    const objective = page.getByLabel('Objective / scheduler batch', { exact: true });
+    const task = name => page.getByRole('button', { name, exact: true });
+
+    // A shared link opens the section, scope and filter it names; "all objectives" covers every batch of the project.
+    await page.goto(`http://127.0.0.1:${gateway.server.address().port}/?section=runs&project=alpha&status=BACKLOG`);
+    await task('Alpha one').waitFor();
+    await task('Alpha two').waitFor();
+    assert.equal(await task('Beta task').count(), 0, 'another project is never included');
+    assert.deepEqual([await project.inputValue(), await objective.inputValue(), await page.getByLabel('Task status', { exact: true }).inputValue()], ['alpha', '', 'BACKLOG']);
+    // Narrowing to one objective is a history entry: Back restores all objectives.
+    await objective.selectOption('A1');
+    await task('Alpha two').waitFor({ state: 'detached' });
+    assert.match(page.url(), /objective=A1/);
+    await page.reload();
+    await task('Alpha one').waitFor();
+    assert.equal(await objective.inputValue(), 'A1', 'reload restores the scope from the URL');
+    await page.goBack();
+    await task('Alpha two').waitFor();
+    assert.equal(await objective.inputValue(), '');
+
+    // Usage over all objectives of the project is the exact sum of its batches, never another project's.
+    await page.getByRole('button', { name: 'Usage', exact: true }).click();
+    const usage = page.locator('.usage-panel');
+    await usage.getByText('123', { exact: true }).waitFor();
+    await usage.getByText('13', { exact: true }).waitFor();
+    assert.equal(await usage.getByText('5,123', { exact: true }).count(), 0);
+    assert.match(page.url(), /section=usage/);
+
+    // Collaboration: only the record whose persisted reference resolves to the project; the label-only one is not assigned.
+    await page.getByRole('button', { name: 'Collaboration', exact: true }).click();
+    const threads = page.getByRole('navigation', { name: 'Discussion threads' });
+    await page.getByText('project alpha · batch A1 (persisted reference)', { exact: false }).waitFor();
+    assert.equal(await threads.getByRole('button').count(), 1);
+    await page.getByText('2 unattributed records in this source are not assigned to the selected scope', { exact: false }).waitFor();
+    await project.selectOption('__unattributed');
+    assert.match(page.url(), /scope=unattributed/);
+    await page.getByText('Only an unverified objective label (ALPHA)', { exact: false }).waitFor();
+    assert.equal(await threads.getByRole('button').count(), 1);
+    assert.equal(await objective.isDisabled(), true, 'the Unattributed scope has no objective');
+    await page.goBack();
+    await page.getByText('project alpha · batch A1 (persisted reference)', { exact: false }).waitFor();
+    assert.equal(await project.inputValue(), 'alpha');
+    assert.deepEqual(errors, []);
   });

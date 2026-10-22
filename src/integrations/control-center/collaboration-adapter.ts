@@ -28,12 +28,26 @@ export interface CollaborationMessage {
   invocationId: string | null; traceId: string | null; traceUrl: null;
   objectionState: 'OPEN' | 'WITHDRAWN' | null; correctedBy: string[]; withdrawnBy: string | null;
 }
+/**
+ * Where a thread (and its meetings) belongs, from persisted references only. ATTRIBUTED requires a batch or task reference
+ * resolved in the scheduler database this store lives in (the store validated them against it when written). A free-form
+ * objective label, a missing reference, or a store that is not the scheduler of record (the council's own database) is
+ * UNATTRIBUTED, with the reason, and is never assigned to a project by name, time or model.
+ */
+export interface Attribution {
+  status: 'ATTRIBUTED' | 'UNATTRIBUTED';
+  batchId: string | null;
+  project: string | null;
+  reason: string | null;
+}
 export interface CollaborationThread {
   id: string; title: string; objectiveId: string | null; taskId: string | null; synthetic: boolean;
+  batchId: string | null; attribution: Attribution;
   participants: CollaborationParticipant[]; messages: CollaborationMessage[]; lastSeq: number; lastHash: string;
 }
 type Attributed = { text: string; messageIds: string[] };
 export interface CollaborationMeeting {
+  attribution?: Attribution;
   id: string; title: string; threadId: string; agenda: string[]; participants: CollaborationParticipant[]; synthetic: boolean;
   status: string; suspended: boolean; outcome: string | null; reason: string | null;
   startedAt: string; endedAt: string | null;
@@ -81,6 +95,7 @@ function thread(state: ThreadState): CollaborationThread {
   const people = state.thread.participants.map(participant);
   return {
     id: state.thread.id, title: state.thread.title, objectiveId: state.thread.refs.objectiveId ?? null, taskId: state.thread.refs.taskId ?? null,
+    batchId: state.thread.refs.batchId ?? null, attribution: { status: 'UNATTRIBUTED', batchId: null, project: null, reason: 'not resolved' },
     synthetic: state.thread.participants.some(isFake) || state.messages.some((m) => isFake(m.author)),
     participants: people, messages: state.messages.map(message), lastSeq: state.lastSeq, lastHash: state.lastHash,
   };
@@ -140,7 +155,30 @@ export function isCollaborationId(value: string): boolean {
   return idSchema.safeParse(value).success;
 }
 
-export function createCollaborationReader(options: { dbPath: string }) {
+const UNATTRIBUTED = (reason: string): Attribution => ({ status: 'UNATTRIBUTED', batchId: null, project: null, reason });
+/** Resolves a thread's own references in the scheduler of record; never by name similarity. */
+function attribute(db: DatabaseSync | null, refs: { batchId?: string; taskId?: string; objectiveId?: string }): Attribution {
+  if (!db) return UNATTRIBUTED('This store is not the scheduler of record; its references cannot be resolved here.');
+  if (!refs.batchId && !refs.taskId)
+    return UNATTRIBUTED(refs.objectiveId ? `Only an unverified objective label (${refs.objectiveId}); no scheduler batch or task reference.` : 'No scheduler batch or task reference.');
+  try {
+    const task = refs.taskId ? (db.prepare('SELECT batch_id FROM tasks WHERE id = ?').get(refs.taskId) as { batch_id: string } | undefined) : undefined;
+    if (refs.taskId && !task) return UNATTRIBUTED(`Referenced task ${refs.taskId} is not in this scheduler database.`);
+    const batchId = task?.batch_id ?? refs.batchId!;
+    if (refs.batchId && task && task.batch_id !== refs.batchId) return UNATTRIBUTED('Task and batch references disagree.');
+    const batch = db.prepare('SELECT project FROM batches WHERE id = ?').get(batchId) as { project: string } | undefined;
+    if (!batch) return UNATTRIBUTED(`Referenced batch ${batchId} is not in this scheduler database.`);
+    return { status: 'ATTRIBUTED', batchId, project: batch.project, reason: null };
+  } catch {
+    return UNATTRIBUTED('Scheduler tables are not readable in this store.');
+  }
+}
+
+/**
+ * `schedulerOfRecord`: this collaboration store lives in the scheduler database the Control Center reads, so its validated
+ * batch/task references resolve here. False (the default) for any other store, such as the council's own database.
+ */
+export function createCollaborationReader(options: { dbPath: string; schedulerOfRecord?: boolean }) {
   /** One read transaction over Core B's store. `null` when collab_events was never created in this database. */
   function read<T>(fn: (store: CollaborationStore, db: DatabaseSync) => T): T | null {
     if (!existsSync(options.dbPath)) throw new Error('unavailable');
@@ -191,38 +229,39 @@ export function createCollaborationReader(options: { dbPath: string }) {
     }
   }
 
-  function view(store: CollaborationStore, threadIds: string[], sessionFilter?: string): CollaborationView {
+  function view(store: CollaborationStore, db: DatabaseSync, threadIds: string[], sessionFilter?: string): CollaborationView {
     const overview = collaborationOverview(store);
     const summaries = new Map(overview.threads.flatMap((t) => t.sessions.map((s) => [s.id, s] as const)));
     const states = threadIds.map((id) => store.thread(id));
+    const attributions = new Map(states.map((st) => [st.thread.id, attribute(options.schedulerOfRecord ? db : null, st.thread.refs)] as const));
     const meetings = states.flatMap((state) =>
       [...state.sessions.values()]
         .filter((s) => !sessionFilter || s.id === sessionFilter)
         .map((s) => {
           const record = s.outcome ? store.record(s.id) : null;
           const ended = s.outcome ? store.events(s.threadId).find((e) => e.seq === s.outcome!.seq)?.at ?? null : null;
-          return meeting(state, s, summaries.get(s.id), record, ended);
+          return { ...meeting(state, s, summaries.get(s.id), record, ended), attribution: attributions.get(state.thread.id)! };
         }),
     );
-    return { availability: 'AVAILABLE', source: 'core', reason: null, cursor: overview.cursor, threads: states.map(thread), meetings };
+    return { availability: 'AVAILABLE', source: 'core', reason: null, cursor: overview.cursor, threads: states.map((st) => ({ ...thread(st), attribution: attributions.get(st.thread.id)! })), meetings };
   }
 
   const empty = (): CollaborationView => ({ availability: 'AVAILABLE', source: 'core', reason: 'No collaboration events are persisted in this scheduler database.', cursor: 0, threads: [], meetings: [] });
 
   return {
     snapshot(): CollaborationView {
-      return guarded(() => read((store) => view(store, store.threadIds())) ?? empty());
+      return guarded(() => read((store, db) => view(store, db, store.threadIds())) ?? empty());
     },
     /** One thread with its messages; null when it does not exist (a CORRUPT or unavailable store is still a view). */
     thread(threadId: string): CollaborationView | null {
-      return guarded(() => read((store) => (store.threadIds().includes(threadId) ? view(store, [threadId]) : null)));
+      return guarded(() => read((store, db) => (store.threadIds().includes(threadId) ? view(store, db, [threadId]) : null)));
     },
     /** One meeting session with its record and provenance; null when it does not exist. */
     session(sessionId: string): CollaborationView | null {
       return guarded(() =>
-        read((store) => {
+        read((store, db) => {
           const threadId = store.sessionThreadId(sessionId);
-          return threadId ? view(store, [threadId], sessionId) : null;
+          return threadId ? view(store, db, [threadId], sessionId) : null;
         }),
       );
     },

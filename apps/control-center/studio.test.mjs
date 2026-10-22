@@ -75,7 +75,7 @@ test('actual Studio: Organization sidebar, refresh, same-origin Gateway/SSE and 
       await workspace.getByRole('button', { name: 'Meetings', exact: true }).click();
     }
     await workspace.getByRole('button', { name: 'Usage', exact: true }).click();
-    await workspace.getByRole('heading', { name: 'Objective usage', exact: true }).waitFor();
+    await workspace.getByRole('heading', { name: 'Scope usage', exact: true }).waitFor();
     for (const path of ['/agents', '/workflows', '/traces']) {
       await page.goto(`${origin}${path}`);
       await page.getByRole('link', { name: 'Organization', exact: true }).first().waitFor();

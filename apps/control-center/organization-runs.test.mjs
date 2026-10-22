@@ -51,7 +51,8 @@ test('actual Studio: four sections, persisted Runs filters, workers, counters, D
     const navigation = workspace.getByRole('navigation', { name: 'Organization views' });
     await navigation.getByRole('button', { name: 'Overview', exact: true }).waitFor();
     assert.deepEqual(await navigation.getByRole('button').allTextContents(), ['Overview', 'Runs', 'Collaboration', 'Usage']);
-    assert.equal(await workspace.getByLabel('Objective / scheduler batch', { exact: true }).count(), 0);
+    // The scope is shared: it sits above every section, not only Runs.
+    assert.equal(await workspace.getByLabel('Objective / scheduler batch', { exact: true }).count(), 1);
     await navigation.getByRole('button', { name: 'Runs', exact: true }).click();
     await workspace.getByLabel('Project', { exact: true }).selectOption(batch.label);
     await workspace.getByLabel('Objective / scheduler batch', { exact: true }).selectOption(batch.id);
@@ -76,8 +77,30 @@ test('actual Studio: four sections, persisted Runs filters, workers, counters, D
       await workspace.getByRole('navigation', { name: 'Collaboration views' }).getByRole('button', { name: kind, exact: true }).click();
       await workspace.getByRole('navigation', { name: 'Collaboration views' }).getByRole('button', { name: kind, exact: true }).waitFor();
     }
+    // Embedded, the scope lives in Studio's own address bar: a copied Studio link restores it, and Back walks it.
+    await navigation.getByRole('button', { name: 'Runs', exact: true }).click();
+    await workspace.getByLabel('Project', { exact: true }).selectOption(batch.label);
+    const studioUrl = new URL(page.url());
+    assert.equal(studioUrl.pathname, '/organization');
+    assert.equal(studioUrl.searchParams.get('project'), batch.label);
+    assert.equal(studioUrl.searchParams.get('section'), 'runs');
+    await workspace.getByLabel('Objective / scheduler batch', { exact: true }).selectOption(batch.id);
+    await workspace.getByRole('heading', { name: 'Tasks & dependencies' }).waitFor();
     await page.reload();
-    await navigation.getByRole('button', { name: 'Overview', exact: true }).waitFor();
+    await workspace.getByRole('heading', { name: 'Tasks & dependencies' }).waitFor();
+    assert.equal(await workspace.getByLabel('Objective / scheduler batch', { exact: true }).inputValue(), batch.id);
+    await page.goBack();
+    await workspace.getByRole('heading', { name: 'Tasks & dependencies' }).waitFor();
+    assert.equal(await workspace.getByLabel('Objective / scheduler batch', { exact: true }).inputValue(), '');
+    assert.equal(await workspace.getByLabel('Project', { exact: true }).inputValue(), batch.label);
+    assert.equal(new URL(page.url()).pathname, '/organization', 'Back stays inside the Organization page');
+    // A link opened fresh restores the same view.
+    await page.goto(`${origin}/organization?section=runs&project=${encodeURIComponent(batch.label)}&objective=${encodeURIComponent(batch.id)}`);
+    await workspace.getByRole('heading', { name: 'Tasks & dependencies' }).waitFor();
+    assert.equal(await workspace.getByLabel('Objective / scheduler batch', { exact: true }).inputValue(), batch.id);
+    await page.screenshot({ path: `${out}/shared-scope-runs.png`, fullPage: true });
+    await page.reload();
+    await navigation.getByRole('button', { name: 'Runs', exact: true }).waitFor();
     assert.deepEqual(errors, []);
     writeFileSync(`${out}/evidence.json`, JSON.stringify({ origin, batchId: batch.id, project: batch.label, taskId: task.id, workerId: task.workerId, state: task.state, execution: task.execution, observedAt: observed.observedAt, source: 'persisted scheduler database; no fixture fallback', errors }, null, 2));
   });

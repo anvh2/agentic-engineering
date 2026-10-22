@@ -109,6 +109,10 @@ export function createControlCenterApp(options: {
       if (request.method !== 'GET') return json(405, { error: 'Read-only Gateway' });
       const objectiveId = url.searchParams.get('objectiveId');
       if (objectiveId !== null && !/^[A-Za-z0-9._-]{1,200}$/.test(objectiveId)) return json(400, { error: 'Invalid objectiveId' });
+      // A project is the scheduler's own batches.project label: any printable text, bounded, never a pattern or a list.
+      const project = url.searchParams.get('project');
+      if (project !== null && (project.length < 1 || project.length > 200 || /[\u0000-\u001f\u007f]/.test(project))) return json(400, { error: 'Invalid project' });
+      const scope = { project, objectiveId };
       if (url.pathname === `${api}/collaboration` || url.pathname.startsWith(`${api}/collaboration/`)) {
         const collaboration = options.collaboration;
         if (!collaboration) {
@@ -133,21 +137,21 @@ export function createControlCenterApp(options: {
         if (!options.agents) return json(200, { source: 'unavailable', agents: [], counts: { registered: 0, refused: 0, unavailable: 0 }, error: 'This Gateway is not running inside the Mastra server; no registration to read.' });
         try { return json(200, options.agents()); } catch { return json(503, { error: 'Agent registration unavailable' }); }
       }
-      if (url.pathname === `${api}/snapshot`) return json(200, options.reader.snapshot(objectiveId));
+      if (url.pathname === `${api}/snapshot`) return json(200, options.reader.snapshot(scope));
       if (url.pathname === `${api}/events`) {
         return stream(request, send => {
           let cursor = request.headers.get('last-event-id') ?? url.searchParams.get('cursor') ?? '';
           return () => {
             try {
-              const snapshot = options.reader.snapshot(objectiveId);
+              const snapshot = options.reader.snapshot(scope);
               if (snapshot.source === 'disconnected') { send('connection', { state: 'disconnected' }); return; }
-              if (cursor && objectiveId) {
-                const replay = options.reader.eventsAfter(objectiveId, cursor);
+              if (cursor && (objectiveId || project)) {
+                const replay = options.reader.eventsAfter(scope, cursor);
                 if (replay.reset) send('reset', { reason: 'Cursor unavailable; replace the snapshot' });
                 else for (const event of replay.events) send(event.type, event, event.id);
                 cursor = replay.cursor;
               } else cursor = snapshot.cursor!;
-              const current = options.reader.snapshot(objectiveId);
+              const current = options.reader.snapshot(scope);
               if (current.source === 'disconnected') { send('connection', { state: 'disconnected' }); return; }
               send('snapshot', current);
               send('checkpoint', { cursor }, cursor);

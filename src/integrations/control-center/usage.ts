@@ -3,12 +3,12 @@ import { unknownUsage, type ModelCall, type Usage } from './contract.ts';
 /** Snapshot replacement, never additive SSE counters. Cached/reasoning counts are subsets, never added to totals. */
 export function summarizeUsage(
   calls: readonly ModelCall[],
-  scope: { objectiveId: string; taskId?: string; provider?: string; workerId?: string },
+  scope: { objectiveId?: string; taskId?: string; provider?: string; workerId?: string },
 ): Usage {
   const unique = new Map<string, ModelCall>();
   for (const call of calls) {
     if (
-      call.objectiveId !== scope.objectiveId ||
+      (scope.objectiveId !== undefined && call.objectiveId !== scope.objectiveId) ||
       (scope.taskId && call.taskId !== scope.taskId) ||
       (scope.provider && call.provider !== scope.provider) ||
       (scope.workerId && call.workerId !== scope.workerId)
