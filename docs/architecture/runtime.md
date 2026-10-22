@@ -102,6 +102,22 @@ A coding worker is a `WorkerLike` plus an optional `ProviderDescriptor` (`src/ru
 
 A task requests a provider with `request.provider` (default `ollama`). A non-default provider runs only if the **operator** allows it (`AGENTIC_ALLOW_PROVIDERS` / `lead run --allow-provider`, entries `codex` or `codex:<taskId>`); the scheduler checks before preparing a worktree and the workflow checks again in the process that would spawn the CLI. Plans cannot authorize it. There is no fallback between providers, no automatic runtime retry for a non-default provider, and a lost lease on such a task fails it instead of requeueing it. See docs/plans/m8.2-providers.md.
 
+**Routing decision (M12, `src/runtime/execution/provider-routing.ts`).** At every claim, before a worktree or executor exists, the scheduler makes one deterministic decision and records it, selected or refused. The checks run in a fixed order and the first failure refuses:
+
+| Check | Refusal code | Task failure category |
+| --- | --- | --- |
+| the requested provider is registered (the scheduler's `describeProvider`; `lead` uses the provider registry's static descriptors) | `unknown_provider` | `provider_unavailable` |
+| the provider is cleared for the task's language (`capabilities.taskTypes`) | `language_unsupported` | `not_eligible` |
+| default provider, or an operator allow-list entry | `provider_not_authorized` | `provider_not_authorized` |
+| a provider that is not `local-free` (metered, subscription **or unknown** billing) has an operator budget with a claim left | `budget_not_approved`, `budget_exhausted` | `provider_not_authorized` |
+
+- **Budgets** are the operator's, like the allow-list: `AGENTIC_PROVIDER_BUDGETS` / `lead run|lifecycle run --provider-budget`, entries `codex=2` (all tasks share 2 claims) or `codex:<taskId>=1` (that task only), at most 20 claims per entry; a malformed value fails the command. A claim is one dispatch of the task to the provider and may make up to the provider's `limits.maxCodingAttempts` calls. An allow-list entry without a budget runs nothing; a budget without an allow-list entry authorizes nothing. A correction task (`<id>-fix1`) is a different task id, so a task-scoped budget does not cover it.
+- **Atomic and durable**: the spent count is read, the decision made and the charge recorded in one `BEGIN IMMEDIATE` transaction on the scheduler database, so schedulers in other threads or processes cannot both take the last claim, and the spend survives restarts.
+- **No fallback**: a refused task fails; it is never moved to another provider, paid or free. Moving it is a new plan by the Lead.
+- **Recorded**: each decision is a row of `provider_routing` and the task's `artifacts.routing` (`agentic.routing/1`: requested/selected provider, model, language, billing, the checks with their outcome, budget use, `charged`, `fallback: "none"`). It is not an event: readers take the event trajectory as state history (verified review derives the claim epoch from it).
+- The workflow re-checks authorization and the provider's language clearance in the process that would spawn the provider; budget is the scheduler's (the server has no scheduler database).
+- `lead providers [--json]` prints the capability matrix from live probes (no model call): languages, availability, authorization, billing class, budget and claims charged.
+
 #### Cloud CLI providers (Codex)
 
 A CLI provider is an autonomous agent editing the worktree with its own tools, so containment is enforced from outside (`src/workers/providers/process.ts`, `codex.ts`):
@@ -178,7 +194,7 @@ Studio shows the three-step workflow graph per run and one trace per run (workfl
 
 | Store | Location | Tables / content |
 | --- | --- | --- |
-| Scheduler | `.workdir/scheduler/scheduler.db` (`AGENTIC_SCHED_DB`, `AGENTIC_SCHED_ROOT`) | `batches`, `tasks` (state, lease owner/expiry, `claim_epoch`, attempts, result JSON), `events` (audit trail of every transition), `reviews` (Lead decisions), `locks` (per-repository integration lock), `integration_facts` (M10.1, additive: append-only revert/reinstate facts about DONE tasks, UPDATE/DELETE refused by triggers; DONE itself is never rewritten) |
+| Scheduler | `.workdir/scheduler/scheduler.db` (`AGENTIC_SCHED_DB`, `AGENTIC_SCHED_ROOT`) | `batches`, `tasks` (state, lease owner/expiry, `claim_epoch`, attempts, result JSON), `events` (audit trail of every transition), `reviews` (Lead decisions), `locks` (per-repository integration lock), `integration_facts` (M10.1, additive: append-only revert/reinstate facts about DONE tasks, UPDATE/DELETE refused by triggers; DONE itself is never rewritten), `provider_routing` (M12, additive: one append-only row per routing decision at claim time, `charged` rows are the spend budgets count; UPDATE/DELETE refused by triggers) |
 | Engineering collaboration | same file as the scheduler (beside its tables, created if absent; `src/runtime/collaboration/store.ts`) | `collab_events`: one append-only event stream per discussion thread (threads, messages, meeting sessions, turns, outcomes; the meeting record is stored in the terminal session event). UPDATE/DELETE refused by triggers; hash-chained per thread (`prev_hash`, `hash`), so a rewrite fails the thread closed on replay; `idempotency_key` UNIQUE; global `seq` is the live-feed cursor. Schemas `agentic.collaboration/1`, `agentic.meeting-record/1`. Grants no authority and writes no scheduler table. See docs/reports/m9-collaboration-core.md |
 | Model capacity | `~/.agentic-engineering/model-capacity.db` (`AGENTIC_MODEL_LOCK_DB`, `AGENTIC_MODEL_CONCURRENCY`) | `capacity` (permit count per resource), `leases` (holder pid, expiry; renewed while a call runs), `waiters` (the FIFO queue: ticket, holder, tag, pid, expiry; added additively, no migration). `holder` is `<model>:<taskId>:pid<pid>` plus, since M10.1, `:run=<encodeURIComponent(runId)>`: the run that owns the permit. No schema change; a holder without the suffix (older process, direct runner use) has unknown ownership and blocks every run's cancel confirmation |
 | Run artifacts | `.workdir/lead-delegations/<task>-<ts>/` (`AGENTIC_ARTIFACT_ROOT`) | trace, attempts, contract, final diff, result |
