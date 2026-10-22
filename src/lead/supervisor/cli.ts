@@ -17,7 +17,7 @@ export interface SupervisorContext {
   /** Executes the EXISTING lead lifecycle driver, not an alternate task engine. */
   runLifecycle: (objectiveId: string) => Promise<number>;
 }
-export const SUPERVISOR_USAGE = 'lead supervisor start --batch <id> [--once] [--poll-ms <100..60000>] | status | pause | resume | stop';
+export const SUPERVISOR_USAGE = 'lead supervisor start (--batch <id> | --queue) [--once] [--poll-ms <100..60000>] | status | pause | resume | stop';
 const pauseName = 'pause-requested';
 const stopName = 'stop-requested';
 const intervalMs = 20_000;
@@ -98,18 +98,21 @@ export async function runSupervisorCommand(args: string[], ctx: SupervisorContex
   }
 
   const batch = flag(args, '--batch');
+  // M12 queue mode: take submitted objectives whose oracle the Lead already pinned (phase PINNED), oldest pin first, one at a
+  // time through the same lifecycle driver. It starts nothing that is not pinned, resumes nothing that already started
+  // (EXECUTING after a crash is for a human to reconcile), and stops at the first objective that does not end ACCEPTED.
+  const queue = args.includes('--queue');
   const pollInput = flag(args, '--poll-ms');
   const poll = pollInput === undefined ? 2000 : Number(pollInput);
-  if (!batch || !/^[A-Za-z0-9._-]+$/.test(batch) ||
+  if (Number(Boolean(batch)) + Number(queue) !== 1 || (batch !== undefined && !/^[A-Za-z0-9._-]+$/.test(batch)) ||
       !Number.isInteger(poll) || poll < 100 || poll > 60_000) {
-    ctx.err('start requires --batch <id>; --poll-ms must be 100..60000');
+    ctx.err('start requires exactly one of --batch <id> or --queue; --poll-ms must be 100..60000');
     return 2;
   }
-  // Verify batch exists and pre-pinned oracle BEFORE grabbing leadership.
-  const batchRow = ctx.store.getBatch(batch);
   const lifecycle = new LifecycleStore(ctx.store);
-  const pinned = lifecycle.getByBatch(batch);
-  if (!batchRow || !pinned || pinned.batchId !== batch) {
+  // Verify batch exists and pre-pinned oracle BEFORE grabbing leadership.
+  const pinned = batch ? lifecycle.getByBatch(batch) : undefined;
+  if (batch && (!ctx.store.getBatch(batch) || !pinned || pinned.batchId !== batch)) {
     ctx.err('Batch must exist and have an independently pinned lifecycle oracle');
     return 2;
   }
@@ -123,7 +126,7 @@ export async function runSupervisorCommand(args: string[], ctx: SupervisorContex
     throw e;
   }
   const token = 'supervisor:' + process.pid + ':' + randomUUID();
-  const lockName = 'supervisor:' + batch;
+  const lockName = queue ? 'supervisor:queue' : 'supervisor:' + batch;
   let locked = false;
   let lost = false;
   let beat: ReturnType<typeof setInterval> | undefined;
@@ -133,7 +136,7 @@ export async function runSupervisorCommand(args: string[], ctx: SupervisorContex
   process.on('SIGTERM', onSignal);
   process.on('SIGINT', onSignal);
   try {
-    await writeFile(join(holderDir(ctx.workdir), 'owner.json'), JSON.stringify({ token, pid: process.pid, batch }), { flag: 'wx', mode: 0o600 });
+    await writeFile(join(holderDir(ctx.workdir), 'owner.json'), JSON.stringify({ token, pid: process.pid, batch: batch ?? null, mode: queue ? 'queue' : 'batch' }), { flag: 'wx', mode: 0o600 });
     if (!ctx.store.acquireLock(lockName, token, lockTtlMs)) throw new Error('DB leadership lock held');
     locked = true;
     beat = setInterval(() => {
@@ -148,12 +151,35 @@ export async function runSupervisorCommand(args: string[], ctx: SupervisorContex
     };
     let rounds = 0;
     let resultCode = 0;
-    while (!stopping) {
+    let objectivesRun = 0;
+    while (queue && !stopping) {
       await assertOwner();
       if (await exists(intent(ctx.workdir, stopName))) break;
       if (await exists(intent(ctx.workdir, pauseName))) { await sleep(poll); continue; }
-      const current = lifecycle.getByBatch(batch);
-      if (!current || current.objectiveId !== pinned.objectiveId) throw new Error('lifecycle identity changed');
+      const next = lifecycle.listByPhase('PINNED')[0];
+      if (!next) {
+        if (args.includes('--once')) { ctx.out(JSON.stringify({ mode: 'queue', idle: true, objectivesRun })); break; }
+        await sleep(poll);
+        continue;
+      }
+      ctx.out(JSON.stringify({ mode: 'queue', starting: next.objectiveId, batch: next.batchId }));
+      running = true;
+      const exit = await ctx.runLifecycle(next.objectiveId);
+      running = false;
+      await assertOwner();
+      const verified = lifecycle.require(next.objectiveId);
+      objectivesRun++;
+      ctx.out(JSON.stringify({ mode: 'queue', batch: verified.batchId, objectiveId: verified.objectiveId, phase: verified.phase, exit, objectivesRun }));
+      // Fail closed: an objective that needs a human (escalated, awaiting the operator, not accepted) stops the queue.
+      if (exit !== 0 || verified.phase !== 'ACCEPTED') { resultCode = 1; break; }
+      if (args.includes('--once')) break;
+    }
+    while (!queue && !stopping) {
+      await assertOwner();
+      if (await exists(intent(ctx.workdir, stopName))) break;
+      if (await exists(intent(ctx.workdir, pauseName))) { await sleep(poll); continue; }
+      const current = lifecycle.getByBatch(batch!);
+      if (!current || current.objectiveId !== pinned!.objectiveId) throw new Error('lifecycle identity changed');
       if (!states.has(current.phase)) break;
       running = true;
       const exit = await ctx.runLifecycle(current.objectiveId);
