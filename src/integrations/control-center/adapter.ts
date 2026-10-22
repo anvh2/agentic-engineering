@@ -172,6 +172,27 @@ function mapEvent(r: Row, databaseId: string): ControlEvent {
   };
 }
 /** No SchedulerStore constructor, provider registry, workflow client or write-capable runtime import. */
+/** Shared scope: a project (batches.project) and optionally one of its scheduler batches. Never inferred from names. */
+export interface Scope {
+  project?: string | null;
+  objectiveId?: string | null;
+}
+const scopeOf = (scope: Scope | string | null | undefined): { project: string | null; objectiveId: string | null } =>
+  typeof scope === 'string' ? { project: null, objectiveId: scope } : { project: scope?.project ?? null, objectiveId: scope?.objectiveId ?? null };
+/**
+ * The batches a scope covers, from the scheduler's own batch -> project column. One batch: it must exist and, when a project is
+ * also given, belong to it (otherwise the scope is empty, never silently widened). A project alone: all of its batches.
+ */
+function batchesInScope(db: DatabaseSync, scope: { project: string | null; objectiveId: string | null }): { project: string | null; ids: string[] } {
+  if (scope.objectiveId !== null) {
+    const batch = db.prepare('SELECT id, project FROM batches WHERE id = ?').get(scope.objectiveId) as Row | undefined;
+    if (!batch || (scope.project !== null && batch.project !== scope.project)) return { project: scope.project, ids: [] };
+    return { project: batch.project, ids: [batch.id] };
+  }
+  if (scope.project === null) return { project: null, ids: [] };
+  return { project: scope.project, ids: (db.prepare('SELECT id FROM batches WHERE project = ? ORDER BY created_at, id').all(scope.project) as Row[]).map((r) => r.id) };
+}
+const placeholders = (ids: readonly string[]) => ids.map(() => '?').join(',');
 export function createReader(options: ReaderOptions) {
   const now = options.now ?? Date.now;
   const studio = new URL(options.studioOrigin ?? 'http://localhost:4111');
@@ -203,8 +224,9 @@ export function createReader(options: ReaderOptions) {
     }
   }
   return {
-    snapshot(objectiveId: string | null = null): Snapshot {
+    snapshot(requested: Scope | string | null = null): Snapshot {
       const at = now();
+      const { project, objectiveId } = scopeOf(requested);
       try {
         const snapshot = transaction((db, databaseId) => {
           const out = emptySnapshot(at, objectiveId);
@@ -215,7 +237,9 @@ export function createReader(options: ReaderOptions) {
           out.objectives = (db.prepare('SELECT id, project, created_at FROM batches ORDER BY created_at DESC, id').all() as Row[]).map(
             (r) => ({ id: r.id, label: r.project, createdAt: r.created_at, kind: 'scheduler-batch' as const }),
           );
-          if (objectiveId === null) return out;
+          const scope = batchesInScope(db, { project, objectiveId });
+          out.scope = { project: scope.project, objectiveId, objectiveIds: scope.ids };
+          if (!scope.ids.length) return out;
           const rows = db
             .prepare(
               `SELECT t.id, t.batch_id, t.title, t.executor, t.state, t.assigned_worker, t.lease_expires_at, t.claimed_at, t.updated_at, t.run_id, t.run_ids, t.attempts, t.runtime_retries, t.runtime_requeues, t.created_at, t.finished_at, t.failure_category, t.review_outcome,
@@ -223,9 +247,9 @@ export function createReader(options: ReaderOptions) {
             json_extract(t.spec, '$.dependsOn') AS dependencies, json_extract(t.spec, '$.request.provider') AS provider,
             CASE WHEN json_type(t.artifacts, '$.modelCalls')='array' THEN json_extract(t.artifacts, '$.modelCalls') END AS model_calls,
             (SELECT MAX(e.at) FROM events e WHERE e.task_id=t.id) AS last_event_at
-            FROM tasks t WHERE t.batch_id=? ORDER BY t.created_at, t.id`,
+            FROM tasks t WHERE t.batch_id IN (${placeholders(scope.ids)}) ORDER BY t.created_at, t.id`,
             )
-            .all(objectiveId) as Row[];
+            .all(...scope.ids) as Row[];
           const gaps = new Set<string>();
           out.tasks = rows.map((r) => {
             if (!(TASK_STATES as readonly string[]).includes(r.state)) throw new Error('unsupported state');
@@ -274,29 +298,30 @@ export function createReader(options: ReaderOptions) {
             task.usage = coverage(summarizeUsage(recorded.calls, { objectiveId: task.objectiveId, taskId: task.id }), gaps.has(task.id));
             return task;
           });
-          out.usage = coverage(summarizeUsage(out.calls, { objectiveId }), gaps.size > 0);
+          // out.calls already holds only this scope's tasks; each task's calls carry that task's own batch.
+          out.usage = coverage(summarizeUsage(out.calls, {}), gaps.size > 0);
           out.events = (
             db
               .prepare(
-                'SELECT e.seq,e.task_id,e.at,e.from_state,e.to_state,e.reason FROM events e JOIN tasks t ON t.id=e.task_id WHERE t.batch_id=? ORDER BY e.seq DESC LIMIT 200',
+                `SELECT e.seq,e.task_id,e.at,e.from_state,e.to_state,e.reason FROM events e JOIN tasks t ON t.id=e.task_id WHERE t.batch_id IN (${placeholders(scope.ids)}) ORDER BY e.seq DESC LIMIT 200`,
               )
-              .all(objectiveId) as Row[]
+              .all(...scope.ids) as Row[]
           )
             .reverse()
             .map((r) => mapEvent(r, databaseId));
           out.reviews = (
             db
               .prepare(
-                `SELECT r.id,r.task_id,r.created_at,r.round FROM reviews r JOIN tasks t ON t.id=r.task_id WHERE t.batch_id=? AND r.decision IS NULL AND t.state='REVIEW_PENDING' ORDER BY r.created_at`,
+                `SELECT r.id,r.task_id,r.created_at,r.round FROM reviews r JOIN tasks t ON t.id=r.task_id WHERE t.batch_id IN (${placeholders(scope.ids)}) AND r.decision IS NULL AND t.state='REVIEW_PENDING' ORDER BY r.created_at`,
               )
-              .all(objectiveId) as Row[]
+              .all(...scope.ids) as Row[]
           ).map((r) => ({ id: r.id, taskId: r.task_id, createdAt: r.created_at, round: r.round }));
           out.agents = agents(out.tasks);
           // Provider totals use the provider each call actually ran on; a lane whose calls name another provider is incomplete.
           const laneUsage = (lane: string): Usage => {
             const laneTasks = out.tasks.filter((t) => t.provider === lane);
             const gap = laneTasks.some((t) => gaps.has(t.id)) || out.calls.some((c) => c.provider !== lane && laneTasks.some((t) => t.id === c.taskId));
-            return coverage(summarizeUsage(out.calls, { objectiveId, provider: lane }), gap);
+            return coverage(summarizeUsage(out.calls, { provider: lane }), gap);
           };
           for (const lane of out.agents) lane.usage = laneUsage(lane.provider);
           out.providers = out.agents.map((a) => ({ id: a.provider, usage: a.usage, quota: null, permits: null, permitsInUse: null }));
@@ -317,17 +342,18 @@ export function createReader(options: ReaderOptions) {
         return emptySnapshot(at, objectiveId);
       }
     },
-    eventsAfter(objectiveId: string, cursor: string): { reset: boolean; cursor: string; events: ControlEvent[] } {
+    eventsAfter(requested: Scope | string, cursor: string): { reset: boolean; cursor: string; events: ControlEvent[] } {
       return transaction((db, databaseId) => {
+        const scope = batchesInScope(db, scopeOf(requested));
         const match = /^([a-f0-9]{20}):(\d+)$/.exec(cursor);
         const head = (db.prepare('SELECT COALESCE(MAX(seq),0) AS seq FROM events').get() as Row).seq as number;
         if (!match || match[1] !== databaseId || !Number.isSafeInteger(Number(match[2])) || Number(match[2]) > head)
           return { reset: true, cursor: `${databaseId}:${head}`, events: [] };
         const rows = db
           .prepare(
-            'SELECT e.seq,e.task_id,e.at,e.from_state,e.to_state,e.reason FROM events e JOIN tasks t ON t.id=e.task_id WHERE t.batch_id=? AND e.seq>? ORDER BY e.seq LIMIT 201',
+            `SELECT e.seq,e.task_id,e.at,e.from_state,e.to_state,e.reason FROM events e JOIN tasks t ON t.id=e.task_id WHERE t.batch_id IN (${placeholders(scope.ids)}) AND e.seq>? ORDER BY e.seq LIMIT 201`,
           )
-          .all(objectiveId, Number(match[2])) as Row[];
+          .all(...scope.ids, Number(match[2])) as Row[];
         if (rows.length > 200) return { reset: true, cursor: `${databaseId}:${head}`, events: [] };
         return { reset: false, cursor: `${databaseId}:${head}`, events: rows.map((r) => mapEvent(r, databaseId)) };
       });

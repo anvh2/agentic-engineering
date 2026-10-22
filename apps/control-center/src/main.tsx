@@ -26,10 +26,26 @@ const show = (v: number | string) => (typeof v === 'number' ? v.toLocaleString()
 import { CollaborationView } from './collaboration.tsx';
 import { AgentsView } from './agents.tsx';
 import './style.css';
+import { EMPTY_TEXT, emptyReason, filterCalls, filteredUsage, filterRuns, parseView, scopeQuery, serializeView, WINDOWS, type ViewState } from './view-state.ts';
 const embedded = window.location.pathname.startsWith('/organization-app/');
 const apiBase = embedded ? '/control-center/v1' : '/api/v1';
 
 type Page = 'Overview' | 'Runs' | 'Collaboration' | 'Usage';
+const SECTION_PAGE = { overview: 'Overview', runs: 'Runs', collaboration: 'Collaboration', usage: 'Usage' } as const;
+const PAGE_SECTION = { Overview: 'overview', Runs: 'runs', Collaboration: 'collaboration', Usage: 'usage' } as const;
+const UNATTRIBUTED_OPTION = '__unattributed';
+/**
+ * Where the shareable URL lives. Embedded in Studio, that is Studio's own address bar (same origin), so a copied Studio link
+ * restores the view; standalone, this window. A cross-origin parent is never touched.
+ */
+function hostWindow(): Window {
+  if (!embedded) return window;
+  try {
+    return window.parent.location.origin === window.location.origin ? window.parent : window;
+  } catch {
+    return window;
+  }
+}
 const pages = [
   { name: 'Overview', icon: Layers },
   { name: 'Runs', icon: Activity },
@@ -117,7 +133,7 @@ function UsageView({ usage, title = 'Token usage', callCount, connected }: { usa
     </>
   );
 }
-function useSnapshot(objectiveId: string) {
+function useSnapshot(query: string) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [connection, setConnection] = useState<'loading' | 'connected' | 'disconnected'>('loading');
   useEffect(() => {
@@ -125,7 +141,6 @@ function useSnapshot(objectiveId: string) {
     const abort = new AbortController();
     setSnapshot(null);
     setConnection('loading');
-    const query = objectiveId ? `?objectiveId=${encodeURIComponent(objectiveId)}` : '';
     let eventArrived = false;
     const accept = (value: unknown) => {
       const parsed = snapshotSchema.safeParse(value);
@@ -175,7 +190,7 @@ function useSnapshot(objectiveId: string) {
       abort.abort();
       stream.close();
     };
-  }, [objectiveId]);
+  }, [query]);
   return { snapshot, connection };
 }
 function AgentMeasurements({
@@ -596,7 +611,7 @@ function Providers({ snapshot, connected }: { snapshot: Snapshot; connected: boo
     <section className="panel">
       <div className="panel-heading">
         <h2>Provider usage</h2>
-        <span className="muted">Selected objective only</span>
+        <span className="muted">Whole selected scope (usage filters do not apply)</span>
       </div>
       <div className="table-scroll">
         <table>
@@ -633,11 +648,28 @@ function Providers({ snapshot, connected }: { snapshot: Snapshot; connected: boo
   );
 }
 function App() {
-  const [page, setPage] = useState<Page>('Overview');
-  const [objectiveId, setObjective] = useState('');
-  const [project, setProject] = useState('');
-  const [status, setStatus] = useState('');
-  const [collaborationKind, setCollaborationKind] = useState<'Discussions' | 'Meetings' | 'Council'>('Discussions');
+  const host = hostWindow();
+  const [view, setViewState] = useState<ViewState>(() => parseView(host.location.search));
+  /** Scope and section changes are history entries (Back restores them); filter tweaks replace the current entry. */
+  const setView = (patch: Partial<ViewState>, mode: 'push' | 'replace' = 'replace') => {
+    const next = { ...view, ...patch };
+    const search = serializeView(next);
+    if (search !== host.location.search) {
+      const url = `${host.location.pathname}${search}${host.location.hash}`;
+      if (mode === 'push') host.history.pushState(host.history.state, '', url);
+      else host.history.replaceState(host.history.state, '', url);
+    }
+    setViewState(next);
+  };
+  useEffect(() => {
+    const restore = () => setViewState(parseView(host.location.search));
+    host.addEventListener('popstate', restore);
+    return () => host.removeEventListener('popstate', restore);
+  }, [host]);
+  const page: Page = SECTION_PAGE[view.section];
+  const setPage = (name: Page) => setView({ section: PAGE_SECTION[name] }, 'push');
+  const objectiveId = view.objective;
+  const collaborationKind = ({ discussions: 'Discussions', meetings: 'Meetings', council: 'Council' } as const)[view.collab];
   const [selected, setSelected] = useState<{ kind: 'agent' | 'task'; id: string } | null>(null);
   const [theme, setTheme] = useState(() => {
     try {
@@ -657,7 +689,7 @@ function App() {
     return () => observer.disconnect();
   }, []);
   const [now, setNow] = useState(Date.now());
-  const { snapshot, connection } = useSnapshot(objectiveId);
+  const { snapshot, connection } = useSnapshot(scopeQuery(view));
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     try {
@@ -742,37 +774,45 @@ function App() {
               </div>
               <span className="version">READ ONLY</span>
             </div>
-            {page === 'Runs' && <div className="scope-bar">
+            <div className="scope-bar" role="group" aria-label="Scope">
               <label htmlFor="project">Project</label>
-              <select id="project" value={project} onChange={e => { setProject(e.target.value); setObjective(''); setStatus(''); setSelected(null); }}>
+              <select
+                id="project"
+                value={view.unattributed ? UNATTRIBUTED_OPTION : view.project}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setView({ project: value === UNATTRIBUTED_OPTION ? '' : value, objective: '', unattributed: value === UNATTRIBUTED_OPTION, status: '', provider: '', worker: '', participant: '', callProvider: '', model: '', callWorker: '' }, 'push');
+                  setSelected(null);
+                }}
+              >
                 <option value="">All projects</option>
-                {[...new Set(snapshot?.objectives.map(o => o.label) ?? [])].map(p => <option key={p} value={p}>{p}</option>)}
+                {[...new Set(snapshot?.objectives.map((o) => o.label) ?? [])].map((p) => <option key={p} value={p}>{p}</option>)}
+                {view.project && !snapshot?.objectives.some((o) => o.label === view.project) && <option value={view.project}>{view.project} (no batches)</option>}
+                <option value={UNATTRIBUTED_OPTION}>Unattributed (no persisted project association)</option>
               </select>
               <label htmlFor="objective">Objective / scheduler batch</label>
               <select
                 id="objective"
-                value={objectiveId}
+                value={view.objective}
+                disabled={view.unattributed}
                 onChange={(e) => {
-                  setObjective(e.target.value);
-                  setStatus('');
+                  const batch = snapshot?.objectives.find((o) => o.id === e.target.value);
+                  // An objective's project is the batch's own project column, never chosen by name.
+                  setView({ objective: e.target.value, project: batch ? batch.label : view.project, status: '' }, 'push');
                   setSelected(null);
                 }}
               >
-                <option value="">Select a scheduler batch</option>
-                {snapshot?.objectives.filter(o => !project || o.label === project).map((o) => (
+                <option value="">{view.project ? 'All objectives in this project' : 'Select a project or batch'}</option>
+                {snapshot?.objectives.filter((o) => !view.project || o.label === view.project).map((o) => (
                   <option key={o.id} value={o.id}>
                     {o.id} · {o.label}
                   </option>
                 ))}
               </select>
-              <label htmlFor="task-status">Task status</label>
-              <select id="task-status" value={status} onChange={e => { setStatus(e.target.value); setSelected(null); }}>
-                <option value="">All statuses</option>
-                <option value={ATTENTION}>Needs attention (blocked · escalated · runtime failure · rejected)</option>
-                {[...new Set(snapshot?.tasks.map(t => t.state) ?? [])].sort().map(s => <option key={s}>{s}</option>)}
-              </select>
-            </div>}
-            {objectiveId && page !== 'Runs' && page !== 'Collaboration' && <p className="muted">Reported scope: {objectiveId} · change scope in Runs.</p>}
+              <span className="muted">
+                {view.unattributed ? 'Unattributed records' : view.objective ? `Batch ${view.objective}` : view.project ? `All ${snapshot?.scope?.objectiveIds.length ?? 0} objectives of ${view.project}` : 'No scope'}
+              </span>
+            </div>
             {connection === 'loading' && (
               <div className="notice" role="status">
                 Loading scheduler snapshot…
@@ -784,16 +824,21 @@ function App() {
                 automatically.
               </div>
             )}
-            {!objectiveId && page !== 'Collaboration' && (
+            {view.unattributed && page !== 'Collaboration' && (
               <div className="notice">
-                Choose a scheduler batch in Runs to inspect execution. If none are listed, this data source has no persisted batches. Agent roles do not indicate online presence.
+                Scheduler records are never unattributed: every task belongs to a batch with a project. The Unattributed scope holds collaboration and Council records without a persisted batch or task reference; see Collaboration.
+              </div>
+            )}
+            {!view.unattributed && !view.project && !view.objective && page !== 'Collaboration' && connection !== 'disconnected' && (
+              <div className="notice">
+                {EMPTY_TEXT.NO_SCOPE} If no projects are listed, this data source has no persisted batches. Agent roles do not indicate online presence.
               </div>
             )}
             {page === 'Collaboration' && <>
               <nav className="organization-tabs" aria-label="Collaboration views">
-                {(['Discussions', 'Meetings', 'Council'] as const).map(kind => <button key={kind} aria-current={collaborationKind === kind ? 'page' : undefined} onClick={() => setCollaborationKind(kind)}>{kind}</button>)}
+                {(['Discussions', 'Meetings', 'Council'] as const).map(kind => <button key={kind} aria-current={collaborationKind === kind ? 'page' : undefined} onClick={() => setView({ collab: kind.toLowerCase() as ViewState['collab'], participant: '', mode: '', decision: '' })}>{kind}</button>)}
               </nav>
-              <CollaborationView key={collaborationKind} kind={collaborationKind} apiBase={apiBase} />
+              <CollaborationView key={collaborationKind} kind={collaborationKind} apiBase={apiBase} view={view} setView={setView} />
             </>}
             {page === 'Runs' && <p className="notice">Project labels come from scheduler batches. Milestone filtering and external Claude Code sessions are unavailable: no durable metadata contract is exposed. A scheduler batch, task, workflow run, model call and Council meeting are distinct identities.</p>}
             {page === 'Overview' && <p><a href="/agents" target={embedded ? '_top' : '_blank'} rel="noreferrer">Open Mastra Agents ↗</a></p>}
@@ -913,9 +958,36 @@ function App() {
                     <section className="panel">
                       <div className="panel-heading">
                         <h2>Tasks & dependencies</h2>
-                        <span className="muted">{snapshot.tasks.filter(needsAttention).length ? <strong className="warning">{snapshot.tasks.filter(needsAttention).length} need attention · </strong> : null}{objectiveId || 'No objective selected'}</span>
+                        <span className="muted">{snapshot.tasks.filter(needsAttention).length ? <strong className="warning">{snapshot.tasks.filter(needsAttention).length} need attention · </strong> : null}{view.objective || view.project || 'No scope selected'}</span>
                       </div>
-                      <TaskTable tasks={filterByStatus(snapshot.tasks, status)} onSelect={pickTask} now={connected ? now : snapshot.observedAt} connected={connected} />
+                      <div className="scope-bar" role="group" aria-label="Run filters">
+                        <label htmlFor="task-status">Task status</label>
+                        <select id="task-status" value={view.status} onChange={(e) => { setView({ status: e.target.value }); setSelected(null); }}>
+                          <option value="">All statuses</option>
+                          <option value={ATTENTION}>Needs attention (blocked · escalated · runtime failure · rejected)</option>
+                          {[...new Set(snapshot.tasks.map((t) => t.state))].sort().map((s) => <option key={s}>{s}</option>)}
+                        </select>
+                        <label htmlFor="task-provider">Provider</label>
+                        <select id="task-provider" value={view.provider} onChange={(e) => setView({ provider: e.target.value })}>
+                          <option value="">All providers</option>
+                          {[...new Set(snapshot.tasks.map((t) => t.provider))].sort().map((p) => <option key={p}>{p}</option>)}
+                        </select>
+                        <label htmlFor="task-worker">Current worker</label>
+                        <select id="task-worker" value={view.worker} onChange={(e) => setView({ worker: e.target.value })}>
+                          <option value="">All workers</option>
+                          {[...new Set(snapshot.tasks.flatMap((t) => (t.workerId ? [t.workerId] : [])))].sort().map((w) => <option key={w}>{w}</option>)}
+                        </select>
+                        <label htmlFor="task-updated">Updated within</label>
+                        <select id="task-updated" value={view.updated} onChange={(e) => setView({ updated: e.target.value as ViewState['updated'] })}>
+                          <option value="">Any time</option>
+                          {Object.keys(WINDOWS).map((w) => <option key={w}>{w}</option>)}
+                        </select>
+                      </div>
+                      {(() => {
+                        const shown = filterRuns(snapshot.tasks, view, connected ? now : snapshot.observedAt);
+                        const reason = emptyReason({ connected, scoped: !!(view.project || view.objective), inScope: snapshot.tasks.length, shown: shown.length });
+                        return reason ? <Empty>{EMPTY_TEXT[reason]}</Empty> : <TaskTable tasks={shown} onSelect={pickTask} now={connected ? now : snapshot.observedAt} connected={connected} />;
+                      })()}
                     </section>
                     <section className="panel">
                       <div className="panel-heading"><h2>Objective DAG</h2><span className="muted">Persisted dependency edges</span></div>
@@ -976,7 +1048,54 @@ function App() {
                     )}
                   </section>
                 )}
-                {page === 'Usage' && <><section className="panel usage-panel"><UsageView usage={snapshot.usage} title="Objective usage" connected={connected} /></section><Providers snapshot={snapshot} connected={connected} /></>}
+                {page === 'Usage' && (() => {
+                  const filtersActive = !!(view.range || view.callProvider || view.model || view.callWorker || view.completeness);
+                  const calls = filterCalls(snapshot.calls, view, connected ? now : snapshot.observedAt);
+                  const usage = filtersActive ? filteredUsage(snapshot, calls) : snapshot.usage;
+                  const reason = emptyReason({
+                    connected,
+                    scoped: !!(view.project || view.objective),
+                    inScope: snapshot.calls.length,
+                    shown: calls.length,
+                    notRecorded: snapshot.calls.length === 0 && snapshot.tasks.some((t) => t.runIds.length > 0),
+                  });
+                  return (
+                    <>
+                      <div className="scope-bar" role="group" aria-label="Usage filters">
+                        <label htmlFor="usage-range">Time range</label>
+                        <select id="usage-range" value={view.range} onChange={(e) => setView({ range: e.target.value as ViewState['range'] })}>
+                          <option value="">Any time</option>
+                          {Object.keys(WINDOWS).map((w) => <option key={w}>{w}</option>)}
+                        </select>
+                        <label htmlFor="usage-provider">Provider</label>
+                        <select id="usage-provider" value={view.callProvider} onChange={(e) => setView({ callProvider: e.target.value })}>
+                          <option value="">All providers</option>
+                          {[...new Set(snapshot.calls.map((c) => c.provider))].sort().map((p) => <option key={p}>{p}</option>)}
+                        </select>
+                        <label htmlFor="usage-model">Model</label>
+                        <select id="usage-model" value={view.model} onChange={(e) => setView({ model: e.target.value })}>
+                          <option value="">All models</option>
+                          {[...new Set(snapshot.calls.flatMap((c) => (c.modelId ? [c.modelId] : [])))].sort().map((m) => <option key={m}>{m}</option>)}
+                        </select>
+                        <label htmlFor="usage-worker">Completing worker</label>
+                        <select id="usage-worker" value={view.callWorker} onChange={(e) => setView({ callWorker: e.target.value })}>
+                          <option value="">All workers</option>
+                          {[...new Set(snapshot.calls.flatMap((c) => (c.workerId ? [c.workerId] : [])))].sort().map((w) => <option key={w}>{w}</option>)}
+                        </select>
+                        <label htmlFor="usage-completeness">Completeness</label>
+                        <select id="usage-completeness" value={view.completeness} onChange={(e) => setView({ completeness: e.target.value as ViewState['completeness'] })}>
+                          <option value="">Any</option>
+                          <option value="complete">Complete counts</option>
+                          <option value="partial">Partial counts</option>
+                        </select>
+                      </div>
+                      <p className="footnote">Agent: not recorded per invocation (worker invocations carry run, completing worker, provider and model only), so no agent filter is offered.</p>
+                      {reason && reason !== 'NO_SCOPE' && <p className="notice" role="status">{EMPTY_TEXT[reason]}</p>}
+                      <section className="panel usage-panel"><UsageView usage={usage} title={filtersActive ? 'Filtered scope usage' : 'Scope usage'} callCount={filtersActive ? calls.length : undefined} connected={connected} /></section>
+                      <Providers snapshot={snapshot} connected={connected} />
+                    </>
+                  );
+                })()}
                 {page === 'Runs' && (
                   <section className="panel">
                     <div className="panel-heading">

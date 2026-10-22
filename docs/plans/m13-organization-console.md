@@ -27,3 +27,18 @@ D: Only after A–C useful functionality: compact Overview, confirmed UX fixes, 
 Direct overlap with #59: main.tsx and control-center projection. Reuse its latest base; retain agents component and Council adapter. No changes to #58 core files, scheduler, routing, sandbox or verifier. Milestone persistence requires a separately coordinated core boundary change and is not guessed from identifiers.
 
 Run root typecheck/tests, UI typecheck/build and focused adapter/UI tests. Browser on isolated port with real persisted scheduler/Council reads; never terminate another server or invoke models. Capture before/after in .workdir; document exact source and missing evidence. Draft PR A stacks on #59 and preserves existing merge gates.
+
+## Shared Project / Objective scope: association audit (2026-10-22)
+
+Every store was inspected for a persisted association to a scheduler batch, which carries `batches.project`, before any filter was built.
+
+| Source | Association | Authoritative? | Evidence |
+| --- | --- | --- | --- |
+| Scheduler tasks, runs, reviews, events | `tasks.batch_id` -> `batches.project` (NOT NULL) | Yes | Every task has a batch, and every batch a project, so scheduler records are never unattributed |
+| Worker invocation telemetry (#60) | `tasks.artifacts.modelCalls` belongs to its task -> batch | Yes | Persisted on the task row in `complete()` |
+| Discussions / Meetings (`collab_events` in the scheduler DB) | `thread.refs.batchId` / `refs.taskId`, validated against the same DB when written (`collaboration/store.ts` `checkRefs`); a meeting inherits its thread's refs | Yes, for batch/task refs | Real data: both threads carry only `refs.objectiveId = "M10-RELIABILITY-LAB"`. That label is not validated, and the matching batch `M10-RL` resembles it in name only, so both stay Unattributed |
+| Council (`council.db`) | none: `council/run.ts` opens threads with `refs: {}`. `council.db` has its own (empty) scheduler tables, so a ref there could not name a batch in the scheduler of record | No | Real data: both meetings have `refs = {}` |
+
+**Rules implemented.** Scope resolves only through `batches.project`. An objective outside the selected project is an empty scope, never a widened one. Collaboration records are ATTRIBUTED only through a batch/task ref resolved in the scheduler of record, and everything else is shown under the explicit Unattributed scope with its reason. Nothing is matched by name, prefix, time or model.
+
+**Proposed correlation contract (deferred; not implemented).** To attribute Council meetings, the council run would record `refs: { batchId?, taskId? }` plus `schedulerDatabaseId`: the scheduler of record's database identity, which the Control Center already derives as `databaseId`. It would validate the refs against that scheduler when the meeting is opened, through a read-only lookup of `batches`/`tasks` in the scheduler DB. The Control Center would then mark a Council meeting ATTRIBUTED only when its recorded `schedulerDatabaseId` equals the current `databaseId` and the ref resolves there. The change is backward compatible: records without the fields stay Unattributed. It touches the council runtime (`src/runtime/council`), so it needs its own reviewed change.

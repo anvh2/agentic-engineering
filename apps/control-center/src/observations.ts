@@ -9,10 +9,12 @@ import {
 import { summarizeUsage } from '../../../src/integrations/control-center/usage.ts';
 
 const activeStates = new Set(['READY', 'CLAIMED', 'CODING', 'VERIFYING']);
+/** The scheduler batches this snapshot covers: one objective, or every objective of a project. */
+export const scopeIds = (snapshot: Snapshot): string[] => snapshot.scope?.objectiveIds ?? (snapshot.objectiveId ? [snapshot.objectiveId] : []);
 export function currentTasks(snapshot: Snapshot, agent?: ControlAgent, task?: ControlTask): ControlTask[] {
   return snapshot.tasks.filter(
     (t) =>
-      t.objectiveId === snapshot.objectiveId &&
+      scopeIds(snapshot).includes(t.objectiveId) &&
       (task ? t.id === task.id : agent?.assignmentIds.includes(t.id)) &&
       activeStates.has(t.state) &&
       !t.stale,
@@ -40,10 +42,11 @@ export function uniqueCalls(calls: ModelCall[]): ModelCall[] {
   }
   return [...out.values()];
 }
-export function usageForCalls(calls: ModelCall[], objectiveId: string | null): Usage {
-  if (objectiveId === null) return unknownUsage();
-  const unique = uniqueCalls(calls.filter((c) => c.objectiveId === objectiveId));
-  const usage = summarizeUsage(unique, { objectiveId });
+export function usageForCalls(calls: ModelCall[], scope: string | readonly string[] | null): Usage {
+  const ids = scope === null ? [] : typeof scope === 'string' ? [scope] : scope;
+  if (!ids.length) return unknownUsage();
+  const unique = uniqueCalls(calls.filter((c) => ids.includes(c.objectiveId)));
+  const usage = summarizeUsage(unique, {});
   // Cost is displayed only with explicit model and pricing provenance, never inferred from aliases or tokens.
   const price = unique[0]?.usage.estimatedCost;
   if (
@@ -65,12 +68,12 @@ export function usageForCalls(calls: ModelCall[], objectiveId: string | null): U
 }
 export function inspectorObservations(snapshot: Snapshot, agent?: ControlAgent, task?: ControlTask) {
   const tasks = snapshot.tasks.filter(
-    (t) => t.objectiveId === snapshot.objectiveId && (task ? t.id === task.id : t.provider === agent?.provider),
+    (t) => scopeIds(snapshot).includes(t.objectiveId) && (task ? t.id === task.id : t.provider === agent?.provider),
   );
   const assigned = currentTasks(snapshot, agent, task);
   const calls = uniqueCalls(
     snapshot.calls.filter(
-      (c) => c.objectiveId === snapshot.objectiveId && tasks.some((t) => t.id === c.taskId && t.provider === c.provider),
+      (c) => scopeIds(snapshot).includes(c.objectiveId) && tasks.some((t) => t.id === c.taskId && t.provider === c.provider),
     ),
   );
   const current = calls.filter((c) => assigned.some((t) => t.id === c.taskId && t.runId === c.runId));
@@ -80,8 +83,8 @@ export function inspectorObservations(snapshot: Snapshot, agent?: ControlAgent, 
     assigned,
     current,
     historical,
-    currentUsage: usageForCalls(current, snapshot.objectiveId),
-    historicalUsage: usageForCalls(historical, snapshot.objectiveId),
+    currentUsage: usageForCalls(current, scopeIds(snapshot)),
+    historicalUsage: usageForCalls(historical, scopeIds(snapshot)),
     history: tasks
       .slice()
       .sort((a, b) => b.updatedAt - a.updatedAt)
@@ -94,7 +97,7 @@ export function taskUsage(snapshot: Snapshot, task: ControlTask): Usage {
   if (task.usage.source !== 'unavailable') return task.usage;
   return usageForCalls(
     snapshot.calls.filter((c) => c.taskId === task.id && c.provider === task.provider),
-    snapshot.objectiveId,
+    scopeIds(snapshot),
   );
 }
 export function priced(usage: Usage): boolean {

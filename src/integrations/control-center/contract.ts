@@ -150,6 +150,8 @@ export const snapshotSchema = z.object({
   databaseId: z.string().nullable(),
   cursor: z.string().nullable(),
   objectiveId: z.string().nullable(),
+  /** The resolved scope: a project from batches.project and the scheduler batches it covers. Optional for older readers. */
+  scope: z.object({ project: z.string().nullable(), objectiveId: z.string().nullable(), objectiveIds: z.array(z.string()) }).optional(),
   objectives: z.array(z.object({ id: z.string(), label: z.string(), createdAt: time, kind: z.literal('scheduler-batch') })),
   tasks: z.array(taskSchema),
   agents: z.array(agentSchema),

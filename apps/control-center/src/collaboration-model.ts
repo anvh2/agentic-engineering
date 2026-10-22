@@ -21,6 +21,9 @@ const message = z.object({
 });
 const usage = z.object({ inputTokens: z.number().nonnegative().nullable(), outputTokens: z.number().nonnegative().nullable(), source: z.string(), completeness: z.enum(['complete', 'partial', 'unavailable']) });
 const attributed = z.object({ text: z.string(), messageIds: z.array(id).min(1) });
+/** Persisted association to a scheduler batch/project; UNATTRIBUTED records are shown under the Unattributed scope only. */
+const attribution = z.object({ status: z.enum(['ATTRIBUTED', 'UNATTRIBUTED']), batchId: id.nullable(), project: z.string().nullable(), reason: z.string().nullable() });
+const unattributed = { status: 'UNATTRIBUTED' as const, batchId: null, project: null, reason: 'No attribution reported by this source.' };
 export const collaborationSchema = z.object({
   availability: z.enum(['NOT_AVAILABLE', 'AVAILABLE', 'CORRUPT']),
   source: z.enum(['unavailable', 'core', 'test-fixture']),
@@ -28,11 +31,13 @@ export const collaborationSchema = z.object({
   cursor: z.number().int().nonnegative().nullable().default(null),
   threads: z.array(z.object({
     id, title: z.string(), objectiveId: id.nullable(), taskId: id.nullable(), participants: z.array(participant), messages: z.array(message),
+    batchId: id.nullable().default(null), attribution: attribution.default(unattributed),
     /** Authored by configured fake (scripted) identities: persisted, but never live model output. */
     synthetic: z.boolean().default(false),
   })),
   meetings: z.array(z.object({
     id, title: z.string(), threadId: id, agenda: z.array(z.string()), participants: z.array(participant),
+    attribution: attribution.default(unattributed),
     startedAt: time, endedAt: time,
     rounds: z.array(z.object({ id, number: z.number().int().nonnegative(), state: z.string(), messageIds: z.array(id) })),
     roundLimit: z.number().int().nonnegative().nullable(), invocationLimit: z.number().int().nonnegative().nullable(),
