@@ -31,7 +31,7 @@ export const mastra = new Mastra({
   bundler: {
     externals: ['@duckdb/node-bindings'],
   },
-  server: { apiRoutes: [createMetricsRoute(), createEngineeringStatusRoute(), createCouncilStatusRoute(specialists), ...createControlCenterRoutes()] },
+  server: { apiRoutes: [createMetricsRoute(), createEngineeringStatusRoute(), createCouncilStatusRoute(specialists), ...createControlCenterRoutes({ specialists, codingWorkers: { codingWorkerGo, codingWorkerJs }, councilAgents: council.agents })] },
   agents: { codingWorkerGo, codingWorkerJs, ...specialists.agents, ...council.agents },
   workflows: { codingTaskWorkflow, specialistReviewWorkflow, engineeringCouncilWorkflow: council.workflow },
   storage: new MastraCompositeStore({

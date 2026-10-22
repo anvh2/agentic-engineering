@@ -28,11 +28,32 @@ function Transcript({ thread, messageId }: { thread: Thread; messageId?: string 
       {m.correctedBy.length > 0 && <p className="notice">Corrected by {m.correctedBy.join(', ')} (original kept)</p>}
       {m.withdrawnBy && <p className="notice">Withdrawn by {m.withdrawnBy}</p>}
       <div className="source-links">{m.references.map((r, i) => <Reference key={i} {...r} />)}{m.traceUrl && <Reference url={m.traceUrl} label="Mastra trace" />}</div>
-      <small className="muted">Invocation: {known(m.invocationId)}</small>
+      <small className="muted">Invocation: {known(m.invocationId)}{m.traceId && <> · Trace: <code>{m.traceId}</code></>}</small>
     </article>)}
   </section>;
 }
-export function CollaborationView({ kind, apiBase }: { kind: 'Discussions' | 'Meetings'; apiBase: string }) {
+function CouncilFacts({ meeting }: { meeting: Collaboration['meetings'][number] }) {
+  if (meeting.councilIssue) return <p role="alert" className="notice">COUNCIL RECORD NOT VERIFIED · {meeting.councilIssue}</p>;
+  const c = meeting.council;
+  if (!c) return null;
+  return <section aria-label="Council record">
+    <p className="notice">{c.mode === 'LIVE'
+      ? <><span className="badge">LIVE</span> Replies were produced by the local model {c.model}. Advisory only; human approval pending.</>
+      : <><span className="badge">SCRIPTED</span> Canned replies ({c.model}): this proves wiring and rules, not model output.</>}</p>
+    {c.integrity === 'OPEN_UNRECORDED'
+      ? <p className="muted">OPEN: no council record yet. Mode and model are checked against the verified events; workflow runs and call counts appear once the meeting concludes and its record verifies.</p>
+      : <dl className="details">
+        <div><dt>Model calls</dt><dd>{c.modelCalls ?? 'UNKNOWN'}{c.failedCalls ? ` (${c.failedCalls} failed, no reply)` : ''}</dd></div>
+        <div><dt>Tool calls</dt><dd>{c.toolCalls?.length ? c.toolCalls.map(t => `${t.tool} ×${t.count}`).join(', ') : 'none'}</dd></div>
+        <div><dt>Council record</dt><dd><code>{c.recordPath}</code> · <code>npm run council -- show {c.meetingId}</code></dd></div>
+        <div><dt>Integrity</dt><dd>Council record intact and covering exactly the verified events (#{meeting.provenance?.throughSeq ?? '?'})</dd></div>
+      </dl>}
+    <div className="source-links">{c.workflowRuns.map(r => <Reference key={r.runId} url={r.url} label={`Mastra workflow run ${r.runId}`} />)}</div>
+    <p className="muted">Mastra trace{c.traceIds.length === 1 ? '' : 's'}: {c.traceIds.length ? c.traceIds.map(t => <code key={t}>{t} </code>) : 'none recorded'}</p>
+  </section>;
+}
+export function CollaborationView({ kind, apiBase }: { kind: 'Discussions' | 'Meetings' | 'Council'; apiBase: string }) {
+  const endpoint = kind === 'Council' ? 'council' : 'collaboration';
   const [data, setData] = useState<Collaboration | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'disconnected'>('loading');
   const [threadId, setThread] = useState<string>();
@@ -51,7 +72,7 @@ export function CollaborationView({ kind, apiBase }: { kind: 'Discussions' | 'Me
       running = true;
       clearTimeout(timer);
       try {
-        const response = await fetch(`${apiBase}/collaboration`, { signal: abort.signal });
+        const response = await fetch(`${apiBase}/${endpoint}`, { signal: abort.signal });
         if (!response.ok) throw new Error();
         const next = collaborationSchema.parse(await response.json());
         if (!abort.signal.aborted) { setData(next); setState('ready'); }
@@ -67,7 +88,7 @@ export function CollaborationView({ kind, apiBase }: { kind: 'Discussions' | 'Me
     // snapshot. Connectivity is decided by that read, never by the stream alone.
     let stream: EventSource | undefined;
     const subscribe = () => {
-      stream = new EventSource(`${apiBase}/collaboration/events`);
+      stream = new EventSource(`${apiBase}/${endpoint}/events`);
       for (const name of ['collab', 'checkpoint', 'reset', 'connection']) stream.addEventListener(name, () => void load());
       stream.onerror = () => {
         if (abort.signal.aborted) return;
@@ -78,7 +99,7 @@ export function CollaborationView({ kind, apiBase }: { kind: 'Discussions' | 'Me
     };
     subscribe();
     return () => { abort.abort(); clearTimeout(timer); clearTimeout(reopen); stream?.close(); };
-  }, [apiBase]);
+  }, [apiBase, endpoint]);
   const open = (id: string, message?: string) => { setThread(id); setMessage(message); setShowThread(true); };
   if (state === 'loading') return <p role="status" className="notice">Loading {kind.toLowerCase()}…</p>;
   if (state === 'disconnected') return <p role="alert" className="notice">Collaboration connection unavailable. No live records displayed. Retrying automatically.</p>;
@@ -92,14 +113,16 @@ export function CollaborationView({ kind, apiBase }: { kind: 'Discussions' | 'Me
     {data.source === 'test-fixture' && <p role="status" className="notice">SYNTHETIC TEST DATA · not connected to live collaboration</p>}
     {data.source === 'core' && data.threads.some(t => t.synthetic) && <p role="status" className="notice">DETERMINISTIC FAKE PARTICIPANTS · Persisted collaboration events authored by scripted test identities (provider: fake). Not live model output.</p>}
     {data.source === 'core' && data.reason && <p className="muted">{data.reason}</p>}
-    {showThread && kind === 'Meetings' && <button className="text-button" onClick={() => setShowThread(false)}>Back to meeting</button>}
+    {kind === 'Council' && data.source === 'core' && <p role="status" className="muted">Engineering council meetings, read from the council's own Core B store with the same hash-chain verification. LIVE and SCRIPTED meetings are labelled on each meeting.</p>}
+    {showThread && kind !== 'Discussions' && <button className="text-button" onClick={() => setShowThread(false)}>Back to meeting</button>}
     <div className="collaboration-layout">
       <nav className="panel thread-list" aria-label={discussionMode ? 'Discussion threads' : 'Meetings'}>
-        {(discussionMode ? data.threads : data.meetings).map(item => <button key={item.id} aria-current={item.id === (discussionMode ? thread?.id : meeting?.id) ? 'true' : undefined} onClick={() => discussionMode ? open(item.id) : setMeeting(item.id)}>{item.title}</button>)}
+        {(discussionMode ? data.threads : data.meetings).map(item => <button key={item.id} aria-current={item.id === (discussionMode ? thread?.id : meeting?.id) ? 'true' : undefined} onClick={() => discussionMode ? open(item.id) : setMeeting(item.id)}>{'council' in item && item.council ? `[${item.council.mode}] ` : ''}{'councilIssue' in item && item.councilIssue ? '[UNVERIFIED] ' : ''}{item.title}</button>)}
         {(discussionMode ? data.threads : data.meetings).length === 0 && <p className="empty">No reported {discussionMode ? 'threads' : 'meetings'}.</p>}
       </nav>
       {discussionMode ? thread && <Transcript thread={thread} messageId={messageId} /> : meeting && <section className="panel meeting-inspector" aria-label="Meeting inspector">
         <div className="panel-heading"><h2>{meeting.title}</h2><span className="badge">READ ONLY</span></div>
+        <CouncilFacts meeting={meeting} />
         <p>Status: {known(meeting.status)} · Outcome: {meeting.outcome ?? 'none yet'}{meeting.reason ? ` · ${meeting.reason}` : ''}</p>
         <h3>Agenda</h3><ul>{meeting.agenda.map((a, i) => <li key={i}>{a}</li>)}</ul>
         <h3>Participants and roles</h3><p>{meeting.participants.map(p => `${p.name} (${p.role})`).join(' · ') || 'UNKNOWN'}</p>

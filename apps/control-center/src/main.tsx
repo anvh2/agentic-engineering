@@ -25,19 +25,22 @@ import {
 } from '../../../src/integrations/control-center/contract.ts';
 import { claimElapsed, currentTasks, inspectorObservations, observedActivity, priced, taskUsage } from './observations.ts';
 import { CollaborationView } from './collaboration.tsx';
+import { AgentsView } from './agents.tsx';
 import './style.css';
 const embedded = window.location.pathname.startsWith('/organization-app/');
 const apiBase = embedded ? '/control-center/v1' : '/api/v1';
 
-type Page = 'Overview' | 'Organization' | 'Objectives' | 'Runs' | 'Reviews' | 'Discussions' | 'Meetings' | 'Usage';
+type Page = 'Overview' | 'Organization' | 'Agents' | 'Objectives' | 'Runs' | 'Reviews' | 'Discussions' | 'Meetings' | 'Council' | 'Usage';
 const pages = [
   { name: 'Overview', icon: Layers },
   { name: 'Organization', icon: Network },
+  { name: 'Agents', icon: Terminal },
   { name: 'Objectives', icon: ListChecks },
   { name: 'Runs', icon: Activity },
   { name: 'Reviews', icon: CheckCheck },
   { name: 'Discussions', icon: ListChecks },
   { name: 'Meetings', icon: Network },
+  { name: 'Council', icon: CheckCheck },
   { name: 'Usage', icon: Activity },
 ] as const;
 const number = (n: number | null) => (n === null ? 'UNKNOWN' : n.toLocaleString());
@@ -683,7 +686,11 @@ function App() {
                 <p>
                   {page === 'Organization'
                     ? 'Agent activity, assignments and execution evidence.'
-                    : 'Persisted scheduler data. Observation only.'}
+                    : page === 'Agents'
+                      ? 'Agents registered in this Mastra process and their model bindings. Observation only.'
+                      : page === 'Council'
+                        ? 'Engineering council meetings from the council store, verified like scheduler meetings. Observation only.'
+                        : 'Persisted scheduler data. Observation only.'}
                 </p>
               </div>
               <span className="version">M8.4 / READ ONLY</span>
@@ -723,7 +730,8 @@ function App() {
                 Choose an objective to inspect its tasks and runs. Agent roles below do not indicate configuration or online presence.
               </div>
             )}
-            {(page === 'Discussions' || page === 'Meetings') && <CollaborationView kind={page} apiBase={apiBase} />}
+            {(page === 'Discussions' || page === 'Meetings' || page === 'Council') && <CollaborationView kind={page} apiBase={apiBase} />}
+            {page === 'Agents' && <AgentsView apiBase={apiBase} />}
             {snapshot && (
               <>
                 {page === 'Organization' && (
