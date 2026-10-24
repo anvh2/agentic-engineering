@@ -10,7 +10,7 @@
        {
          name: 'Agents',
          url: '/agents',
-@@ -163,6 +166,7 @@
+@@ -163,6 +165,7 @@
    {
      key: 'observability',
      title: 'Observability',
@@ -51,7 +51,7 @@
    { route: '/workflows', permission: 'workflows:read', name: 'Workflows' },
 --- /dev/null
 +++ b/packages/playground/src/pages/organization.tsx
-@@ -0,0 +1,21 @@
+@@ -0,0 +1,20 @@
 +import { useEffect, useRef, useState } from 'react';
 +
 +/** Same-origin read-only Gateway UI; Studio retains navigation, auth and traces. */
