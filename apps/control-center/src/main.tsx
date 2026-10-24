@@ -28,6 +28,10 @@ import { AgentsView } from './agents.tsx';
 import './style.css';
 import { EMPTY_TEXT, emptyReason, filterCalls, filteredUsage, filterRuns, parseView, scopeQuery, serializeView, WINDOWS, type ViewState } from './view-state.ts';
 const embedded = window.location.pathname.startsWith('/organization-app/');
+/** Studio owns the top-level section; iframe query remains a standalone preview fallback. */
+const studioSection = (path: string): ViewState['section'] => ({
+  '/runs': 'runs', '/collaboration': 'collaboration', '/usage': 'usage',
+} as Record<string, ViewState['section']>)[path] ?? 'overview';
 const apiBase = embedded ? '/control-center/v1' : '/api/v1';
 
 type Page = 'Overview' | 'Runs' | 'Collaboration' | 'Usage';
@@ -649,7 +653,7 @@ function Providers({ snapshot, connected }: { snapshot: Snapshot; connected: boo
 }
 function App() {
   const host = hostWindow();
-  const [view, setViewState] = useState<ViewState>(() => parseView(host.location.search));
+  const [view, setViewState] = useState<ViewState>(() => ({ ...parseView(host.location.search), ...(embedded ? { section: studioSection(host.location.pathname) } : {}) }));
   /** Scope and section changes are history entries (Back restores them); filter tweaks replace the current entry. */
   const setView = (patch: Partial<ViewState>, mode: 'push' | 'replace' = 'replace') => {
     const next = { ...view, ...patch };
@@ -662,7 +666,7 @@ function App() {
     setViewState(next);
   };
   useEffect(() => {
-    const restore = () => setViewState(parseView(host.location.search));
+    const restore = () => setViewState({ ...parseView(host.location.search), ...(embedded ? { section: studioSection(host.location.pathname) } : {}) });
     host.addEventListener('popstate', restore);
     return () => host.removeEventListener('popstate', restore);
   }, [host]);
@@ -740,7 +744,7 @@ function App() {
         </div>
       </nav>}
       <div className="workspace">
-        {embedded && <nav className="organization-tabs" aria-label="Organization views">{pages.map(({name}) => <button key={name} aria-current={page === name ? 'page' : undefined} onClick={() => { setPage(name); setSelected(null); }}>{name}</button>)}</nav>}
+        
         <header className="topbar">
           <div className="breadcrumb">
             <PanelLeft size={16} />

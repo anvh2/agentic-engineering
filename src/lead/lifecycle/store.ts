@@ -132,6 +132,16 @@ function rowToLifecycle(r: Record<string, any>): LifecycleRow {
   };
 }
 
+/**
+ * The batch a pinned objective runs as, read without creating anything: undefined when the scheduler database holds no
+ * lifecycle for it (or no lifecycle table at all). For readers that must not write, such as reference verification.
+ */
+export function pinnedObjectiveBatch(scheduler: SchedulerStore, objectiveId: string): string | undefined {
+  if (!scheduler.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'objective_lifecycle'").get()) return undefined;
+  const row = scheduler.db.prepare('SELECT batch_id FROM objective_lifecycle WHERE objective_id = ?').get(objectiveId) as { batch_id: string } | undefined;
+  return row?.batch_id;
+}
+
 export class LifecycleStore {
   readonly scheduler: SchedulerStore;
 

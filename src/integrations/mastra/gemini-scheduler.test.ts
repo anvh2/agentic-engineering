@@ -12,6 +12,7 @@ import { cancelTask } from '../../lead/cancel.ts';
 import { pendingReviews } from '../../lead/review.ts';
 import { capacityFor } from '../../runtime/capacity/model-capacity.ts';
 import { Scheduler } from '../../runtime/scheduler/scheduler.ts';
+import type { ProviderBudgetEntry } from '../../runtime/execution/provider-routing.ts';
 import type { SchedulerStore } from '../../runtime/scheduler/store.ts';
 import { git, makeRepo, makeStore, sleep, tempDir, plan } from '../../runtime/scheduler/test-helpers.ts';
 import { WorktreeManager } from '../../runtime/worktree/worktree.ts';
@@ -67,7 +68,7 @@ function taskSpec(provider: string | undefined) {
   };
 }
 
-function harness(options: { provider?: string; fake?: Record<string, string>; schedulerAllow?: string[]; workflowAllow?: string[]; store?: SchedulerStore; codexLog?: string } = {}) {
+function harness(options: { provider?: string; fake?: Record<string, string>; schedulerAllow?: string[]; schedulerBudgets?: ProviderBudgetEntry[]; workflowAllow?: string[]; store?: SchedulerStore; codexLog?: string } = {}) {
   const repo = makeRepo({ 'go.mod': 'module example.com/calc\n\ngo 1.22\n', 'calc/calc.go': STUB, 'calc/calc_test.go': TEST_SRC });
   const dir = tempDir('gemini-sched-');
   const log = join(dir, 'calls.jsonl');
@@ -86,6 +87,8 @@ function harness(options: { provider?: string; fake?: Record<string, string>; sc
     workspace: new WorktreeManager(join(dir, 'worktrees')),
     capacity: capacityFor(),
     allowProviders: options.schedulerAllow ?? ['gemini:T'],
+    providerBudgets: options.schedulerBudgets ?? [{ provider: 'gemini', taskId: 'T', claims: 5 }],
+    describeProvider: (id) => (providers.ids().includes(id) ? providers.get(id).describe() : undefined),
     cancelGraceMs: 2_000,
     // 1s leases expired mid-attempt under full-suite load; lease expiry has its own fake-clock tests.
     config: { pollMs: 20, workerLeaseTimeoutMs: 10_000, taskTimeoutMs: 120_000, maxCapacityWaitMs: 120_000 },
