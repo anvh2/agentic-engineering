@@ -345,3 +345,114 @@ test('shared scope: URL-restored project and objective, all objectives of a proj
     assert.equal(await project.inputValue(), 'alpha');
     assert.deepEqual(errors, []);
   });
+
+test('suggested meetings: runtime records labelled NOT MEETINGS, scoped, decided, polled, read-only, integrity failure and disconnect',
+  { skip: !process.env.CHROME_EXECUTABLE && 'Set CHROME_EXECUTABLE', timeout: 120000 }, async t => {
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const { DatabaseSync } = await import('node:sqlite');
+    const { collabHarness, openMeeting } = await import('../../src/runtime/collaboration/__testing__/harness.ts');
+    const { plan, workerTask } = await import('../../src/runtime/scheduler/test-helpers.ts');
+    const { LifecycleStore } = await import('../../src/lead/lifecycle/store.ts');
+    const { suggestForDeadTasks, decideSuggestion } = await import('../../src/lead/collaboration/suggestions.ts');
+    const { ENGINEERING_LEAD_ID } = await import('../../src/lead/collaboration/roster.ts');
+    const { createReader } = await import('../../src/integrations/control-center/adapter.ts');
+    const { createCollaborationReader } = await import('../../src/integrations/control-center/collaboration-adapter.ts');
+    const { createSuggestionReader } = await import('../../src/integrations/control-center/suggestions-adapter.ts');
+    const directory = mkdtempSync(join(tmpdir(), 'cc-suggest-'));
+    const dbPath = join(directory, 'scheduler.db');
+    const oracle = { dir: '/o', files: {}, commands: [['true']], negativeControl: { mode: 'required' }, specHash: 'h', pinnedAt: 1, pinnedBy: 'lead' };
+    const escalate = (db, id, category, reason) => db.prepare("UPDATE tasks SET state = 'ESCALATED', failure_category = ?, state_reason = ? WHERE id = ?").run(category, reason, id);
+    // The records are produced by the runtime's own code: a pinned objective in alpha, an unpinned objective label in beta.
+    const h = collabHarness({ path: dbPath });
+    h.scheduler.createBatch(plan('/repo', ['a1-pad', 'a1-code', 'a1-sec', 'a1-merge'].map(id => workerTask(id)), { batchId: 'A1', project: 'alpha' }));
+    h.scheduler.createBatch(plan('/repo', [workerTask('b-int')], { batchId: 'B1', project: 'beta' }));
+    new LifecycleStore(h.scheduler).create({ objectiveId: 'OBJ-A', batchId: 'A1', baseCommit: 'b', actor: 'lead', oracle });
+    escalate(h.scheduler.db, 'a1-pad', 'review_rejected', 'finding:comment_removed');
+    escalate(h.scheduler.db, 'a1-code', 'coding_attempts_exhausted', 'three attempts failed verification');
+    escalate(h.scheduler.db, 'a1-sec', 'forbidden_mutation', 'edited go.mod outside scope');
+    escalate(h.scheduler.db, 'b-int', 'integration_conflict', 'conflict in parser.go');
+    const tasks = ids => ids.map(id => h.scheduler.requireTask(id));
+    const a = suggestForDeadTasks(h.scheduler, { objectiveId: 'OBJ-A', batchId: 'A1', tasks: tasks(['a1-pad', 'a1-code', 'a1-sec']), actor: 'lifecycle-driver' });
+    assert.deepEqual(a.created.map(s => s.refs.taskId), ['a1-pad', 'a1-code'], 'a security stop is never suggested');
+    const [b] = suggestForDeadTasks(h.scheduler, { objectiveId: 'OBJ-B', batchId: 'B1', tasks: tasks(['b-int']), actor: 'lifecycle-driver' }).created;
+    decideSuggestion(h.scheduler, a.created[1].id, { status: 'accepted', by: ENGINEERING_LEAD_ID, sessionId: 'm-accepted' });
+    decideSuggestion(h.scheduler, b.id, { status: 'dismissed', by: 'anvh2', reason: 'already re-planned' });
+    openMeeting(h.store, { threadId: 't-alpha', sessionId: 's-alpha', refs: { batchId: 'A1' } });
+    h.scheduler.close();
+
+    const gateway = createGateway({ reader: createReader({ dbPath }), collaboration: createCollaborationReader({ dbPath, schedulerOfRecord: true }), suggestions: createSuggestionReader({ dbPath }), assetsDir: fileURLToPath(new URL('./dist/', import.meta.url)), pollMs: 100 });
+    gateway.server.listen(0, '127.0.0.1'); await once(gateway.server, 'listening');
+    const browser = await chromium.launch({ executablePath: process.env.CHROME_EXECUTABLE, headless: true });
+    t.after(async () => { await browser.close(); gateway.closeStreams(); gateway.server.closeAllConnections(); await new Promise(r => gateway.server.close(r)); rmSync(directory, { recursive: true, force: true }); });
+    const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+    page.setDefaultTimeout(15000);
+    const errors = [];
+    page.on('pageerror', e => errors.push(e.message));
+    const mutations = [];
+    page.on('request', req => { if (req.method() !== 'GET') mutations.push(`${req.method()} ${req.url()}`); });
+    const panel = page.getByRole('region', { name: 'Suggested meetings' });
+    const rows = panel.locator('.suggestion-list > li');
+
+    await page.goto(`http://127.0.0.1:${gateway.server.address().port}/?section=collaboration&collab=meetings`);
+    await panel.getByText('NOT MEETINGS', { exact: true }).waitFor();
+    await panel.getByText('1 PENDING IN THIS SCOPE', { exact: true }).waitFor();
+    assert.equal(await rows.count(), 3, 'pending + accepted + dismissed; the security stop is absent');
+    // Pending first, with the runtime's own reason, verified references, proposed (not invited) participants and evidence.
+    const pending = await rows.nth(0).innerText();
+    assert.match(pending, /PENDING · NOT A MEETING/);
+    assert.match(pending, new RegExp(`Review escalation · ${a.created[0].id}`));
+    assert.match(pending, /a1-pad is ESCALATED \[review_rejected\]: finding:comment_removed/);
+    assert.match(pending, /Scope: project alpha · batch A1 · task a1-pad · objective OBJ-A/);
+    assert.match(pending, new RegExp(`Proposed participants: ${ENGINEERING_LEAD_ID} \\(engineering_lead\\).*reviewer \\(reviewer\\)`));
+    assert.match(pending, /Evidence: task a1-pad: ESCALATED \[review_rejected\]/);
+    const decided = (await rows.nth(1).innerText()) + (await rows.nth(2).innerText());
+    assert.match(decided, new RegExp(`Accepted by ${ENGINEERING_LEAD_ID} · meeting m-accepted`));
+    assert.match(decided, /Dismissed by anvh2: already re-planned/);
+    assert.doesNotMatch(decided, /objective OBJ-B/, 'an objective label without a pinned lifecycle is not shown as verified');
+    assert.equal(await panel.getByText('a1-sec', { exact: false }).count(), 0);
+    // Suggestions are never meetings: the meetings list holds the one real meeting and no suggestion id.
+    const meetingList = await page.getByRole('navigation', { name: 'Meetings' }).innerText();
+    assert.doesNotMatch(meetingList, /sg-/);
+    // The panel wraps its ids, reasons and evidence at tablet and phone widths (unscoped: the M13 scope bar is checked elsewhere).
+    for (const width of [768, 390]) {
+      await page.setViewportSize({ width, height: 960 });
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `no horizontal overflow at ${width}px`);
+    }
+    await page.setViewportSize({ width: 1440, height: 960 });
+
+    // Shared scope: another project shows only its own (decided) suggestion; the pending count is per scope.
+    await page.getByLabel('Project', { exact: true }).selectOption('beta');
+    await panel.getByText('0 PENDING IN THIS SCOPE', { exact: true }).waitFor();
+    assert.equal(await rows.count(), 1);
+    assert.match(await rows.nth(0).innerText(), /DISMISSED/);
+    await page.getByLabel('Project', { exact: true }).selectOption('alpha');
+    await panel.getByText('1 PENDING IN THIS SCOPE', { exact: true }).waitFor();
+    assert.equal(await rows.count(), 2);
+
+    // A suggestion the lifecycle records while the page is open appears on the next poll.
+    const live = collabHarness({ path: dbPath });
+    escalate(live.scheduler.db, 'a1-merge', 'integration_verification_failed', 'tests fail after merge');
+    suggestForDeadTasks(live.scheduler, { objectiveId: 'OBJ-A', batchId: 'A1', tasks: [live.scheduler.requireTask('a1-merge')], actor: 'lifecycle-driver' });
+    live.scheduler.close();
+    await panel.getByText('2 PENDING IN THIS SCOPE', { exact: true }).waitFor({ timeout: 15000 });
+    assert.match(await panel.innerText(), /Integration failure/);
+
+    assert.deepEqual(mutations, [], 'the console only reads');
+
+    // The rows are not shown as fixed runtime records once the table's guard is gone.
+    const raw = new DatabaseSync(dbPath);
+    raw.exec('DROP TRIGGER meeting_suggestions_no_delete');
+    raw.close();
+    await page.reload();
+    await panel.getByText('INTEGRITY FAILURE', { exact: true }).waitFor();
+    assert.match(await panel.innerText(), /meeting_suggestions guard missing/);
+    assert.equal(await rows.count(), 0);
+    // An unreachable endpoint is reported, never shown as "no suggestions".
+    await page.route('**/meeting-suggestions', route => route.abort());
+    await page.reload();
+    await page.getByText('Meeting suggestions unavailable. Retrying automatically.', { exact: true }).waitFor();
+    assert.equal(await panel.count(), 0);
+    assert.deepEqual(errors, []);
+  });
