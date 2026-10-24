@@ -21,6 +21,16 @@ Load the `mastra` skill BEFORE any Mastra work. Never rely on cached knowledge; 
 - Local runtime state lives in `.workdir/` (gitignored; also `.workdir/projects/<name>` for session projects). Never commit it, never write outside it at runtime.
 - Project root is found with `findProjectRoot()` (`src/core/paths.ts`, by `package.json` name). Never assume the checkout directory's name or an absolute path.
 
+## Worktrees, ports and processes
+
+- Every NEW Git worktree lives under `<canonical-root>/.worktrees/<session-id>` (the directory is gitignored). The canonical root is the primary checkout. Find it through the existing project-root mechanism (`findProjectRoot()`, `src/core/paths.ts`, matched by `package.json` name) run from the primary checkout, or from a linked worktree through the checkout that owns its Git common directory (`git rev-parse --git-common-dir`). Never hardcode its path or assume the checkout directory's name.
+- Existing worktrees outside `.worktrees/` are not moved, pruned or deleted automatically; that is a human decision.
+- Port 4111 is reserved for the canonical Mastra Studio. Preview instances use free ports starting at 4112. Allocate collision-safely: take the lowest port that is not in use, check it immediately before binding, never take a port another session holds, and never fall back to 4111.
+- Never terminate, restart or overwrite another session's process or checkout. Do not replace a running canonical Studio without an explicit owner-controlled handoff.
+- Task completion does not require waiting for a separate human approval to integrate an already-verified task into the canonical Studio on port 4111. After verification, publish through the canonical integration path and have the canonical Studio load the completed changes. Port 4111 stays owned by the canonical Studio; never launch a second Studio on it or kill its process. If integration requires restarting/replacing the canonical process, stop and request an explicit owner-controlled handoff rather than disrupting it. A preview running on 4112+ is never itself promoted by occupying 4111.
+- Each worktree owns isolated runtime state in its own `.workdir/` (scheduler, council, capacity, artifacts). A runtime never writes into another worktree's state.
+- Code merge and execution-data publication are separate integration gates. Merging a branch publishes no execution data, and publishing execution data merges no code. Do not delete a worktree's runtime state until its data has been verified as published.
+
 ## Safety rules (do not weaken)
 
 - The worker proposes; only the runtime verifier can produce PASS.
