@@ -86,7 +86,8 @@ test('actual Studio: Organization sidebar, refresh, same-origin Gateway/SSE and 
     await page.reload();
     await workspace.getByRole('heading', { name: 'Runs', exact: true }).waitFor();
     await page.goBack();
-    await workspace.getByRole('heading', { name: 'Runs', exact: true }).waitFor();
+    await page.waitForURL('**/usage');
+    await workspace.getByRole('heading', { name: 'Scope usage', exact: true }).waitFor();
     await page.getByRole('link', { name: 'Organization', exact: true }).first().click();
     await page.waitForURL('**/organization');
     await workspace.getByRole('heading', { name: 'Overview', exact: true }).waitFor();
