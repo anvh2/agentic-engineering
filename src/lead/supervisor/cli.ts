@@ -129,6 +129,9 @@ export async function runSupervisorCommand(args: string[], ctx: SupervisorContex
   const lockName = queue ? 'supervisor:queue' : 'supervisor:' + batch;
   let locked = false;
   let lost = false;
+  // Per-objective dispatch claims. The leadership lock above is per batch (or `queue`), so supervisors in different workdirs
+  // sharing one scheduler DB hold different leadership locks; this DB lock is what makes one objective run under one supervisor.
+  const claims = new Set<string>();
   let beat: ReturnType<typeof setInterval> | undefined;
   let running = false;
   let stopping = false;
@@ -140,14 +143,25 @@ export async function runSupervisorCommand(args: string[], ctx: SupervisorContex
     if (!ctx.store.acquireLock(lockName, token, lockTtlMs)) throw new Error('DB leadership lock held');
     locked = true;
     beat = setInterval(() => {
-      try { if (!ctx.store.renewLock(lockName, token, lockTtlMs)) lost = true; }
+      try { for (const name of [lockName, ...claims]) if (!ctx.store.renewLock(name, token, lockTtlMs)) lost = true; }
       catch { lost = true; }
     }, intervalMs);
     beat.unref();
     const assertOwner = async () => {
       const owner = await readHolder(ctx.workdir);
-      if (lost || owner.token !== token || !ctx.store.ownsLock(lockName, token))
+      if (lost || owner.token !== token || ![lockName, ...claims].every((name) => ctx.store.ownsLock(name, token)))
         throw new Error('supervisor ownership lost; fail closed, retaining gate');
+    };
+    const claim = (objectiveId: string) => {
+      const name = 'supervisor:objective:' + objectiveId;
+      if (!ctx.store.acquireLock(name, token, lockTtlMs)) return false;
+      claims.add(name);
+      return true;
+    };
+    const unclaim = (objectiveId: string) => {
+      const name = 'supervisor:objective:' + objectiveId;
+      claims.delete(name);
+      ctx.store.releaseLock(name, token);
     };
     let rounds = 0;
     let resultCode = 0;
@@ -156,7 +170,8 @@ export async function runSupervisorCommand(args: string[], ctx: SupervisorContex
       await assertOwner();
       if (await exists(intent(ctx.workdir, stopName))) break;
       if (await exists(intent(ctx.workdir, pauseName))) { await sleep(poll); continue; }
-      const next = lifecycle.listByPhase('PINNED')[0];
+      // First pinned objective no other supervisor has claimed; one a batch supervisor holds is not this queue's to start.
+      const next = lifecycle.listByPhase('PINNED').find((row) => claim(row.objectiveId));
       if (!next) {
         if (args.includes('--once')) { ctx.out(JSON.stringify({ mode: 'queue', idle: true, objectivesRun })); break; }
         await sleep(poll);
@@ -167,6 +182,7 @@ export async function runSupervisorCommand(args: string[], ctx: SupervisorContex
       const exit = await ctx.runLifecycle(next.objectiveId);
       running = false;
       await assertOwner();
+      unclaim(next.objectiveId);
       const verified = lifecycle.require(next.objectiveId);
       objectivesRun++;
       ctx.out(JSON.stringify({ mode: 'queue', batch: verified.batchId, objectiveId: verified.objectiveId, phase: verified.phase, exit, objectivesRun }));
@@ -181,10 +197,12 @@ export async function runSupervisorCommand(args: string[], ctx: SupervisorContex
       const current = lifecycle.getByBatch(batch!);
       if (!current || current.objectiveId !== pinned!.objectiveId) throw new Error('lifecycle identity changed');
       if (!states.has(current.phase)) break;
+      if (!claim(current.objectiveId)) throw new Error('objective ' + current.objectiveId + ' is claimed by another supervisor');
       running = true;
       const exit = await ctx.runLifecycle(current.objectiveId);
       running = false;
       await assertOwner();
+      unclaim(current.objectiveId);
       const verified = lifecycle.require(current.objectiveId);
       rounds++;
       ctx.out(JSON.stringify({ batch, objectiveId: current.objectiveId, phase: verified.phase, exit, rounds }));
