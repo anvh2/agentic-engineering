@@ -135,6 +135,9 @@ export async function runSupervisorCommand(args: string[], ctx: SupervisorContex
   let beat: ReturnType<typeof setInterval> | undefined;
   let running = false;
   let stopping = false;
+  // Set only on the verified normal-completion path. Every other exit (a throw from the driver, a lost lock, a failed read)
+  // retains the holder gate, the leadership lock and any objective claim for a human to reconcile.
+  let clean = false;
   const onSignal = () => { stopping = true; };
   process.on('SIGTERM', onSignal);
   process.on('SIGINT', onSignal);
@@ -148,9 +151,14 @@ export async function runSupervisorCommand(args: string[], ctx: SupervisorContex
     }, intervalMs);
     beat.unref();
     const assertOwner = async () => {
-      const owner = await readHolder(ctx.workdir);
-      if (lost || owner.token !== token || ![lockName, ...claims].every((name) => ctx.store.ownsLock(name, token)))
-        throw new Error('supervisor ownership lost; fail closed, retaining gate');
+      try {
+        const owner = await readHolder(ctx.workdir);
+        if (lost || owner.token !== token || ![lockName, ...claims].every((name) => ctx.store.ownsLock(name, token)))
+          throw new Error('supervisor ownership lost; fail closed, retaining gate');
+      } catch (e) {
+        lost = true; // any lost lock or unreadable gate invalidates ownership for good, so cleanup never touches the gate
+        throw e;
+      }
     };
     const claim = (objectiveId: string) => {
       const name = 'supervisor:objective:' + objectiveId;
@@ -171,7 +179,13 @@ export async function runSupervisorCommand(args: string[], ctx: SupervisorContex
       if (await exists(intent(ctx.workdir, stopName))) break;
       if (await exists(intent(ctx.workdir, pauseName))) { await sleep(poll); continue; }
       // First pinned objective no other supervisor has claimed; one a batch supervisor holds is not this queue's to start.
-      const next = lifecycle.listByPhase('PINNED').find((row) => claim(row.objectiveId));
+      // The listing is a snapshot: re-read the phase once the claim is held, since another supervisor may have started it since.
+      const next = lifecycle.listByPhase('PINNED').find((row) => {
+        if (!claim(row.objectiveId)) return false;
+        if (lifecycle.get(row.objectiveId)?.phase === 'PINNED') return true;
+        unclaim(row.objectiveId);
+        return false;
+      });
       if (!next) {
         if (args.includes('--once')) { ctx.out(JSON.stringify({ mode: 'queue', idle: true, objectivesRun })); break; }
         await sleep(poll);
@@ -182,10 +196,10 @@ export async function runSupervisorCommand(args: string[], ctx: SupervisorContex
       const exit = await ctx.runLifecycle(next.objectiveId);
       running = false;
       await assertOwner();
-      unclaim(next.objectiveId);
       const verified = lifecycle.require(next.objectiveId);
       objectivesRun++;
       ctx.out(JSON.stringify({ mode: 'queue', batch: verified.batchId, objectiveId: verified.objectiveId, phase: verified.phase, exit, objectivesRun }));
+      unclaim(next.objectiveId);
       // Fail closed: an objective that needs a human (escalated, awaiting the operator, not accepted) stops the queue.
       if (exit !== 0 || verified.phase !== 'ACCEPTED') { resultCode = 1; break; }
       if (args.includes('--once')) break;
@@ -198,20 +212,22 @@ export async function runSupervisorCommand(args: string[], ctx: SupervisorContex
       if (!current || current.objectiveId !== pinned!.objectiveId) throw new Error('lifecycle identity changed');
       if (!states.has(current.phase)) break;
       if (!claim(current.objectiveId)) throw new Error('objective ' + current.objectiveId + ' is claimed by another supervisor');
+      if (!states.has(lifecycle.require(current.objectiveId).phase)) { unclaim(current.objectiveId); break; } // moved on since the read above
       running = true;
       const exit = await ctx.runLifecycle(current.objectiveId);
       running = false;
       await assertOwner();
-      unclaim(current.objectiveId);
       const verified = lifecycle.require(current.objectiveId);
       rounds++;
       ctx.out(JSON.stringify({ batch, objectiveId: current.objectiveId, phase: verified.phase, exit, rounds }));
+      unclaim(current.objectiveId);
       if (exit !== 0 || verified.phase !== 'ACCEPTED') { resultCode = 1; break; }
       if (args.includes('--once')) break;
       // One pinned objective per batch; no alternate backlog iteration.
       break;
     }
     await assertOwner();
+    clean = true;
     return resultCode;
   } catch (e) {
     ctx.err('supervisor failed CLOSED: ' + (e as Error).message);
@@ -221,7 +237,7 @@ export async function runSupervisorCommand(args: string[], ctx: SupervisorContex
     if (beat) clearInterval(beat);
     process.off('SIGTERM', onSignal);
     process.off('SIGINT', onSignal);
-    if (!running && locked && !lost) {
+    if (clean && locked && !lost) {
       try {
         if (ctx.store.ownsLock(lockName, token) && (await readHolder(ctx.workdir)).token === token) {
           ctx.store.releaseLock(lockName, token);

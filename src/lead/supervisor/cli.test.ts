@@ -182,6 +182,7 @@ test('queue and batch supervisors in different workdirs never run the same objec
   await queueHarness(async ({ ctx, ran, pin, lifecycle }) => {
     pin('shared');
     const other = await mkdtemp(join(tmpdir(), 'm12-queue-other-'));
+    const other2 = await mkdtemp(join(tmpdir(), 'm12-queue-other-'));
     const otherErr: string[] = [], otherRan: string[] = [];
     const rival: SupervisorContext = { store: ctx.store, workdir: other, out: () => {}, err: (m) => otherErr.push(m), runLifecycle: async (id) => { otherRan.push(id); return 0; } };
     try {
@@ -202,7 +203,8 @@ test('queue and batch supervisors in different workdirs never run the same objec
       pin('held');
       await rm(join(ctx.workdir, 'supervisor', 'stop-requested'), { force: true }); // left by the harness once the queue drained
       let queueOut = '';
-      const batchCtx: SupervisorContext = { ...rival, runLifecycle: async () => {
+      // (the refused batch supervisor above fails closed and keeps its gate, so this one gets its own workdir)
+      const batchCtx: SupervisorContext = { ...rival, workdir: other2, runLifecycle: async () => {
         const queueCtx: SupervisorContext = { ...ctx, out: (m) => { queueOut = m; }, runLifecycle: async (o) => { ran.push(o); return 0; } };
         assert.equal(await runSupervisorCommand(['start', '--queue', '--once'], queueCtx), 0);
         return 0;
@@ -211,7 +213,7 @@ test('queue and batch supervisors in different workdirs never run the same objec
       assert.match(queueOut, /"idle":true/);
       assert.deepEqual(ran, ['shared']);
       assert.equal(lifecycle.require('held').phase, 'PINNED');
-    } finally { await rm(other, { recursive: true, force: true }); }
+    } finally { await rm(other, { recursive: true, force: true }); await rm(other2, { recursive: true, force: true }); }
   });
 });
 
@@ -226,4 +228,89 @@ test('queue order is pin order even when pins share a millisecond and ids sort t
     }
     assert.deepEqual(lifecycle.listByPhase('PINNED').map((r) => r.objectiveId), ['zeta', 'alpha', 'mid']);
   } finally { store.close(); }
+});
+
+// ---- Fail-closed cleanup and claim revalidation ----------------------------------------------------------------------
+
+const gateRetained = async (ctx: SupervisorContext) => {
+  await readFile(join(ctx.workdir, 'supervisor', 'holder', 'owner.json'), 'utf8');
+};
+const lockRow = (ctx: SupervisorContext, name: string) => ctx.store.db.prepare('SELECT owner FROM locks WHERE name = ?').get(name);
+
+test('queue: losing only the objective claim invalidates ownership and keeps the gate and leadership lock', { timeout: 20_000 }, async () => {
+  await queueHarness(async ({ ctx, ran, pin, lifecycle, err }) => {
+    pin('first');
+    pin('second');
+    const driver = ctx.runLifecycle;
+    ctx.runLifecycle = async (id) => {
+      const code = await driver(id);
+      ctx.store.db.prepare('DELETE FROM locks WHERE name = ?').run('supervisor:objective:first'); // leadership lock untouched
+      return code;
+    };
+    assert.equal(await runSupervisorCommand(['start', '--queue', '--poll-ms', '100'], ctx), 1);
+    assert.deepEqual(ran, ['first']);
+    assert.equal(lifecycle.require('second').phase, 'PINNED');
+    assert.match(err.join('\n'), /ownership lost/);
+    await gateRetained(ctx);
+    assert.ok(lockRow(ctx, 'supervisor:queue'), 'leadership lock is not released after ownership loss');
+  });
+});
+
+test('queue: a lifecycle exception retains the gate, the leadership lock and the objective claim, and dispatches nothing else', { timeout: 20_000 }, async () => {
+  await queueHarness(async ({ ctx, ran, pin, err }) => {
+    pin('first');
+    pin('second');
+    ctx.runLifecycle = async (id) => { ran.push(id); throw new Error('driver exploded'); };
+    assert.equal(await runSupervisorCommand(['start', '--queue', '--poll-ms', '100'], ctx), 1);
+    assert.deepEqual(ran, ['first']);
+    assert.match(err.join('\n'), /driver exploded/);
+    await gateRetained(ctx);
+    assert.ok(lockRow(ctx, 'supervisor:queue'));
+    assert.ok(lockRow(ctx, 'supervisor:objective:first'), 'the claim stays until a human reconciles');
+    assert.equal(await runSupervisorCommand(['start', '--queue', '--once'], ctx), 1, 'a retained gate blocks a new start');
+    assert.deepEqual(ran, ['first']);
+  });
+});
+
+test('queue: a failure after the driver returned but before verification completes still retains the gate and the claim', { timeout: 20_000 }, async () => {
+  await queueHarness(async ({ ctx, ran, pin, err }) => {
+    pin('first');
+    pin('second');
+    const out = ctx.out;
+    ctx.out = (m) => { if (m.includes('"exit"')) throw new Error('report failed'); out(m); };
+    assert.equal(await runSupervisorCommand(['start', '--queue', '--poll-ms', '100'], ctx), 1);
+    assert.deepEqual(ran, ['first']);
+    assert.match(err.join('\n'), /report failed/);
+    await gateRetained(ctx);
+    assert.ok(lockRow(ctx, 'supervisor:queue'));
+    assert.ok(lockRow(ctx, 'supervisor:objective:first'));
+  });
+});
+
+test('queue: verified normal completion releases the gate, the leadership lock and every claim', { timeout: 20_000 }, async () => {
+  await queueHarness(async ({ ctx, pin }) => {
+    pin('only');
+    assert.equal(await runSupervisorCommand(['start', '--queue', '--once'], ctx), 0);
+    await assert.rejects(readFile(join(ctx.workdir, 'supervisor', 'holder', 'owner.json'), 'utf8'), /ENOENT/);
+    assert.equal(lockRow(ctx, 'supervisor:queue'), undefined);
+    assert.equal(lockRow(ctx, 'supervisor:objective:only'), undefined);
+  });
+});
+
+test('queue: an objective that left PINNED between the listing and the claim is not dispatched', { timeout: 20_000 }, async () => {
+  await queueHarness(async ({ ctx, ran, pin, lifecycle }) => {
+    pin('raced');
+    pin('next');
+    const acquire = ctx.store.acquireLock.bind(ctx.store);
+    ctx.store.acquireLock = (name, owner, ttl) => {
+      const ok = acquire(name, owner, ttl);
+      // Another supervisor started the objective after this one listed it and before the claim landed.
+      if (ok && name === 'supervisor:objective:raced') lifecycle.transition('raced', 'EXECUTING', { actor: 'other-supervisor', expectFrom: 'PINNED' });
+      return ok;
+    };
+    assert.equal(await runSupervisorCommand(['start', '--queue', '--once'], ctx), 0);
+    assert.deepEqual(ran, ['next']);
+    assert.equal(lifecycle.require('raced').phase, 'EXECUTING');
+    assert.equal(lockRow(ctx, 'supervisor:objective:raced'), undefined, 'the stale claim is released');
+  });
 });
