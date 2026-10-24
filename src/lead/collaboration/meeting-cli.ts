@@ -7,6 +7,7 @@ import { CollaborationStore } from '../../runtime/collaboration/store.ts';
 import { CollaborationError, idSchema, MESSAGE_KINDS, type EngineeringRole, type EvidenceRef, type MessageKind, type ParticipantIdentity } from '../../runtime/collaboration/types.ts';
 import { allowedProvidersFromEnv, authorizeProvider, DEFAULT_PROVIDER_ID, parseAllowList } from '../../runtime/execution/worker-provider.ts';
 import type { SchedulerStore } from '../../runtime/scheduler/store.ts';
+import { LifecycleStore } from '../lifecycle/store.ts';
 import { defaultProviderRegistry } from '../../workers/providers/default.ts';
 import type { ProviderRegistry } from '../../workers/providers/registry.ts';
 import { inboxEntries, inboxPath, LeadInboxParticipant, ollamaChatTransport, ProviderParticipant, workerProviderTransport, type CapacityLike, type LeadInboxReply, type MeetingTransport, type MeetingTransportKind, type ParticipantLimits } from './meeting-participants.ts';
@@ -176,6 +177,35 @@ export async function runMeetingCommand(argv: string[], deps: MeetingCommandDeps
   return 2;
 }
 
+/**
+ * The work a meeting is about, as references the scheduler of record can verify. An objective must have a lifecycle here
+ * (the lifecycle table belongs to lead, so the collaboration store cannot check it) and contributes its batch; a batch or task
+ * must exist and agree with each other and with the objective. Nothing is guessed: a meeting with no reference stays
+ * unattributed, and a reference that does not resolve refuses the meeting instead of being recorded as a label.
+ */
+export function verifiedRefs(store: SchedulerStore, input: { objectiveId?: string; batchId?: string; taskId?: string }): { objectiveId?: string; batchId?: string; taskId?: string } | undefined {
+  const { objectiveId, taskId } = input;
+  let batchId = input.batchId;
+  for (const [flag, value] of [['--objective', objectiveId], ['--batch', batchId], ['--task', taskId]] as const) {
+    if (value !== undefined && !idSchema.safeParse(value).success) throw new MeetingCliError(`lead meeting open: ${flag} ${JSON.stringify(value)} is not a valid id`);
+  }
+  if (objectiveId) {
+    const lifecycle = new LifecycleStore(store).get(objectiveId);
+    if (!lifecycle) throw new MeetingCliError(`lead meeting open: objective ${objectiveId} has no lifecycle in this scheduler database; refusing an unverifiable reference`);
+    if (batchId && batchId !== lifecycle.batchId) throw new MeetingCliError(`lead meeting open: objective ${objectiveId} runs as batch ${lifecycle.batchId}, not ${batchId}`);
+    batchId = lifecycle.batchId;
+  }
+  if (batchId && !store.getBatch(batchId)) throw new MeetingCliError(`lead meeting open: batch ${batchId} does not exist in this scheduler database`);
+  if (taskId) {
+    const task = store.getTask(taskId);
+    if (!task) throw new MeetingCliError(`lead meeting open: task ${taskId} does not exist in this scheduler database`);
+    if (batchId && task.batchId !== batchId) throw new MeetingCliError(`lead meeting open: task ${taskId} is in batch ${task.batchId}, not ${batchId}`);
+    batchId = task.batchId;
+  }
+  if (!objectiveId && !batchId && !taskId) return undefined;
+  return { ...(objectiveId ? { objectiveId } : {}), ...(batchId ? { batchId } : {}), ...(taskId ? { taskId } : {}) };
+}
+
 async function open(sessionId: string, a: ReturnType<typeof argsOf>, deps: MeetingCommandDeps, env: NodeJS.ProcessEnv, out: (l: string) => void, err: (l: string) => void): Promise<number> {
   if (existsSync(sidecarPath(deps.meetingsDir, sessionId))) throw new MeetingCliError(`meeting ${sessionId} already exists (${sidecarPath(deps.meetingsDir, sessionId)})`);
   const title = a.flag('--title');
@@ -187,6 +217,8 @@ async function open(sessionId: string, a: ReturnType<typeof argsOf>, deps: Meeti
   if (briefingFile && !existsSync(briefingFile)) throw new MeetingCliError(`--briefing ${briefingFile} does not exist`);
   const operators = a.all('--operator');
   if (operators.length === 0) throw new MeetingCliError('lead meeting open: name the operator with --operator <id> (who can cancel the meeting)');
+  // Checked before anything is contacted or written: a meeting about real work carries references the console can verify.
+  const refs = verifiedRefs(deps.store, { objectiveId: a.flag('--objective'), batchId: a.flag('--batch'), taskId: a.flag('--task') });
   const limitsDefault: ParticipantLimits = {
     maxOutputTokens: num(a.flag('--max-output-tokens'), 1_200, '--max-output-tokens'),
     maxInvocations: num(a.flag('--max-participant-invocations'), 4, '--max-participant-invocations'),
@@ -246,8 +278,7 @@ async function open(sessionId: string, a: ReturnType<typeof argsOf>, deps: Meeti
     openedAt: new Date().toISOString(),
   };
   const collab = new CollaborationStore(deps.store, directoryOf(sidecar, leadOf(sidecar).model));
-  const objectiveId = a.flag('--objective');
-  collab.openThread({ threadId: sidecar.threadId, title, refs: objectiveId ? { objectiveId } : undefined, participants: participants.map((p) => p.id), actorId: ENGINEERING_LEAD_ID, idempotencyKey: `meeting-open-thread:${sessionId}` });
+  collab.openThread({ threadId: sidecar.threadId, title, refs, participants: participants.map((p) => p.id), actorId: ENGINEERING_LEAD_ID, idempotencyKey: `meeting-open-thread:${sessionId}` });
   // Excluded participants are recorded in the thread itself, so the record shows who could not take part and why.
   for (const x of excluded) collab.post({ threadId: sidecar.threadId, authorId: ENGINEERING_LEAD_ID, kind: 'comment', body: `${x.id} (${x.provider}/${x.model}) is not in this meeting: ${x.reason}`, idempotencyKey: `meeting-excluded:${sessionId}:${x.id}` });
   collab.openSession({ sessionId, threadId: sidecar.threadId, agenda, participants: participants.map((p) => p.id), chair: ENGINEERING_LEAD_ID, limits: sidecar.limits, actorId: ENGINEERING_LEAD_ID, idempotencyKey: `meeting-open-session:${sessionId}` });

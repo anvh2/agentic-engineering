@@ -35,3 +35,11 @@ Real, model-backed engineering meetings on the M9 collaboration store: the coord
 - The Engineering Lead's own turns are written with `lead meeting record` into the meeting's inbox while `lead meeting run` waits.
 
 The decision and the evidence are in the store; `lead meeting status` and the Studio organization view read them.
+
+### What a meeting is about: verified references (M12)
+
+`lead meeting open` takes `--objective <id>`, `--batch <id>` and `--task <id>`. Each is checked against the scheduler database before anything is contacted or written: the objective must have a lifecycle there and contributes its batch; a batch or task must exist, and all of them must agree. A reference that does not resolve refuses the meeting (exit 2). The Organization console attributes a thread only through a verified batch or task; a meeting opened without references is shown **Unattributed**, and nothing is inferred from titles or labels.
+
+### When meetings happen
+
+Nothing in the execution path opens a discussion or a meeting by itself: objective planning, the scheduler, the lifecycle driver and the supervisor never call the collaboration store, and an escalation is recorded as a lifecycle event and the task's state reason. A meeting exists only when the Engineering Lead (or an operator) runs `lead meeting open` about a decision that needs discussion: an architecture question, a significant blocker, an escalation that changes a plan. Use the references above so the meeting is attached to that work. The LIVE engineering council (`npm run council`) is a separate mechanism with its own database (`.workdir/council/council.db`); the console lists it under Council, never as an ordinary meeting.
