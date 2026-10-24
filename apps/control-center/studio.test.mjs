@@ -42,7 +42,10 @@ test('actual Studio: Organization sidebar, refresh, same-origin Gateway/SSE and 
     await workspace.getByRole('heading', { name: 'Execution lanes by provider', exact: false }).waitFor();
     // The UI must show exactly what the Gateway reads from Core B's store: records when present, NOT AVAILABLE otherwise.
     const collab = await (await fetch(`${origin}/control-center/v1/collaboration`)).json();
-    await workspace.getByRole('button', { name: 'Collaboration', exact: true }).click();
+    await page.getByRole('link', { name: 'Collaboration', exact: true }).first().click();
+    await page.waitForURL('**/collaboration');
+    await workspace.getByRole('heading', { name: 'Collaboration', exact: true }).waitFor();
+    assert.equal(await workspace.getByRole('navigation', { name: 'Organization views' }).count(), 0);
     await workspace.getByRole('button', { name: 'Discussions', exact: true }).click();
     if (collab.availability === 'AVAILABLE' && collab.threads.length) {
       const thread = collab.threads[0];
@@ -74,7 +77,19 @@ test('actual Studio: Organization sidebar, refresh, same-origin Gateway/SSE and 
       await page.screenshot({ path: `${out}/studio-discussions-unavailable.png`, fullPage: true });
       await workspace.getByRole('button', { name: 'Meetings', exact: true }).click();
     }
-    await workspace.getByRole('button', { name: 'Usage', exact: true }).click();
+    await page.getByRole('link', { name: 'Usage', exact: true }).first().click();
+    await page.waitForURL('**/usage');
+    await workspace.getByRole('heading', { name: 'Scope usage', exact: true }).waitFor();
+    await page.getByRole('link', { name: 'Runs', exact: true }).first().click();
+    await page.waitForURL('**/runs');
+    await workspace.getByRole('heading', { name: 'Runs', exact: true }).waitFor();
+    await page.reload();
+    await workspace.getByRole('heading', { name: 'Runs', exact: true }).waitFor();
+    await page.goBack();
+    await workspace.getByRole('heading', { name: 'Runs', exact: true }).waitFor();
+    await page.getByRole('link', { name: 'Organization', exact: true }).first().click();
+    await page.waitForURL('**/organization');
+    await workspace.getByRole('heading', { name: 'Overview', exact: true }).waitFor();
     await workspace.getByRole('heading', { name: 'Scope usage', exact: true }).waitFor();
     for (const path of ['/agents', '/workflows', '/traces']) {
       await page.goto(`${origin}${path}`);
