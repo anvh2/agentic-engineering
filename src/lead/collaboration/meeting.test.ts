@@ -7,10 +7,11 @@ import { fileURLToPath } from 'node:url';
 import type { CapacityLease } from '../../runtime/capacity/model-capacity.ts';
 import { CollaborationStore } from '../../runtime/collaboration/store.ts';
 import { SchedulerStore } from '../../runtime/scheduler/store.ts';
-import { tempDir } from '../../runtime/scheduler/test-helpers.ts';
+import { makeRepo, plan, tempDir, workerTask } from '../../runtime/scheduler/test-helpers.ts';
+import { LifecycleStore } from '../lifecycle/store.ts';
 import { geminiEntry } from '../../workers/providers/gemini.ts';
 import { ProviderRegistry, type ProviderEntry } from '../../workers/providers/registry.ts';
-import { directoryOf, runMeetingCommand, sidecarPath, type MeetingCommandDeps, type MeetingSidecar } from './meeting-cli.ts';
+import { directoryOf, runMeetingCommand, sidecarPath, verifiedRefs, type MeetingCommandDeps, type MeetingSidecar } from './meeting-cli.ts';
 import { buildTurnPrompt, parseModelReply } from './meeting-participants.ts';
 import { ENGINEERING_LEAD_ID } from './roster.ts';
 
@@ -345,5 +346,67 @@ describe('M10 lead meeting: provider adapters (deterministic)', () => {
     assert.ok(!r1.includes('body-m1') && r1.includes('body-m2'));
     assert.ok(buildTurnPrompt(ctx(2), { blindFirstRound: true }).user.includes('body-m1'));
     assert.ok(buildTurnPrompt(ctx(1), { blindFirstRound: false }).user.includes('body-m1'));
+  });
+});
+
+describe('M12 lead meeting: verified references', () => {
+  const tables = (s: SchedulerStore) => (s.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((r) => r.name);
+  const withWork = () => {
+    const s = new SchedulerStore(join(tempDir('meeting-refs-'), 'scheduler.db'));
+    s.createBatch(plan(makeRepo(), [workerTask('sub.t1')], { batchId: 'sub' }));
+    s.createBatch(plan(makeRepo(), [workerTask('pin.t1')], { batchId: 'pin-batch' }));
+    return s;
+  };
+
+  it('no reference is no reference: the meeting stays unattributed', () => {
+    const s = withWork();
+    assert.equal(verifiedRefs(s, {}), undefined);
+    s.close();
+  });
+
+  it('only a pinned objective is verifiable: a batch that merely shares its id is refused, and nothing is written to check it', () => {
+    const s = withWork();
+    assert.ok(!tables(s).includes('objective_lifecycle'));
+    // `sub` is a real batch (submitted, or created with `lead plan`), but nothing proves an objective stands behind it.
+    assert.throws(() => verifiedRefs(s, { objectiveId: 'sub' }), /objective sub is not pinned .* reference a submitted objective with --batch <id>/);
+    assert.throws(() => verifiedRefs(s, { objectiveId: 'planned-only' }), /objective planned-only is not pinned/);
+    assert.deepEqual(verifiedRefs(s, { batchId: 'sub' }), { batchId: 'sub' }, 'the batch itself is the verifiable reference');
+    assert.ok(!tables(s).includes('objective_lifecycle'), 'verification never creates lifecycle tables');
+    s.close();
+  });
+
+  it('a row the scheduler quarantines as corrupt refuses the reference instead of escaping as a store error', () => {
+    const s = withWork();
+    s.db.prepare("UPDATE tasks SET spec = '{' WHERE id = 'sub.t1'").run();
+    assert.throws(() => verifiedRefs(s, { taskId: 'sub.t1' }), (err: Error) => err.constructor.name === 'MeetingCliError' && /task sub.t1 cannot be read/.test(err.message));
+    s.close();
+  });
+
+  it('a pinned objective resolves to its lifecycle batch; task and batch must agree with it', () => {
+    const s = withWork();
+    new LifecycleStore(s).create({ objectiveId: 'pin', batchId: 'pin-batch', baseCommit: 'b', actor: 'lead', oracle: { dir: '/o', files: {}, commands: [['true']], negativeControl: { mode: 'required' }, specHash: 'h', pinnedAt: 1, pinnedBy: 'lead' } });
+    assert.deepEqual(verifiedRefs(s, { objectiveId: 'pin', taskId: 'pin.t1' }), { objectiveId: 'pin', batchId: 'pin-batch', taskId: 'pin.t1' });
+    assert.throws(() => verifiedRefs(s, { objectiveId: 'pin', batchId: 'sub' }), /runs as batch pin-batch, not sub/);
+    assert.throws(() => verifiedRefs(s, { objectiveId: 'pin', taskId: 'sub.t1' }), /task sub.t1 is in batch sub, not pin-batch/);
+    s.close();
+  });
+
+  it('a task contributes its batch; unknown or invalid ids are refused', () => {
+    const s = withWork();
+    assert.deepEqual(verifiedRefs(s, { taskId: 'sub.t1' }), { batchId: 'sub', taskId: 'sub.t1' });
+    assert.throws(() => verifiedRefs(s, { taskId: 'missing' }), /task missing does not exist/);
+    assert.throws(() => verifiedRefs(s, { batchId: 'missing' }), /batch missing does not exist/);
+    assert.throws(() => verifiedRefs(s, { batchId: 'a b' }), /is not a valid id/);
+    s.close();
+  });
+
+  it('a reference flag with no value, or given twice, refuses the meeting instead of being dropped', async () => {
+    for (const more of [['--task'], ['--objective', '--batch', 'x'], ['--task', 'a', '--task', 'b']]) {
+      const e = env();
+      assert.equal(await e.open('m-flags', more), 2, more.join(' '));
+      assert.match(e.errs.join('\n'), /needs a value|is given 2 times/, more.join(' '));
+      assert.equal(existsSync(sidecarPath(e.deps.meetingsDir, 'm-flags')), false);
+      e.store.close();
+    }
   });
 });

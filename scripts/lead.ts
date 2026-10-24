@@ -22,6 +22,7 @@
 //   npm run lead -- objective <objective.json> [--draft F] | --show <id> | --submit <id>   M7.5: plan, then explicit submit; never executes
 //   npm run lead -- lifecycle pin|run|status|authorize|resume|cancel <objective-id> ...   M8.5: execute -> verified review -> integrate -> independent acceptance (see src/lead/lifecycle/cli.ts)
 //   npm run lead -- meeting open|run|status|record|cancel <session-id> ...   M10: model-backed engineering meetings (see src/lead/collaboration/meeting-cli.ts)
+//        open takes --objective/--batch/--task, verified against this scheduler database (M12)
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
