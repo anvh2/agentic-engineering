@@ -166,13 +166,19 @@ async function driveObjective(deps: LifecycleDeps, objectiveId: string, options:
    */
   const suggest = (what: string, fn: () => SuggestOutcome): void => {
     try {
-      const out = fn();
-      if (out.created.length > 0) {
-        lifecycle.audit(objectiveId, DRIVER, 'meeting_suggested', `${what}: ${out.created.map((s) => `${s.id} (${s.meetingType})`).join(', ')}; pending an explicit decision by the Lead or an operator`, { suggestions: out.created.map((s) => s.id), skipped: out.skipped });
-        log(`objective ${objectiveId}: meeting suggested ${out.created.map((s) => s.id).join(', ')} (accept: lead meeting open <session> --suggestion <id>)`);
-      }
+      // The suggestion and its audit event commit together: a suggestion never exists without its lifecycle record.
+      const out = store.transact(() => {
+        const result = fn();
+        if (result.created.length > 0) lifecycle.audit(objectiveId, DRIVER, 'meeting_suggested', `${what}: ${result.created.map((s) => `${s.id} (${s.meetingType})`).join(', ')}; pending an explicit decision by the Lead or an operator`, { suggestions: result.created.map((s) => s.id), skipped: result.skipped });
+        return result;
+      });
+      if (out.created.length > 0) log(`objective ${objectiveId}: meeting suggested ${out.created.map((s) => s.id).join(', ')} (accept: lead meeting open <session> --suggestion <id>)`);
     } catch (err) {
-      lifecycle.audit(objectiveId, DRIVER, 'meeting_suggestion_failed', `${what}: ${(err as Error).message}`);
+      try {
+        lifecycle.audit(objectiveId, DRIVER, 'meeting_suggestion_failed', `${what}: ${(err as Error).message}`);
+      } catch {
+        log(`objective ${objectiveId}: meeting suggestion not recorded (${(err as Error).message}); the objective's outcome is unchanged`);
+      }
     }
   };
 

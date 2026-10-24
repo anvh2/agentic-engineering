@@ -24,12 +24,12 @@ export interface MeetingSuggestionView {
   decidedAt: string | null;
   decidedBy: string | null;
   decisionReason: string | null;
-  /** The real meeting opened when the suggestion was accepted. */
+  /** Shown only when the objective's pinned lifecycle confirms it runs as this batch; otherwise null. */
   sessionId: string | null;
 }
 
 export interface SuggestionsSnapshot {
-  availability: 'AVAILABLE' | 'NOT_AVAILABLE';
+  availability: 'AVAILABLE' | 'NOT_AVAILABLE' | 'CORRUPT';
   reason: string | null;
   pending: number;
   suggestions: MeetingSuggestionView[];
@@ -49,15 +49,26 @@ export function createSuggestionReader(options: { dbPath: string }): SuggestionR
         if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meeting_suggestions'").get()) {
           return { availability: 'AVAILABLE', reason: 'No meeting has been suggested in this scheduler database.', pending: 0, suggestions: [] };
         }
-        const rows = db.prepare('SELECT * FROM meeting_suggestions ORDER BY created_at DESC, id DESC LIMIT 200').all() as Record<string, any>[];
+        // The rows are presented as fixed runtime records only while the table's own guards are in place.
+        const guards = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name IN ('meeting_suggestions_fixed', 'meeting_suggestions_no_delete')").all() as { name: string }[]).length;
+        if (guards !== 2) return { availability: 'CORRUPT', reason: 'meeting_suggestions guard missing: its rows cannot be shown as fixed runtime records.', pending: 0, suggestions: [] };
+        const hasLifecycle = Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'objective_lifecycle'").get());
+        const verifiedObjective = (objectiveId: string | null, batchId: string): string | null =>
+          objectiveId && hasLifecycle && db.prepare('SELECT 1 FROM objective_lifecycle WHERE objective_id = ? AND batch_id = ?').get(objectiveId, batchId) ? objectiveId : null;
+        // Every pending suggestion (the ones waiting for a person), plus the most recent decided ones.
+        const rows = [
+          ...(db.prepare("SELECT * FROM meeting_suggestions WHERE status = 'pending' ORDER BY created_at, id").all() as Record<string, any>[]),
+          ...(db.prepare("SELECT * FROM meeting_suggestions WHERE status <> 'pending' ORDER BY decided_at DESC, id DESC LIMIT 100").all() as Record<string, any>[]),
+        ];
+        const pending = (db.prepare("SELECT COUNT(*) AS n FROM meeting_suggestions WHERE status = 'pending'").get() as { n: number }).n;
         const suggestions = rows.map((r): MeetingSuggestionView => ({
           kind: 'suggestion', id: r.id, status: r.status, meetingType: r.meeting_type, category: r.category,
-          objectiveId: r.objective_id ?? null, batchId: r.batch_id, taskId: r.task_id ?? null,
+          objectiveId: verifiedObjective(r.objective_id ?? null, r.batch_id), batchId: r.batch_id, taskId: r.task_id ?? null,
           attribution: attribute(db, { batchId: r.batch_id, ...(r.task_id ? { taskId: r.task_id } : {}) }),
           reason: r.reason, evidence: JSON.parse(r.evidence), participants: JSON.parse(r.participants),
           createdAt: iso(r.created_at)!, decidedAt: iso(r.decided_at ?? null), decidedBy: r.decided_by ?? null, decisionReason: r.decision_reason ?? null, sessionId: r.session_id ?? null,
         }));
-        return { availability: 'AVAILABLE', reason: null, pending: suggestions.filter((s) => s.status === 'pending').length, suggestions };
+        return { availability: 'AVAILABLE', reason: null, pending, suggestions };
       } finally {
         db.close();
       }

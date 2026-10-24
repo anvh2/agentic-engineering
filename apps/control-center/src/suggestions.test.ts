@@ -11,6 +11,7 @@ const base = {
 };
 
 test('a suggestion can only be a suggestion: anything else is rejected, never shown as a meeting', () => {
+  assert.equal(suggestionsSchema.parse({ availability: 'CORRUPT', reason: 'guard missing', pending: 0, suggestions: [] }).availability, 'CORRUPT');
   const ok = suggestionsSchema.parse({ availability: 'AVAILABLE', reason: null, pending: 1, suggestions: [{ ...base, id: 's1', status: 'pending', createdAt: '2026-10-24T00:00:00.000Z' }] });
   assert.equal(ok.suggestions[0].kind, 'suggestion');
   assert.throws(() => suggestionsSchema.parse({ availability: 'AVAILABLE', reason: null, pending: 1, suggestions: [{ ...base, kind: 'meeting', id: 's1', status: 'pending', createdAt: '2026-10-24T00:00:00.000Z' }] }));

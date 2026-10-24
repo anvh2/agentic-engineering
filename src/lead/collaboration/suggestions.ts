@@ -5,8 +5,10 @@
  * dismisses it with a reason.
  *
  *   classify      deterministic, from the runtime's own failure category; never from a model's words
- *   technical     the worker could not do it, review keeps rejecting it, it does not integrate, the oracle rejects the result
- *   operator      security, authorization, budget, a dirty source tree: a human decides; no meeting can approve these
+ *   technical     the worker could not do it, repair rejections used up the correction budget, it does not integrate, the oracle
+ *                 rejects the result
+ *   operator      security (out-of-scope edits, the change gate's blocking findings), evidence integrity (a reviewer escalating to
+ *                 a human), authorization, budget, a dirty source tree: a human decides; no meeting can approve these
  *   none          retryable or derived failures (timeouts, unavailable runtime, lost leases, a failed dependency)
  *
  * Bounds: one suggestion per (batch, root task, category), ever, so a resumed objective that escalates the same way again, or a
@@ -31,14 +33,16 @@ export type EscalationClass =
 const TECHNICAL: Record<string, MeetingType> = {
   coding_attempts_exhausted: 'technical_escalation',
   review_rejected: 'review_escalation',
-  escalated_by_reviewer: 'review_escalation',
-  review_gate_blocked: 'review_escalation',
   integration_conflict: 'integration_failure',
   integration_verification_failed: 'integration_failure',
   diverged_after_review: 'integration_failure',
 };
 const OPERATOR: Record<string, string> = {
   forbidden_mutation: 'security: the worker changed files outside its scope',
+  // The change gate blocks out-of-scope files, credential-like additions and other policy findings; a reviewer escalates to a
+  // human when the evidence itself cannot be trusted. Both are for a person, not a meeting.
+  review_gate_blocked: 'the change gate blocked the result (scope, security or policy finding)',
+  escalated_by_reviewer: 'the reviewer escalated to a human (the evidence could not be trusted)',
   provider_not_authorized: 'authorization or budget: only the operator grants it',
   source_tree_dirty: 'the source tree changed under the batch: an operator reconciles it',
   cancelled: 'cancelled by a person',
@@ -96,6 +100,7 @@ CREATE TRIGGER IF NOT EXISTS meeting_suggestions_fixed BEFORE UPDATE ON meeting_
   WHEN OLD.status <> 'pending' OR NEW.id <> OLD.id OR NEW.dedupe_key <> OLD.dedupe_key OR NEW.meeting_type <> OLD.meeting_type OR NEW.category <> OLD.category
     OR NEW.reason <> OLD.reason OR NEW.evidence <> OLD.evidence OR NEW.participants <> OLD.participants OR NEW.batch_id <> OLD.batch_id
     OR NEW.task_id IS NOT OLD.task_id OR NEW.objective_id IS NOT OLD.objective_id OR NEW.project <> OLD.project
+    OR NEW.created_at <> OLD.created_at OR NEW.created_by <> OLD.created_by
 BEGIN SELECT RAISE(ABORT, 'a meeting suggestion is decided once and its content never changes'); END;
 `;
 
@@ -134,12 +139,14 @@ const clip = (s: string) => (s.length > MAX_REASON_CHARS ? `${s.slice(0, MAX_REA
 /** Read-only: suggestions in this scheduler database, oldest first. Empty when the table was never created. */
 export function listSuggestions(store: SchedulerStore, filter: { batchId?: string; status?: SuggestionStatus } = {}): MeetingSuggestion[] {
   if (!store.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meeting_suggestions'").get()) return [];
-  const rows = store.db.prepare('SELECT * FROM meeting_suggestions ORDER BY created_at, id').all() as Record<string, any>[];
-  return rows.map(rowToSuggestion).filter((s) => (!filter.batchId || s.refs.batchId === filter.batchId) && (!filter.status || s.status === filter.status));
+  const rows = store.db.prepare('SELECT * FROM meeting_suggestions WHERE (?1 IS NULL OR batch_id = ?1) AND (?2 IS NULL OR status = ?2) ORDER BY created_at, id').all(filter.batchId ?? null, filter.status ?? null) as Record<string, any>[];
+  return rows.map(rowToSuggestion);
 }
 
 export function getSuggestion(store: SchedulerStore, id: string): MeetingSuggestion | undefined {
-  return listSuggestions(store).find((s) => s.id === id);
+  if (!store.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meeting_suggestions'").get()) return undefined;
+  const row = store.db.prepare('SELECT * FROM meeting_suggestions WHERE id = ?').get(id) as Record<string, any> | undefined;
+  return row ? rowToSuggestion(row) : undefined;
 }
 
 export interface SuggestOutcome {

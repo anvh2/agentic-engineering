@@ -432,7 +432,7 @@ describe('M12 lead meeting: accepting or dismissing a meeting suggestion', () =>
     assert.deepEqual(thread.thread.refs, { objectiveId: 'obj1', batchId: 'obj1', taskId: 'obj1.pad' });
     assert.match(thread.messages[0].body, new RegExp(`^Opened from meeting suggestion ${s.id} \\(review_escalation\\): obj1.pad is ESCALATED`));
     const [accepted] = listSuggestions(e.store);
-    assert.deepEqual([accepted.status, accepted.sessionId, accepted.decidedBy], ['accepted', 'm-sg', ENGINEERING_LEAD_ID]);
+    assert.deepEqual([accepted.status, accepted.sessionId, accepted.decidedBy], ['accepted', 'm-sg', ENGINEERING_LEAD_ID], 'the Lead accepts by default');
     assert.equal(await e.open('m-sg2', ['--suggestion', s.id]), 2, 'a suggestion is accepted once');
     assert.match(e.errs.join('\n'), /already accepted/);
     e.store.close();
@@ -449,10 +449,23 @@ describe('M12 lead meeting: accepting or dismissing a meeting suggestion', () =>
     e.store.close();
   });
 
+  it('an operator who accepts is recorded as the decider; someone outside the meeting cannot accept', async () => {
+    const e = env();
+    const s = withSuggestion(e);
+    assert.equal(await e.open('m-op', ['--suggestion', s.id, '--accepted-by', 'mallory']), 2);
+    assert.match(e.errs.join('\n'), /--accepted-by mallory must be/);
+    assert.equal(listSuggestions(e.store)[0].status, 'pending');
+    assert.equal(await e.open('m-op', ['--suggestion', s.id, '--accepted-by', 'anvh2']), 0);
+    assert.equal(listSuggestions(e.store)[0].decidedBy, 'anvh2');
+    e.store.close();
+  });
+
   it('dismissing needs who and why; a dismissed suggestion cannot be opened', async () => {
     const e = env();
     const s = withSuggestion(e);
     assert.equal(await e.cmd('dismiss-suggestion', s.id, '--by', 'anvh2'), 2);
+    assert.equal(await e.cmd('dismiss-suggestion', s.id, '--by', 'any one', '--reason', 'r'), 2, 'the decider is an id');
+    assert.equal(await e.cmd('dismiss-suggestion', s.id, '--by', 'anvh2', '--reason', '   '), 2);
     assert.equal(listSuggestions(e.store)[0].status, 'pending');
     assert.equal(await e.cmd('dismiss-suggestion', s.id, '--by', 'anvh2', '--reason', 'already re-planned'), 0);
     assert.deepEqual([listSuggestions(e.store)[0].status, listSuggestions(e.store)[0].decisionReason], ['dismissed', 'already re-planned']);

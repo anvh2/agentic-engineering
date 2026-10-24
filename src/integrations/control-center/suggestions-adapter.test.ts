@@ -32,10 +32,21 @@ test('suggestions are read-only, attributed through their verified batch, and ne
   assert.deepEqual(pending.attribution, { status: 'ATTRIBUTED', batchId: 'b1', project: 'quota', reason: null });
   assert.equal(pending.sessionId, null, 'nothing was opened');
   assert.equal(view.suggestions.find((s) => s.status === 'dismissed')?.decisionReason, 'merge resolved by hand');
+  assert.equal(pending.objectiveId, null, 'objective b1 has no pinned lifecycle here, so it is not shown as a reference');
   assert.equal(statSync(dbPath).mtimeMs, before, 'reading wrote nothing');
   const collaboration = createCollaborationReader({ dbPath, schedulerOfRecord: true }).snapshot();
   assert.equal(collaboration.meetings.length, 0, 'a suggestion is not a meeting');
   assert.equal(collaboration.threads.length, 0);
+});
+
+test('without its integrity guards the table is reported CORRUPT, never shown as fixed records', () => {
+  const dbPath = storeWithSuggestions();
+  const store = new SchedulerStore(dbPath);
+  store.db.exec('DROP TRIGGER meeting_suggestions_fixed');
+  store.close();
+  const view = createSuggestionReader({ dbPath }).snapshot();
+  assert.equal(view.availability, 'CORRUPT');
+  assert.deepEqual(view.suggestions, []);
 });
 
 test('a database without suggestions says so; the endpoint serves the same payload', async (t) => {

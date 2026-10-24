@@ -22,7 +22,7 @@ describe('M12 meeting suggestions: classification', () => {
     assert.deepEqual(classifyEscalation('coding_attempts_exhausted'), { kind: 'technical', meetingType: 'technical_escalation' });
     assert.deepEqual(classifyEscalation('review_rejected'), { kind: 'technical', meetingType: 'review_escalation' });
     assert.deepEqual(classifyEscalation('integration_conflict'), { kind: 'technical', meetingType: 'integration_failure' });
-    for (const c of ['forbidden_mutation', 'provider_not_authorized', 'source_tree_dirty', 'cancelled']) assert.equal(classifyEscalation(c).kind, 'operator', c);
+    for (const c of ['forbidden_mutation', 'review_gate_blocked', 'escalated_by_reviewer', 'provider_not_authorized', 'source_tree_dirty', 'cancelled']) assert.equal(classifyEscalation(c).kind, 'operator', c);
     for (const c of ['task_timeout', 'runtime_unavailable', 'capacity_wait_timeout', 'executor_error', 'lease_expired', 'provider_unavailable', 'dependency_failed', 'not_eligible', 'something_new', null]) assert.equal(classifyEscalation(c).kind, 'none', String(c));
   });
 });
@@ -83,5 +83,6 @@ describe('M12 meeting suggestions: durable, deduplicated, bounded', () => {
     const [s] = suggest(store, [fail('t1', 'coding_attempts_exhausted', 'runtime evidence')]).created;
     assert.throws(() => store.db.prepare("UPDATE meeting_suggestions SET reason = 'rewritten' WHERE id = ?").run(s.id), /never changes/);
     assert.throws(() => store.db.prepare("UPDATE meeting_suggestions SET task_id = NULL WHERE id = ?").run(s.id), /never changes/);
+    assert.throws(() => store.db.prepare("UPDATE meeting_suggestions SET created_by = 'operator', created_at = 0 WHERE id = ?").run(s.id), /never changes/, 'provenance and order are fixed too');
   });
 });

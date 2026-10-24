@@ -5,7 +5,7 @@ import { z } from 'zod';
 const id = z.string().min(1);
 const attribution = z.object({ status: z.enum(['ATTRIBUTED', 'UNATTRIBUTED']), batchId: id.nullable(), project: z.string().nullable(), reason: z.string().nullable() });
 export const suggestionsSchema = z.object({
-  availability: z.enum(['AVAILABLE', 'NOT_AVAILABLE']),
+  availability: z.enum(['AVAILABLE', 'NOT_AVAILABLE', 'CORRUPT']),
   reason: z.string().nullable(),
   pending: z.number().int().nonnegative(),
   suggestions: z.array(z.object({

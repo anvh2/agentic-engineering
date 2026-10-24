@@ -25,10 +25,12 @@ export function SuggestedMeetings({ apiBase, view }: { apiBase: string; view: Vi
     return () => { abort.abort(); clearTimeout(timer); };
   }, [apiBase]);
   if (failed) return <p role="alert" className="notice">Meeting suggestions unavailable. Retrying automatically.</p>;
+  if (data?.availability === 'CORRUPT') return <section className="panel" aria-label="Suggested meetings"><div className="panel-heading"><h2>Suggested meetings</h2><span className="badge">INTEGRITY FAILURE</span></div><p role="alert" className="notice">{data.reason}</p></section>;
   if (!data || data.availability !== 'AVAILABLE') return null;
   const items = orderSuggestions(inScope(data.suggestions, view));
+  const pendingInScope = items.filter(s => s.status === 'pending').length;
   return <section className="panel" aria-label="Suggested meetings">
-    <div className="panel-heading"><h2>Suggested meetings</h2><span className="badge">NOT MEETINGS</span><span className="badge">{data.pending} PENDING</span></div>
+    <div className="panel-heading"><h2>Suggested meetings</h2><span className="badge">NOT MEETINGS</span><span className="badge">{pendingInScope} PENDING IN THIS SCOPE</span></div>
     <p className="muted">The lifecycle suggests a meeting after a technical escalation. A suggestion opens nothing: the Engineering Lead or an operator accepts it with <code>lead meeting open &lt;session&gt; --suggestion &lt;id&gt;</code> or dismisses it with a reason. Security, authorization, budget and held-lock stops are never suggested; they need an operator.</p>
     {items.length === 0 ? <p className="empty">{data.reason ?? 'No meeting suggestion in this scope.'}</p> : <ul className="suggestion-list">{items.map(s => <li key={s.id}>
       <p><span className="badge">{s.status === 'pending' ? 'PENDING · NOT A MEETING' : s.status.toUpperCase()}</span> <strong>{MEETING_TYPE_LABEL[s.meetingType] ?? s.meetingType}</strong> · <code>{s.id}</code></p>
