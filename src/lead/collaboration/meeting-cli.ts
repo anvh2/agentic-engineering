@@ -6,7 +6,8 @@ import { ParticipantDirectory } from '../../runtime/collaboration/directory.ts';
 import { CollaborationStore } from '../../runtime/collaboration/store.ts';
 import { CollaborationError, idSchema, MESSAGE_KINDS, type EngineeringRole, type EvidenceRef, type MessageKind, type ParticipantIdentity } from '../../runtime/collaboration/types.ts';
 import { allowedProvidersFromEnv, authorizeProvider, DEFAULT_PROVIDER_ID, parseAllowList } from '../../runtime/execution/worker-provider.ts';
-import type { SchedulerStore } from '../../runtime/scheduler/store.ts';
+import { StoreError, type SchedulerStore } from '../../runtime/scheduler/store.ts';
+import { pinnedObjectiveBatch } from '../lifecycle/store.ts';
 import { defaultProviderRegistry } from '../../workers/providers/default.ts';
 import type { ProviderRegistry } from '../../workers/providers/registry.ts';
 import { inboxEntries, inboxPath, LeadInboxParticipant, ollamaChatTransport, ProviderParticipant, workerProviderTransport, type CapacityLike, type LeadInboxReply, type MeetingTransport, type MeetingTransportKind, type ParticipantLimits } from './meeting-participants.ts';
@@ -188,20 +189,10 @@ function refFlag(a: ReturnType<typeof argsOf>, name: string): string | undefined
 }
 
 /**
- * The batch an objective runs as, read without writing: its lifecycle row when it was pinned, else the batch `lead objective
- * --submit` created under the objective's own id. Undefined when neither exists. (An objective's batch never changes once set.)
- */
-function objectiveBatch(store: SchedulerStore, objectiveId: string): string | undefined {
-  const hasLifecycle = store.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'objective_lifecycle'").get();
-  const row = hasLifecycle ? (store.db.prepare('SELECT batch_id FROM objective_lifecycle WHERE objective_id = ?').get(objectiveId) as { batch_id: string } | undefined) : undefined;
-  if (row) return row.batch_id;
-  return store.getBatch(objectiveId) ? objectiveId : undefined;
-}
-
-/**
  * The work a meeting is about, as references the scheduler of record can verify, checked read-only before anything is contacted
- * or written. An objective must resolve to its batch (objectiveBatch); a batch or task must exist, and all must agree. Nothing is
- * guessed: a meeting with no reference stays unattributed, and a reference that does not resolve refuses the meeting.
+ * or written. Only a pinned objective is verifiable (its lifecycle names its batch); a submitted one is referenced by its batch,
+ * a merely planned one has no scheduler work yet. A batch or task must exist, and all references must agree. Nothing is guessed:
+ * a meeting with no reference stays unattributed, and a reference that does not resolve refuses the meeting.
  */
 export function verifiedRefs(store: SchedulerStore, input: { objectiveId?: string; batchId?: string; taskId?: string }): { objectiveId?: string; batchId?: string; taskId?: string } | undefined {
   const { objectiveId, taskId } = input;
@@ -210,14 +201,20 @@ export function verifiedRefs(store: SchedulerStore, input: { objectiveId?: strin
     if (value !== undefined && !idSchema.safeParse(value).success) throw new MeetingCliError(`lead meeting open: ${flag} ${JSON.stringify(value)} is not a valid id`);
   }
   if (objectiveId) {
-    const objectiveBatchId = objectiveBatch(store, objectiveId);
-    if (!objectiveBatchId) throw new MeetingCliError(`lead meeting open: objective ${objectiveId} is neither pinned nor submitted in this scheduler database; refusing an unverifiable reference`);
+    const objectiveBatchId = pinnedObjectiveBatch(store, objectiveId);
+    if (!objectiveBatchId) throw new MeetingCliError(`lead meeting open: objective ${objectiveId} is not pinned in this scheduler database, so it cannot be verified; reference a submitted objective with --batch <id>, or open the meeting without a reference`);
     if (batchId && batchId !== objectiveBatchId) throw new MeetingCliError(`lead meeting open: objective ${objectiveId} runs as batch ${objectiveBatchId}, not ${batchId}`);
     batchId = objectiveBatchId;
   }
-  if (batchId && !store.getBatch(batchId)) throw new MeetingCliError(`lead meeting open: batch ${batchId} does not exist in this scheduler database`);
+  const read = <T>(what: string, fn: () => T): T => {
+    try { return fn(); } catch (err) {
+      if (err instanceof StoreError) throw new MeetingCliError(`lead meeting open: ${what} cannot be read in this scheduler database (${err.message})`);
+      throw err;
+    }
+  };
+  if (batchId && !read(`batch ${batchId}`, () => store.getBatch(batchId!))) throw new MeetingCliError(`lead meeting open: batch ${batchId} does not exist in this scheduler database`);
   if (taskId) {
-    const task = store.getTask(taskId);
+    const task = read(`task ${taskId}`, () => store.getTask(taskId));
     if (!task) throw new MeetingCliError(`lead meeting open: task ${taskId} does not exist in this scheduler database`);
     if (batchId && task.batchId !== batchId) throw new MeetingCliError(`lead meeting open: task ${taskId} is in batch ${task.batchId}, not ${batchId}`);
     batchId = task.batchId;

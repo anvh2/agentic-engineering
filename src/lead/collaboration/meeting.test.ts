@@ -364,12 +364,21 @@ describe('M12 lead meeting: verified references', () => {
     s.close();
   });
 
-  it('a submitted objective resolves to its batch without a lifecycle, and nothing is written to check it', () => {
+  it('only a pinned objective is verifiable: a batch that merely shares its id is refused, and nothing is written to check it', () => {
     const s = withWork();
     assert.ok(!tables(s).includes('objective_lifecycle'));
-    assert.deepEqual(verifiedRefs(s, { objectiveId: 'sub' }), { objectiveId: 'sub', batchId: 'sub' });
-    assert.throws(() => verifiedRefs(s, { objectiveId: 'nope' }), /objective nope is neither pinned nor submitted/);
+    // `sub` is a real batch (submitted, or created with `lead plan`), but nothing proves an objective stands behind it.
+    assert.throws(() => verifiedRefs(s, { objectiveId: 'sub' }), /objective sub is not pinned .* reference a submitted objective with --batch <id>/);
+    assert.throws(() => verifiedRefs(s, { objectiveId: 'planned-only' }), /objective planned-only is not pinned/);
+    assert.deepEqual(verifiedRefs(s, { batchId: 'sub' }), { batchId: 'sub' }, 'the batch itself is the verifiable reference');
     assert.ok(!tables(s).includes('objective_lifecycle'), 'verification never creates lifecycle tables');
+    s.close();
+  });
+
+  it('a row the scheduler quarantines as corrupt refuses the reference instead of escaping as a store error', () => {
+    const s = withWork();
+    s.db.prepare("UPDATE tasks SET spec = '{' WHERE id = 'sub.t1'").run();
+    assert.throws(() => verifiedRefs(s, { taskId: 'sub.t1' }), (err: Error) => err.constructor.name === 'MeetingCliError' && /task sub.t1 cannot be read/.test(err.message));
     s.close();
   });
 

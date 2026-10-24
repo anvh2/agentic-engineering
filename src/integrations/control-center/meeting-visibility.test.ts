@@ -152,12 +152,15 @@ describe('M12 collaboration visibility: a real meeting about scheduler work', ()
   it('a reference that does not resolve refuses the meeting before anything is written', async () => {
     for (const refs of [['--objective', 'nope'], ['--objective', 'obj1', '--batch', 'other'], ['--task', 'missing'], ['--batch', 'missing']]) {
       const h = setup();
-      assert.equal(await h.open('m-bad', refs), 2, refs.join(' '));
-      assert.match(h.errors.join('\n'), /lead meeting open: (objective|batch|task) /, refs.join(' '));
-      assert.equal(collabRows(h.dbPath), 0, `${refs.join(' ')}: no collaboration event`);
-      assert.equal(existsSync(sidecarPath(h.deps.meetingsDir, 'm-bad')), false, `${refs.join(' ')}: no sidecar`);
-      assert.equal(h.ollama.calls(), 0);
-      h.store.close();
+      try {
+        assert.equal(await h.open('m-bad', refs), 2, refs.join(' '));
+        assert.match(h.errors.join('\n'), /lead meeting open: (objective|batch|task) /, refs.join(' '));
+        assert.equal(collabRows(h.dbPath), 0, `${refs.join(' ')}: no collaboration event`);
+        assert.equal(existsSync(sidecarPath(h.deps.meetingsDir, 'm-bad')), false, `${refs.join(' ')}: no sidecar`);
+        assert.equal(h.ollama.calls(), 0);
+      } finally {
+        h.store.close();
+      }
     }
   });
 });
