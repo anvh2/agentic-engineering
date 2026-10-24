@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { suggestForDeadTasks, suggestForRejectedObjective, type SuggestOutcome } from '../collaboration/suggestions.ts';
+import { DEAD_END_STATES, suggestForDeadTasks, suggestForRejectedObjective, type SuggestOutcome } from '../collaboration/suggestions.ts';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { integrateBatch, type CommandRunner } from '../../runtime/integration/integrate.ts';
@@ -85,7 +85,6 @@ export interface LifecycleOutcome {
 
 const rootTaskId = (id: string): string => id.replace(/-fix\d+$/, '');
 
-const DEAD_END_STATES = new Set(['ESCALATED', 'CANCELLED', 'BLOCKED', 'REVIEW_REJECTED', 'RUNTIME_FAILURE']);
 
 function summarize(lc: LifecycleRow, rounds: number, acceptance: AcceptanceRecord | null = null, stops: string[] = []): LifecycleOutcome {
   const result = lc.result as { reason?: string; acceptance?: AcceptanceRecord; stops?: string[] } | null;
@@ -265,7 +264,7 @@ async function driveObjective(deps: LifecycleDeps, objectiveId: string, options:
     return summarize(phaseNow(), rounds, record);
   }
   log(`objective ${objectiveId}: ${record.verdict} (${record.reason})`);
-  if (record.verdict === 'NOT_ACCEPTED') suggest('not_accepted', () => suggestForRejectedObjective(store, { objectiveId, batchId, detail: record.detail, evidenceHash: record.evidenceHash, actor: 'lifecycle-acceptance' }));
+  if (record.verdict === 'NOT_ACCEPTED') suggest('not_accepted', () => suggestForRejectedObjective(store, { objectiveId, batchId, evidenceHash: record.evidenceHash, actor: 'lifecycle-acceptance' }));
   if (deps.evidenceDir) {
     await mkdir(deps.evidenceDir, { recursive: true });
     await writeFile(join(deps.evidenceDir, `lifecycle-verdict-${objectiveId}.json`), `${JSON.stringify({ objectiveId, verdict: record.verdict, ...result, events: lifecycle.events(objectiveId) }, null, 2)}\n`);

@@ -368,7 +368,12 @@ test('suggested meetings: runtime records labelled NOT MEETINGS, scoped, decided
     const h = collabHarness({ path: dbPath });
     h.scheduler.createBatch(plan('/repo', ['a1-pad', 'a1-code', 'a1-sec', 'a1-merge'].map(id => workerTask(id)), { batchId: 'A1', project: 'alpha' }));
     h.scheduler.createBatch(plan('/repo', [workerTask('b-int')], { batchId: 'B1', project: 'beta' }));
-    new LifecycleStore(h.scheduler).create({ objectiveId: 'OBJ-A', batchId: 'A1', baseCommit: 'b', actor: 'lead', oracle });
+    const lifecycle = new LifecycleStore(h.scheduler);
+    for (const [objectiveId, batchId] of [['OBJ-A', 'A1'], ['OBJ-B', 'B1']]) {
+      lifecycle.create({ objectiveId, batchId, baseCommit: 'b', actor: 'lead', oracle });
+      lifecycle.transition(objectiveId, 'EXECUTING', { actor: 'test', expectFrom: 'PINNED' });
+      lifecycle.transition(objectiveId, 'ESCALATED', { actor: 'test', expectFrom: 'EXECUTING', reason: 'task_dead_end' });
+    }
     escalate(h.scheduler.db, 'a1-pad', 'review_rejected', 'finding:comment_removed');
     escalate(h.scheduler.db, 'a1-code', 'coding_attempts_exhausted', 'three attempts failed verification');
     escalate(h.scheduler.db, 'a1-sec', 'forbidden_mutation', 'edited go.mod outside scope');
@@ -410,7 +415,7 @@ test('suggested meetings: runtime records labelled NOT MEETINGS, scoped, decided
     const decided = (await rows.nth(1).innerText()) + (await rows.nth(2).innerText());
     assert.match(decided, new RegExp(`Accepted by ${ENGINEERING_LEAD_ID} · meeting s-alpha`));
     assert.match(decided, /Dismissed by anvh2: already re-planned/);
-    assert.doesNotMatch(decided, /objective OBJ-B/, 'an objective label without a pinned lifecycle is not shown as verified');
+    assert.match(decided, /objective OBJ-B/, 'its pinned lifecycle confirms the objective for the dismissed one');
     assert.equal(await panel.getByText('a1-sec', { exact: false }).count(), 0);
     // Suggestions are never meetings: the meetings list holds the one real meeting and no suggestion id.
     const meetingList = await page.getByRole('navigation', { name: 'Meetings' }).innerText();

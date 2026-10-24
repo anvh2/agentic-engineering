@@ -13,7 +13,7 @@ import type { ProviderRegistry } from '../../workers/providers/registry.ts';
 import { inboxEntries, inboxPath, LeadInboxParticipant, ollamaChatTransport, ProviderParticipant, workerProviderTransport, type CapacityLike, type LeadInboxReply, type MeetingTransport, type MeetingTransportKind, type ParticipantLimits } from './meeting-participants.ts';
 import { renderMeetingRecord } from './record-markdown.ts';
 import { ENGINEERING_LEAD_ID } from './roster.ts';
-import { decideSuggestion, getSuggestion, listSuggestions, SuggestionError, type SuggestionStatus } from './suggestions.ts';
+import { assertSuggestionGuards, decideSuggestion, getSuggestion, listSuggestions, SuggestionError, type SuggestionStatus } from './suggestions.ts';
 
 /**
  * `lead meeting open|run|status|record|cancel` (M10): real, model-backed engineering meetings on top of the M9
@@ -269,6 +269,7 @@ async function open(sessionId: string, a: ReturnType<typeof argsOf>, deps: Meeti
   const suggestion = suggestionId ? getSuggestion(deps.store, suggestionId) : undefined;
   if (suggestionId && !suggestion) throw new MeetingCliError(`lead meeting open: no meeting suggestion ${suggestionId}`);
   if (suggestion && suggestion.status !== 'pending') throw new MeetingCliError(`lead meeting open: suggestion ${suggestion.id} is already ${suggestion.status}`);
+  if (suggestion) assertSuggestionGuards(deps.store);
   if (suggestion) {
     const from = { objectiveId: suggestion.refs.objectiveId ?? undefined, batchId: suggestion.refs.batchId, taskId: suggestion.refs.taskId ?? undefined };
     for (const key of ['objectiveId', 'batchId', 'taskId'] as const) {
@@ -342,7 +343,9 @@ async function open(sessionId: string, a: ReturnType<typeof argsOf>, deps: Meeti
   // because that suggestion could then no longer be opened again. The sidecar becomes visible only by the rename below.
   const sidecarFile = sidecarPath(deps.meetingsDir, sessionId);
   const pendingSidecar = `${sidecarFile}.opening`;
-  mkdirSync(join(deps.meetingsDir, sessionId, 'inbox'), { recursive: true });
+  const sessionDir = join(deps.meetingsDir, sessionId);
+  const createdSessionDir = !existsSync(sessionDir);
+  mkdirSync(join(sessionDir, 'inbox'), { recursive: true });
   writeFileSync(pendingSidecar, JSON.stringify(sidecar, null, 2) + '\n');
   // One transaction: the thread, the session and (when accepting a suggestion) its acceptance commit together or not at all.
   try {
@@ -356,6 +359,7 @@ async function open(sessionId: string, a: ReturnType<typeof argsOf>, deps: Meeti
     });
   } catch (error) {
     rmSync(pendingSidecar, { force: true });
+    if (createdSessionDir) rmSync(sessionDir, { recursive: true, force: true });
     throw error;
   }
   renameSync(pendingSidecar, sidecarFile);

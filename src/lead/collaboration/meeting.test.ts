@@ -14,6 +14,7 @@ import { ProviderRegistry, type ProviderEntry } from '../../workers/providers/re
 import { directoryOf, runMeetingCommand, sidecarPath, verifiedRefs, type MeetingCommandDeps, type MeetingSidecar } from './meeting-cli.ts';
 import { buildTurnPrompt, parseModelReply } from './meeting-participants.ts';
 import { ENGINEERING_LEAD_ID } from './roster.ts';
+import { pinObjective } from './__testing__/pin.ts';
 import { decideSuggestion, listSuggestions, suggestForDeadTasks } from './suggestions.ts';
 
 /** Deterministic: no network, no model, no paid provider. Ollama is a fake fetch; Gemini is the fake CLI under its real adapter. */
@@ -416,7 +417,7 @@ describe('M12 lead meeting: accepting or dismissing a meeting suggestion', () =>
   /** A pinned objective whose task escalated on review: the lifecycle would have suggested exactly this. */
   const withSuggestion = (e: ReturnType<typeof env>) => {
     e.store.createBatch(plan(makeRepo(), [workerTask('obj1.pad'), workerTask('obj1.title')], { batchId: 'obj1' }));
-    new LifecycleStore(e.store).create({ objectiveId: 'obj1', batchId: 'obj1', baseCommit: 'b', actor: 'lead', oracle: { dir: '/o', files: {}, commands: [['true']], negativeControl: { mode: 'required' }, specHash: 'h', pinnedAt: 1, pinnedBy: 'lead' } });
+    pinObjective(e.store, 'obj1', 'obj1', 'ESCALATED');
     e.store.db.prepare("UPDATE tasks SET state = 'ESCALATED', failure_category = 'review_rejected', state_reason = 'finding:comment_removed' WHERE id = 'obj1.pad'").run();
     return suggestForDeadTasks(e.store, { objectiveId: 'obj1', batchId: 'obj1', tasks: [e.store.requireTask('obj1.pad')], actor: 'lifecycle-driver' }).created[0];
   };
@@ -491,9 +492,25 @@ describe('M12 lead meeting: accepting or dismissing a meeting suggestion', () =>
     assert.equal(await e.open('m-race', ['--suggestion', s.id]), 2);
     assert.match(e.errs.join('\n'), /already dismissed/);
     assert.equal(existsSync(sidecarPath(e.deps.meetingsDir, 'm-race')), false);
+    assert.equal(existsSync(join(e.deps.meetingsDir, 'm-race')), false, 'the directory this run created is removed again');
     assert.equal(existsSync(`${sidecarPath(e.deps.meetingsDir, 'm-race')}.opening`), false);
     assert.equal((e.store.db.prepare('SELECT COUNT(*) AS n FROM collab_events').get() as { n: number }).n, 0, 'the thread and session rolled back with it');
     assert.equal(listSuggestions(e.store)[0].status, 'dismissed');
+    e.store.close();
+  });
+
+  it('accepting and dismissing fail closed while a table guard is missing: no thread, no sidecar, still pending', async () => {
+    const e = env();
+    const s = withSuggestion(e);
+    e.store.db.exec('DROP TRIGGER meeting_suggestions_insert_new');
+    assert.equal(await e.open('m-guard', ['--suggestion', s.id]), 2);
+    assert.match(e.errs.join('\n'), /missing its guard.*meeting_suggestions_insert_new/);
+    assert.equal(existsSync(join(e.deps.meetingsDir, 'm-guard')), false, 'not even the meeting directory');
+    assert.equal((e.store.db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'collab_events'").get() as { n: number }).n, 0, 'refused before the collaboration tables were touched');
+    e.errs.length = 0;
+    const dismiss = await e.cmd('dismiss-suggestion', s.id, '--by', 'anvh2', '--reason', 'not now');
+    assert.notEqual(dismiss, 0);
+    assert.equal(listSuggestions(e.store)[0].status, 'pending');
     e.store.close();
   });
 

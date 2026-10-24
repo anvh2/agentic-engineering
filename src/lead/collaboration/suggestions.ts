@@ -20,6 +20,8 @@ import { providerOfSpec } from '../../runtime/scheduler/types.ts';
 import { ENGINEERING_LEAD_ID } from './roster.ts';
 
 export const MAX_SUGGESTIONS_PER_BATCH = 3;
+/** The states in which a required task has ended without being integrated. The lifecycle driver and the suggestions share this. */
+export const DEAD_END_STATES: ReadonlySet<string> = new Set(['ESCALATED', 'CANCELLED', 'BLOCKED', 'REVIEW_REJECTED', 'RUNTIME_FAILURE']);
 const MAX_REASON_CHARS = 600;
 
 export const MEETING_TYPES = ['technical_escalation', 'review_escalation', 'integration_failure', 'acceptance_failure'] as const;
@@ -119,16 +121,29 @@ BEGIN SELECT RAISE(ABORT, 'a meeting suggestion is decided once and its content 
 const GUARDS = ['meeting_suggestions_insert_new', 'meeting_suggestions_no_delete', 'meeting_suggestions_fixed'];
 
 /**
- * Creates the table on first use. Once it exists, a missing guard is NOT recreated (that would quietly make rows that were
- * editable in the meantime look protected again): writing is refused until an operator investigates. The console reports the same
- * condition as CORRUPT.
+ * Why the table cannot be trusted right now, or null. A guard is never recreated behind anyone's back (that would make rows that
+ * were editable in the meantime look protected again), and the console reports the same condition as CORRUPT.
  */
-function ensureSchema(store: SchedulerStore): void {
-  const exists = Boolean(store.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meeting_suggestions'").get());
-  if (!exists) return void store.db.exec(SCHEMA);
+function guardProblem(store: SchedulerStore): string | null {
+  const table = store.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'meeting_suggestions'").get() as { sql: string } | undefined;
+  if (!table) return null;
   const present = new Set((store.db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'meeting_suggestions'").all() as { name: string }[]).map((r) => r.name));
   const missing = GUARDS.filter((g) => !present.has(g));
-  if (missing.length > 0) throw new SuggestionError('invalid', `meeting_suggestions is missing its guard(s) ${missing.join(', ')}; refusing to write until an operator has checked the table`);
+  if (missing.length > 0) return `meeting_suggestions is missing its guard(s) ${missing.join(', ')}`;
+  if (!/CHECK\s*\(/i.test(table.sql)) return 'meeting_suggestions has no CHECK constraint tying a status to its decision';
+  return null;
+}
+
+/** Every write (creating, accepting, dismissing) fails closed while a guard is missing, until an operator has checked the table. */
+export function assertSuggestionGuards(store: SchedulerStore): void {
+  const problem = guardProblem(store);
+  if (problem) throw new SuggestionError('invalid', `${problem}; refusing to write until an operator has checked the table`);
+}
+
+/** Creates the table on first use; afterwards only verifies it. */
+function ensureSchema(store: SchedulerStore): void {
+  if (!store.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meeting_suggestions'").get()) return void store.db.exec(SCHEMA);
+  assertSuggestionGuards(store);
 }
 
 export class SuggestionError extends Error {
@@ -215,14 +230,33 @@ function insert(store: SchedulerStore, c: Candidate, actor: string, out: Suggest
 }
 
 /**
- * Called by the lifecycle driver when an objective escalates on dead tasks. Each escalated task is classified by its own failure
- * category; only technical ones become suggestions. Idempotent and bounded (see the module comment). One transaction.
+ * The caller names an objective and a batch; the scheduler's own records decide whether that is true. The objective must have a
+ * pinned lifecycle for exactly this batch, in the phase the caller claims. Nothing here is taken on the caller's word.
  */
-export function suggestForDeadTasks(store: SchedulerStore, input: { objectiveId: string; batchId: string; tasks: readonly TaskRow[]; actor: string }): SuggestOutcome {
+function requirePinned(store: SchedulerStore, objectiveId: string, batchId: string, phase: 'ESCALATED' | 'NOT_ACCEPTED'): void {
+  const hasTable = Boolean(store.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'objective_lifecycle'").get());
+  const row = hasTable ? (store.db.prepare('SELECT phase FROM objective_lifecycle WHERE objective_id = ? AND batch_id = ?').get(objectiveId, batchId) as { phase: string } | undefined) : undefined;
+  if (!row) throw new SuggestionError('invalid', `objective ${objectiveId} has no pinned lifecycle for batch ${batchId}`);
+  if (row.phase !== phase) throw new SuggestionError('invalid', `objective ${objectiveId} is ${row.phase}, not ${phase}: nothing to suggest`);
+}
+
+/**
+ * Called by the lifecycle driver when an objective escalates on dead tasks. Each task is re-read from the scheduler (the caller's
+ * copy is only an id): it must belong to the batch, and its CURRENT state and failure category decide. Only technical categories
+ * become suggestions. Idempotent and bounded (see the module comment). One transaction.
+ */
+export function suggestForDeadTasks(store: SchedulerStore, input: { objectiveId: string; batchId: string; tasks: readonly Pick<TaskRow, 'id'>[]; actor: string }): SuggestOutcome {
   const out: SuggestOutcome = { created: [], skipped: [] };
   store.transact(() => {
     ensureSchema(store);
-    for (const task of input.tasks) {
+    requirePinned(store, input.objectiveId, input.batchId, 'ESCALATED');
+    for (const claimed of input.tasks) {
+      const task = store.getTask(claimed.id);
+      if (!task || task.batchId !== input.batchId) throw new SuggestionError('invalid', `task ${claimed.id} is not a task of batch ${input.batchId}`);
+      if (!DEAD_END_STATES.has(task.state)) {
+        out.skipped.push({ taskId: task.id, why: `${task.state} is no longer a dead end` });
+        continue;
+      }
       const cls = classifyEscalation(task.failureCategory);
       if (cls.kind !== 'technical') {
         out.skipped.push({ taskId: task.id, why: cls.kind === 'operator' ? `operator decision, not a meeting: ${cls.why}` : cls.why });
@@ -245,14 +279,27 @@ export function suggestForDeadTasks(store: SchedulerStore, input: { objectiveId:
   return out;
 }
 
-/** Called when the pinned oracle rejects an integrated objective (NOT_ACCEPTED): one objective-level suggestion. */
-export function suggestForRejectedObjective(store: SchedulerStore, input: { objectiveId: string; batchId: string; detail: string; evidenceHash: string; actor: string }): SuggestOutcome {
+/**
+ * Called when the pinned oracle rejects an integrated objective (NOT_ACCEPTED): one objective-level suggestion. The lifecycle must
+ * be NOT_ACCEPTED for this batch, the evidence hash must be the one recorded with that verdict, and the reason is the recorded
+ * verdict's own text (not a caller's description).
+ */
+export function suggestForRejectedObjective(store: SchedulerStore, input: { objectiveId: string; batchId: string; evidenceHash: string; actor: string }): SuggestOutcome {
   const out: SuggestOutcome = { created: [], skipped: [] };
   store.transact(() => {
     ensureSchema(store);
+    requirePinned(store, input.objectiveId, input.batchId, 'NOT_ACCEPTED');
+    const event = store.db.prepare("SELECT reason, detail FROM objective_lifecycle_events WHERE objective_id = ? AND to_phase = 'NOT_ACCEPTED' ORDER BY seq DESC LIMIT 1").get(input.objectiveId) as { reason: string | null; detail: string | null } | undefined;
+    let recorded: unknown;
+    try {
+      recorded = event?.detail ? (JSON.parse(event.detail) as { evidenceHash?: unknown }).evidenceHash : undefined;
+    } catch {
+      recorded = undefined;
+    }
+    if (!event || typeof recorded !== 'string' || recorded !== input.evidenceHash) throw new SuggestionError('invalid', `the evidence hash does not match the NOT_ACCEPTED verdict recorded for objective ${input.objectiveId}`);
     insert(store, {
       meetingType: 'acceptance_failure', category: 'not_accepted', objectiveId: input.objectiveId, batchId: input.batchId, rootTask: null,
-      reason: `objective ${input.objectiveId} is NOT_ACCEPTED by its pinned oracle: ${input.detail}`,
+      reason: `objective ${input.objectiveId} is NOT_ACCEPTED by its pinned oracle: ${event.reason ?? 'no reason recorded'}`,
       evidence: [{ kind: 'lifecycle', ref: input.objectiveId, detail: `acceptance evidence ${input.evidenceHash.slice(0, 16)}` }],
     }, input.actor, out);
   });
@@ -262,6 +309,7 @@ export function suggestForRejectedObjective(store: SchedulerStore, input: { obje
 /** The explicit decision on a pending suggestion. Once decided, it never changes (enforced by the table's trigger too). */
 export function decideSuggestion(store: SchedulerStore, id: string, decision: { status: 'accepted'; by: string; sessionId: string } | { status: 'dismissed'; by: string; reason: string }): MeetingSuggestion {
   return store.transact(() => {
+    assertSuggestionGuards(store);
     const s = getSuggestion(store, id);
     if (!s) throw new SuggestionError('not_found', `no meeting suggestion ${id}`);
     if (s.status !== 'pending') throw new SuggestionError('not_pending', `suggestion ${id} is already ${s.status}`);
