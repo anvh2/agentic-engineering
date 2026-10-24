@@ -157,7 +157,7 @@ export function isCollaborationId(value: string): boolean {
 
 const UNATTRIBUTED = (reason: string): Attribution => ({ status: 'UNATTRIBUTED', batchId: null, project: null, reason });
 /** Resolves a thread's own references in the scheduler of record; never by name similarity. */
-function attribute(db: DatabaseSync | null, refs: { batchId?: string; taskId?: string; objectiveId?: string }): Attribution {
+export function attribute(db: DatabaseSync | null, refs: { batchId?: string; taskId?: string; objectiveId?: string }): Attribution {
   if (!db) return UNATTRIBUTED('This store is not the scheduler of record; its references cannot be resolved here.');
   if (!refs.batchId && !refs.taskId)
     return UNATTRIBUTED(refs.objectiveId ? `Only an unverified objective label (${refs.objectiveId}); no scheduler batch or task reference.` : 'No scheduler batch or task reference.');

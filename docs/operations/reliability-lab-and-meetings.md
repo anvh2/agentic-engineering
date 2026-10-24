@@ -42,4 +42,25 @@ The decision and the evidence are in the store; `lead meeting status` and the St
 
 ### When meetings happen
 
-Nothing in the execution path opens a discussion or a meeting by itself: objective planning, the scheduler, the lifecycle driver and the supervisor never call the collaboration store, and an escalation is recorded as a lifecycle event and the task's state reason. A meeting exists only when the Engineering Lead (or an operator) runs `lead meeting open` about a decision that needs discussion: an architecture question, a significant blocker, an escalation that changes a plan. Use the references above so the meeting is attached to that work. The LIVE engineering council (`npm run council`) is a separate mechanism with its own database (`.workdir/council/council.db`); the console lists it under Council, never as an ordinary meeting.
+Nothing in the execution path opens a discussion or a meeting by itself: objective planning, the scheduler, the lifecycle driver and the supervisor never call the collaboration store, and an escalation is recorded as a lifecycle event and the task's state reason. A meeting exists only when the Engineering Lead (or an operator) runs `lead meeting open` about a decision that needs discussion: an architecture question, a significant blocker, an escalation that changes a plan. Use the references above so the meeting is attached to that work.
+
+### Meeting suggestions (M12)
+
+When an objective escalates for a **technical** reason, the lifecycle driver records a *suggestion* that the Lead hold a meeting. A suggestion is not a meeting: it opens no thread and no session.
+
+| The escalated task's runtime failure category | Suggestion |
+| --- | --- |
+| `coding_attempts_exhausted` | `technical_escalation` |
+| `review_rejected`, `escalated_by_reviewer`, `review_gate_blocked` | `review_escalation` |
+| `integration_conflict`, `integration_verification_failed`, `diverged_after_review` | `integration_failure` |
+| the pinned oracle rejects the objective (`NOT_ACCEPTED`) | `acceptance_failure` |
+| `forbidden_mutation`, `provider_not_authorized`, `source_tree_dirty`, `cancelled` | **none**: security, authorization, budget and operator stops are decided by an operator; no meeting can approve them |
+| timeouts, unavailable runtime or provider, lost leases, `dependency_failed`, anything else | none (retryable or derived) |
+
+- **Evidence, not opinion.** The reason is the task's own runtime record (`<task> is <state> [<category>]: <state reason>`), with the task and its latest review decision as evidence. It is fixed when the suggestion is created; the table refuses any later change to its content, and nothing a model writes in a meeting can alter it.
+- **References** are the scheduler's: project and batch from the batch row, the objective from its pinned lifecycle, and the **root** task of a correction chain.
+- **Proposed participants** are a proposal only (the Lead as chair, the task's worker provider, a reviewer for review and integration failures). Opening the meeting still needs explicit, authorized `--participant` specs.
+- **Bounded.** One suggestion per (batch, root task, category), ever: an objective that is resumed and escalates the same way again, a correction of the same task, or a dismissed suggestion is never suggested again. At most 3 per batch.
+- **Explicit acceptance.** `lead meeting suggestions [--status pending]` lists them. `lead meeting open <session> --suggestion <id> ...` opens a real meeting about exactly that work (references verified again; a contradicting `--objective/--batch/--task` refuses) and marks the suggestion accepted in the same transaction. `lead meeting dismiss-suggestion <id> --by <id> --reason "..."` dismisses it. A suggestion is decided once.
+- **Visible, labelled.** The Organization console lists them in the Meetings section under *Suggested meetings*, badged NOT MEETINGS, from the read-only `GET /control-center/v1/meeting-suggestions`. They never appear in the meetings list or the meeting counts.
+- A failure to record a suggestion is audited on the lifecycle (`meeting_suggestion_failed`) and never changes the objective's outcome. The LIVE engineering council (`npm run council`) is a separate mechanism with its own database (`.workdir/council/council.db`); the console lists it under Council, never as an ordinary meeting.

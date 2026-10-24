@@ -7,6 +7,7 @@ import { git } from '../../runtime/scheduler/test-helpers.ts';
 import { cancelObjective, REVIEWER, resumeObjective, runObjectiveLifecycle } from './driver.ts';
 import { verifyPinnedOracle } from './oracle.ts';
 import { GOOD, VACUOUS_ORACLE, harness, standardTasks } from './__testing__/fixture.ts';
+import { listSuggestions } from '../collaboration/suggestions.ts';
 
 const solutions = { pad: [GOOD.pad], title: [GOOD.title], describe: [GOOD.describe] };
 const kinds = (h: ReturnType<typeof harness>) => h.lifecycle.events('obj1').map((e) => (e.kind === 'phase' ? `phase:${e.toPhase}` : e.kind));
@@ -514,5 +515,47 @@ describe('M8.5 lifecycle: whole objective under the OS sandbox', { skip: process
     const out = await runObjectiveLifecycle(h.deps, 'obj1');
     assert.equal(out.verdict, 'ACCEPTED', JSON.stringify({ stops: out.stops, candidate: out.acceptance?.candidate?.commands }));
     assert.equal((out.acceptance!.negativeControl as { passed: boolean }).passed, false);
+  });
+});
+
+describe('M12 lifecycle: meeting suggestions on technical escalations', () => {
+  it('a review dead end suggests one meeting about the root task, audited; running again suggests nothing new', async () => {
+    const h = harness({ solutions: { ...solutions, pad: [GOOD.padWrong] }, maxReviewCorrections: 2 });
+    await h.pin();
+    const out = await runObjectiveLifecycle(h.deps, 'obj1');
+    assert.equal(out.verdict, 'ESCALATED');
+    const all = listSuggestions(h.store);
+    assert.equal(all.length, 1);
+    const [s] = all;
+    assert.equal(s.status, 'pending', 'suggested, not opened');
+    assert.equal(s.meetingType, 'review_escalation');
+    assert.deepEqual([s.refs.objectiveId, s.refs.batchId, s.refs.taskId], ['obj1', 'obj1', 'pad'], 'the root task, not the correction');
+    const last = h.store.requireTask('pad-fix2');
+    assert.equal(s.reason, `pad-fix2 is ${last.state} [${last.failureCategory}]: ${last.stateReason}`, 'the reason is the runtime record');
+    assert.ok(kinds(h).includes('meeting_suggested'));
+    assert.equal(h.store.db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name = 'collab_events'").get()?.n, 0, 'no thread or meeting was opened');
+
+    assert.equal((await runObjectiveLifecycle(h.deps, 'obj1')).verdict, 'ESCALATED');
+    resumeObjective(h.lifecycle, 'obj1', { actor: 'operator', reason: 'look again' });
+    await runObjectiveLifecycle(h.deps, 'obj1');
+    assert.equal(listSuggestions(h.store).length, 1, 'a re-escalation never suggests the same meeting twice');
+  });
+
+  it('an authorization stop is for the operator: no meeting is suggested', async () => {
+    const h = harness({ solutions, tasks: standardTasks({ pad: 'codex' }) });
+    await h.pin();
+    assert.equal((await runObjectiveLifecycle(h.deps, 'obj1')).verdict, 'ESCALATED');
+    assert.equal(h.store.requireTask('pad').failureCategory, 'provider_not_authorized');
+    assert.deepEqual(listSuggestions(h.store), []);
+    assert.equal(kinds(h).includes('meeting_suggested'), false);
+  });
+
+  it('an oracle rejection suggests one acceptance-failure meeting about the objective', async () => {
+    const h = harness({ solutions: { ...solutions, pad: [GOOD.padBytes] } });
+    await h.pin();
+    assert.equal((await runObjectiveLifecycle(h.deps, 'obj1')).verdict, 'NOT_ACCEPTED');
+    const [s] = listSuggestions(h.store);
+    assert.deepEqual([s.meetingType, s.category, s.refs.taskId, s.status], ['acceptance_failure', 'not_accepted', null, 'pending']);
+    assert.match(s.reason, /^objective obj1 is NOT_ACCEPTED by its pinned oracle: /);
   });
 });

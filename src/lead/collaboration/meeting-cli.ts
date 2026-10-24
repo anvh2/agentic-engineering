@@ -13,6 +13,7 @@ import type { ProviderRegistry } from '../../workers/providers/registry.ts';
 import { inboxEntries, inboxPath, LeadInboxParticipant, ollamaChatTransport, ProviderParticipant, workerProviderTransport, type CapacityLike, type LeadInboxReply, type MeetingTransport, type MeetingTransportKind, type ParticipantLimits } from './meeting-participants.ts';
 import { renderMeetingRecord } from './record-markdown.ts';
 import { ENGINEERING_LEAD_ID } from './roster.ts';
+import { decideSuggestion, getSuggestion, listSuggestions, SuggestionError, type SuggestionStatus } from './suggestions.ts';
 
 /**
  * `lead meeting open|run|status|record|cancel` (M10): real, model-backed engineering meetings on top of the M9
@@ -150,7 +151,11 @@ export async function runMeetingCommand(argv: string[], deps: MeetingCommandDeps
   const a = argsOf(argv);
   const [sub, sessionId] = a.positional;
   try {
-    if (!sub || !['open', 'run', 'status', 'record', 'cancel'].includes(sub)) throw new MeetingCliError('usage: lead meeting open|run|status|record|cancel <sessionId> ...');
+    // Meeting suggestions (M12) are not meetings and have no session: they are listed and dismissed on their own, and
+    // accepted only by opening a real meeting with `open <sessionId> --suggestion <id>`.
+    if (sub === 'suggestions') return suggestions(a, deps, out);
+    if (sub === 'dismiss-suggestion') return dismissSuggestion(sessionId, a, deps, out);
+    if (!sub || !['open', 'run', 'status', 'record', 'cancel'].includes(sub)) throw new MeetingCliError('usage: lead meeting open|run|status|record|cancel <sessionId> ... | suggestions [--status S] [--batch B] | dismiss-suggestion <id> --by <id> --reason "..."');
     if (!sessionId || !idSchema.safeParse(sessionId).success) throw new MeetingCliError(`lead meeting ${sub}: a valid <sessionId> is required`);
     switch (sub) {
       case 'open':
@@ -172,6 +177,10 @@ export async function runMeetingCommand(argv: string[], deps: MeetingCommandDeps
     if (e instanceof CollaborationError) {
       err(`lead meeting: ${e.code}: ${e.message}`);
       return 1;
+    }
+    if (e instanceof SuggestionError) {
+      err(`lead meeting: ${e.code}: ${e.message}`);
+      return 2;
     }
     throw e;
   }
@@ -223,6 +232,24 @@ export function verifiedRefs(store: SchedulerStore, input: { objectiveId?: strin
   return { ...(objectiveId ? { objectiveId } : {}), ...(batchId ? { batchId } : {}), ...(taskId ? { taskId } : {}) };
 }
 
+function suggestions(a: ReturnType<typeof argsOf>, deps: MeetingCommandDeps, out: (l: string) => void): number {
+  const status = a.flag('--status');
+  if (status !== undefined && !['pending', 'accepted', 'dismissed'].includes(status)) throw new MeetingCliError('lead meeting suggestions: --status must be pending, accepted or dismissed');
+  const list = listSuggestions(deps.store, { status: status as SuggestionStatus | undefined, batchId: a.flag('--batch') });
+  out(JSON.stringify({ note: 'Suggestions are not meetings: nothing was opened. Accept one with `lead meeting open <sessionId> --suggestion <id> ...` or dismiss it with a reason.', suggestions: list }, null, 2));
+  return 0;
+}
+
+function dismissSuggestion(id: string | undefined, a: ReturnType<typeof argsOf>, deps: MeetingCommandDeps, out: (l: string) => void): number {
+  if (!id) throw new MeetingCliError('usage: lead meeting dismiss-suggestion <id> --by <id> --reason "..."');
+  const by = a.flag('--by');
+  const reason = a.flag('--reason');
+  if (!by || !reason) throw new MeetingCliError('lead meeting dismiss-suggestion: --by <id> and --reason "..." are required');
+  const s = decideSuggestion(deps.store, id, { status: 'dismissed', by, reason });
+  out(JSON.stringify({ dismissed: s.id, by: s.decidedBy, reason: s.decisionReason }, null, 2));
+  return 0;
+}
+
 async function open(sessionId: string, a: ReturnType<typeof argsOf>, deps: MeetingCommandDeps, env: NodeJS.ProcessEnv, out: (l: string) => void, err: (l: string) => void): Promise<number> {
   if (existsSync(sidecarPath(deps.meetingsDir, sessionId))) throw new MeetingCliError(`meeting ${sessionId} already exists (${sidecarPath(deps.meetingsDir, sessionId)})`);
   const title = a.flag('--title');
@@ -235,7 +262,19 @@ async function open(sessionId: string, a: ReturnType<typeof argsOf>, deps: Meeti
   const operators = a.all('--operator');
   if (operators.length === 0) throw new MeetingCliError('lead meeting open: name the operator with --operator <id> (who can cancel the meeting)');
   // Checked before anything is contacted or written: a meeting about real work carries references the console can verify.
-  const refs = verifiedRefs(deps.store, { objectiveId: refFlag(a, '--objective'), batchId: refFlag(a, '--batch'), taskId: refFlag(a, '--task') });
+  const explicit = { objectiveId: refFlag(a, '--objective'), batchId: refFlag(a, '--batch'), taskId: refFlag(a, '--task') };
+  // Accepting a suggestion: the meeting is about exactly the work the suggestion names, verified again now.
+  const suggestionId = refFlag(a, '--suggestion');
+  const suggestion = suggestionId ? getSuggestion(deps.store, suggestionId) : undefined;
+  if (suggestionId && !suggestion) throw new MeetingCliError(`lead meeting open: no meeting suggestion ${suggestionId}`);
+  if (suggestion && suggestion.status !== 'pending') throw new MeetingCliError(`lead meeting open: suggestion ${suggestion.id} is already ${suggestion.status}`);
+  if (suggestion) {
+    const from = { objectiveId: suggestion.refs.objectiveId ?? undefined, batchId: suggestion.refs.batchId, taskId: suggestion.refs.taskId ?? undefined };
+    for (const key of ['objectiveId', 'batchId', 'taskId'] as const) {
+      if (explicit[key] !== undefined && explicit[key] !== from[key]) throw new MeetingCliError(`lead meeting open: --${key.replace('Id', '')} ${explicit[key]} contradicts suggestion ${suggestion.id} (${from[key] ?? 'none'})`);
+    }
+  }
+  const refs = verifiedRefs(deps.store, suggestion ? { objectiveId: suggestion.refs.objectiveId ?? undefined, batchId: suggestion.refs.batchId, taskId: suggestion.refs.taskId ?? undefined } : explicit);
   const limitsDefault: ParticipantLimits = {
     maxOutputTokens: num(a.flag('--max-output-tokens'), 1_200, '--max-output-tokens'),
     maxInvocations: num(a.flag('--max-participant-invocations'), 4, '--max-participant-invocations'),
@@ -295,10 +334,15 @@ async function open(sessionId: string, a: ReturnType<typeof argsOf>, deps: Meeti
     openedAt: new Date().toISOString(),
   };
   const collab = new CollaborationStore(deps.store, directoryOf(sidecar, leadOf(sidecar).model));
-  collab.openThread({ threadId: sidecar.threadId, title, refs, participants: participants.map((p) => p.id), actorId: ENGINEERING_LEAD_ID, idempotencyKey: `meeting-open-thread:${sessionId}` });
-  // Excluded participants are recorded in the thread itself, so the record shows who could not take part and why.
-  for (const x of excluded) collab.post({ threadId: sidecar.threadId, authorId: ENGINEERING_LEAD_ID, kind: 'comment', body: `${x.id} (${x.provider}/${x.model}) is not in this meeting: ${x.reason}`, idempotencyKey: `meeting-excluded:${sessionId}:${x.id}` });
-  collab.openSession({ sessionId, threadId: sidecar.threadId, agenda, participants: participants.map((p) => p.id), chair: ENGINEERING_LEAD_ID, limits: sidecar.limits, actorId: ENGINEERING_LEAD_ID, idempotencyKey: `meeting-open-session:${sessionId}` });
+  // One transaction: the thread, the session and (when accepting a suggestion) its acceptance commit together or not at all.
+  deps.store.transact(() => {
+    collab.openThread({ threadId: sidecar.threadId, title, refs, participants: participants.map((p) => p.id), actorId: ENGINEERING_LEAD_ID, idempotencyKey: `meeting-open-thread:${sessionId}` });
+    if (suggestion) collab.post({ threadId: sidecar.threadId, authorId: ENGINEERING_LEAD_ID, kind: 'comment', body: `Opened from meeting suggestion ${suggestion.id} (${suggestion.meetingType}): ${suggestion.reason}`, evidence: suggestion.refs.taskId ? [{ kind: 'task', ref: suggestion.refs.taskId }] : [], idempotencyKey: `meeting-suggestion:${sessionId}` });
+    // Excluded participants are recorded in the thread itself, so the record shows who could not take part and why.
+    for (const x of excluded) collab.post({ threadId: sidecar.threadId, authorId: ENGINEERING_LEAD_ID, kind: 'comment', body: `${x.id} (${x.provider}/${x.model}) is not in this meeting: ${x.reason}`, idempotencyKey: `meeting-excluded:${sessionId}:${x.id}` });
+    collab.openSession({ sessionId, threadId: sidecar.threadId, agenda, participants: participants.map((p) => p.id), chair: ENGINEERING_LEAD_ID, limits: sidecar.limits, actorId: ENGINEERING_LEAD_ID, idempotencyKey: `meeting-open-session:${sessionId}` });
+    if (suggestion) decideSuggestion(deps.store, suggestion.id, { status: 'accepted', by: ENGINEERING_LEAD_ID, sessionId });
+  });
   mkdirSync(join(deps.meetingsDir, sessionId, 'inbox'), { recursive: true });
   writeFileSync(sidecarPath(deps.meetingsDir, sessionId), JSON.stringify(sidecar, null, 2) + '\n');
   out(JSON.stringify({ opened: sessionId, threadId: sidecar.threadId, participants: participants.map((p) => `${p.id} (${p.provider}/${p.model})`), excluded, limits: sidecar.limits, participantLimits: limitsDefault }, null, 2));
