@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +14,8 @@ import { ProviderRegistry, type ProviderEntry } from '../../workers/providers/re
 import { directoryOf, runMeetingCommand, sidecarPath, verifiedRefs, type MeetingCommandDeps, type MeetingSidecar } from './meeting-cli.ts';
 import { buildTurnPrompt, parseModelReply } from './meeting-participants.ts';
 import { ENGINEERING_LEAD_ID } from './roster.ts';
+import { pinObjective } from './__testing__/pin.ts';
+import { decideSuggestion, listSuggestions, suggestForDeadTasks } from './suggestions.ts';
 
 /** Deterministic: no network, no model, no paid provider. Ollama is a fake fetch; Gemini is the fake CLI under its real adapter. */
 
@@ -408,5 +410,121 @@ describe('M12 lead meeting: verified references', () => {
       assert.equal(existsSync(sidecarPath(e.deps.meetingsDir, 'm-flags')), false);
       e.store.close();
     }
+  });
+});
+
+describe('M12 lead meeting: accepting or dismissing a meeting suggestion', () => {
+  /** A pinned objective whose task escalated on review: the lifecycle would have suggested exactly this. */
+  const withSuggestion = (e: ReturnType<typeof env>) => {
+    e.store.createBatch(plan(makeRepo(), [workerTask('obj1.pad'), workerTask('obj1.title')], { batchId: 'obj1' }));
+    pinObjective(e.store, 'obj1', 'obj1', 'ESCALATED');
+    e.store.db.prepare("UPDATE tasks SET state = 'ESCALATED', failure_category = 'review_rejected', state_reason = 'finding:comment_removed' WHERE id = 'obj1.pad'").run();
+    return suggestForDeadTasks(e.store, { objectiveId: 'obj1', batchId: 'obj1', tasks: [e.store.requireTask('obj1.pad')], actor: 'lifecycle-driver' }).created[0];
+  };
+
+  it('opening a meeting with --suggestion attaches it to exactly that work and accepts the suggestion in the same transaction', async () => {
+    const e = env();
+    const s = withSuggestion(e);
+    assert.equal(await e.cmd('suggestions', '--status', 'pending'), 0);
+    assert.deepEqual(e.lastJson().suggestions.map((x: { id: string }) => x.id), [s.id]);
+    assert.match(e.lastJson().note, /not meetings/);
+    assert.equal(await e.open('m-sg', ['--suggestion', s.id]), 0);
+    const thread = e.collab('m-sg').thread('t-m-sg');
+    assert.deepEqual(thread.thread.refs, { objectiveId: 'obj1', batchId: 'obj1', taskId: 'obj1.pad' });
+    assert.match(thread.messages[0].body, new RegExp(`^Opened from meeting suggestion ${s.id} \\(review_escalation\\): obj1.pad is ESCALATED`));
+    const [accepted] = listSuggestions(e.store);
+    assert.deepEqual([accepted.status, accepted.sessionId, accepted.decidedBy], ['accepted', 'm-sg', ENGINEERING_LEAD_ID], 'the Lead accepts by default');
+    assert.equal(await e.open('m-sg2', ['--suggestion', s.id]), 2, 'a suggestion is accepted once');
+    assert.match(e.errs.join('\n'), /already accepted/);
+    e.store.close();
+  });
+
+  it('a reference that contradicts the suggestion refuses the meeting; nothing is written and the suggestion stays pending', async () => {
+    const e = env();
+    const s = withSuggestion(e);
+    assert.equal(await e.open('m-x', ['--suggestion', s.id, '--task', 'obj1.title']), 2);
+    assert.match(e.errs.join('\n'), /--task obj1.title contradicts suggestion/);
+    assert.equal(existsSync(sidecarPath(e.deps.meetingsDir, 'm-x')), false);
+    assert.equal(listSuggestions(e.store)[0].status, 'pending');
+    assert.equal(await e.open('m-y', ['--suggestion', 'sg-nope']), 2);
+    e.store.close();
+  });
+
+  it('an operator who accepts is recorded as the decider; someone outside the meeting cannot accept', async () => {
+    const e = env();
+    const s = withSuggestion(e);
+    assert.equal(await e.open('m-op', ['--suggestion', s.id, '--accepted-by', 'mallory']), 2);
+    assert.match(e.errs.join('\n'), /--accepted-by mallory must be/);
+    assert.equal(listSuggestions(e.store)[0].status, 'pending');
+    assert.equal(await e.open('m-op', ['--suggestion', s.id, '--accepted-by', 'anvh2']), 0);
+    assert.equal(listSuggestions(e.store)[0].decidedBy, 'anvh2');
+    e.store.close();
+  });
+
+  it('an unwritable meetings directory fails BEFORE the acceptance commits, so the same command works again afterwards', async () => {
+    const e = env();
+    const s = withSuggestion(e);
+    writeFileSync(e.deps.meetingsDir, 'not a directory');
+    let code: number | string;
+    try {
+      code = await e.open('m-fs', ['--suggestion', s.id]);
+    } catch {
+      code = 'threw';
+    }
+    assert.notEqual(code, 0);
+    assert.equal(listSuggestions(e.store)[0].status, 'pending', 'nothing was accepted');
+    assert.equal((e.store.db.prepare('SELECT COUNT(*) AS n FROM collab_events').get() as { n: number }).n, 0, 'no thread or session was written');
+    rmSync(e.deps.meetingsDir);
+    assert.equal(await e.open('m-fs', ['--suggestion', s.id]), 0, 'the identical command now succeeds');
+    assert.deepEqual([listSuggestions(e.store)[0].status, listSuggestions(e.store)[0].sessionId], ['accepted', 'm-fs']);
+    assert.equal(existsSync(`${sidecarPath(e.deps.meetingsDir, 'm-fs')}.opening`), false, 'no half-published sidecar is left');
+    e.store.close();
+  });
+
+  it('a suggestion decided by someone else after the pre-check but before the commit opens nothing', async () => {
+    const e = env();
+    const s = withSuggestion(e);
+    const racing: ProviderEntry = { ...ollamaDescriptorEntry(), probe: async () => {
+      decideSuggestion(e.store, s.id, { status: 'dismissed', by: 'anvh2', reason: 'handled elsewhere' });
+      return { state: 'available', detail: `${MODEL} is installed` };
+    } };
+    e.deps.registry = new ProviderRegistry().register(racing);
+    assert.equal(await e.open('m-race', ['--suggestion', s.id]), 2);
+    assert.match(e.errs.join('\n'), /already dismissed/);
+    assert.equal(existsSync(sidecarPath(e.deps.meetingsDir, 'm-race')), false);
+    assert.equal(existsSync(join(e.deps.meetingsDir, 'm-race')), false, 'the directory this run created is removed again');
+    assert.equal(existsSync(`${sidecarPath(e.deps.meetingsDir, 'm-race')}.opening`), false);
+    assert.equal((e.store.db.prepare('SELECT COUNT(*) AS n FROM collab_events').get() as { n: number }).n, 0, 'the thread and session rolled back with it');
+    assert.equal(listSuggestions(e.store)[0].status, 'dismissed');
+    e.store.close();
+  });
+
+  it('accepting and dismissing fail closed while a table guard is missing: no thread, no sidecar, still pending', async () => {
+    const e = env();
+    const s = withSuggestion(e);
+    e.store.db.exec('DROP TRIGGER meeting_suggestions_insert_new');
+    assert.equal(await e.open('m-guard', ['--suggestion', s.id]), 2);
+    assert.match(e.errs.join('\n'), /missing its guard.*meeting_suggestions_insert_new/);
+    assert.equal(existsSync(join(e.deps.meetingsDir, 'm-guard')), false, 'not even the meeting directory');
+    assert.equal((e.store.db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'collab_events'").get() as { n: number }).n, 0, 'refused before the collaboration tables were touched');
+    e.errs.length = 0;
+    const dismiss = await e.cmd('dismiss-suggestion', s.id, '--by', 'anvh2', '--reason', 'not now');
+    assert.notEqual(dismiss, 0);
+    assert.equal(listSuggestions(e.store)[0].status, 'pending');
+    e.store.close();
+  });
+
+  it('dismissing needs who and why; a dismissed suggestion cannot be opened', async () => {
+    const e = env();
+    const s = withSuggestion(e);
+    assert.equal(await e.cmd('dismiss-suggestion', s.id, '--by', 'anvh2'), 2);
+    assert.equal(await e.cmd('dismiss-suggestion', s.id, '--by', 'any one', '--reason', 'r'), 2, 'the decider is an id');
+    assert.equal(await e.cmd('dismiss-suggestion', s.id, '--by', 'anvh2', '--reason', '   '), 2);
+    assert.equal(listSuggestions(e.store)[0].status, 'pending');
+    assert.equal(await e.cmd('dismiss-suggestion', s.id, '--by', 'anvh2', '--reason', 'already re-planned'), 0);
+    assert.deepEqual([listSuggestions(e.store)[0].status, listSuggestions(e.store)[0].decisionReason], ['dismissed', 'already re-planned']);
+    assert.equal(await e.open('m-z', ['--suggestion', s.id]), 2);
+    assert.match(e.errs.join('\n'), /already dismissed/);
+    e.store.close();
   });
 });

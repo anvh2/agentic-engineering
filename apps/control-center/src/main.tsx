@@ -24,6 +24,7 @@ import {
 import { ATTENTION, callTokens, claimElapsed, claimElapsedOrAbsence, currentTasks, filterByStatus, inspectorObservations, laneEvidence, needsAttention, observedActivity, priced, taskUsage, usageAbsence, usageValue } from './observations.ts';
 const show = (v: number | string) => (typeof v === 'number' ? v.toLocaleString() : v);
 import { CollaborationView } from './collaboration.tsx';
+import { SuggestedMeetings } from './suggestions.tsx';
 import { AgentsView } from './agents.tsx';
 import './style.css';
 import { EMPTY_TEXT, emptyReason, filterCalls, filteredUsage, filterRuns, parseView, scopeQuery, serializeView, WINDOWS, type ViewState } from './view-state.ts';
@@ -839,6 +840,7 @@ function App() {
                 {(['Discussions', 'Meetings', 'Council'] as const).map(kind => <button key={kind} aria-current={collaborationKind === kind ? 'page' : undefined} onClick={() => setView({ collab: kind.toLowerCase() as ViewState['collab'], participant: '', mode: '', decision: '' })}>{kind}</button>)}
               </nav>
               <CollaborationView key={collaborationKind} kind={collaborationKind} apiBase={apiBase} view={view} setView={setView} />
+              {collaborationKind === 'Meetings' && <SuggestedMeetings apiBase={apiBase} view={view} />}
             </>}
             {page === 'Runs' && <p className="notice">Project labels come from scheduler batches. Milestone filtering and external Claude Code sessions are unavailable: no durable metadata contract is exposed. A scheduler batch, task, workflow run, model call and Council meeting are distinct identities.</p>}
             {page === 'Overview' && <p><a href="/agents" target={embedded ? '_top' : '_blank'} rel="noreferrer">Open Mastra Agents ↗</a></p>}

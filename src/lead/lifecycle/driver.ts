@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { DEAD_END_STATES, suggestForDeadTasks, suggestForRejectedObjective, type SuggestOutcome } from '../collaboration/suggestions.ts';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { integrateBatch, type CommandRunner } from '../../runtime/integration/integrate.ts';
@@ -84,7 +85,6 @@ export interface LifecycleOutcome {
 
 const rootTaskId = (id: string): string => id.replace(/-fix\d+$/, '');
 
-const DEAD_END_STATES = new Set(['ESCALATED', 'CANCELLED', 'BLOCKED', 'REVIEW_REJECTED', 'RUNTIME_FAILURE']);
 
 function summarize(lc: LifecycleRow, rounds: number, acceptance: AcceptanceRecord | null = null, stops: string[] = []): LifecycleOutcome {
   const result = lc.result as { reason?: string; acceptance?: AcceptanceRecord; stops?: string[] } | null;
@@ -159,6 +159,28 @@ async function driveObjective(deps: LifecycleDeps, objectiveId: string, options:
     return summarize(lc, rounds, null, stops);
   };
 
+  /**
+   * A technical escalation may deserve a meeting: record a suggestion (lead/collaboration/suggestions.ts). It is advisory and
+   * best-effort: it opens nothing, and a failure to record it is audited but never changes the lifecycle's outcome.
+   */
+  const suggest = (what: string, fn: () => SuggestOutcome): void => {
+    try {
+      // The suggestion and its audit event commit together: a suggestion never exists without its lifecycle record.
+      const out = store.transact(() => {
+        const result = fn();
+        if (result.created.length > 0) lifecycle.audit(objectiveId, DRIVER, 'meeting_suggested', `${what}: ${result.created.map((s) => `${s.id} (${s.meetingType})`).join(', ')}; pending an explicit decision by the Lead or an operator`, { suggestions: result.created.map((s) => s.id), skipped: result.skipped });
+        return result;
+      });
+      if (out.created.length > 0) log(`objective ${objectiveId}: meeting suggested ${out.created.map((s) => s.id).join(', ')} (accept: lead meeting open <session> --suggestion <id>)`);
+    } catch (err) {
+      try {
+        lifecycle.audit(objectiveId, DRIVER, 'meeting_suggestion_failed', `${what}: ${(err as Error).message}`);
+      } catch {
+        log(`objective ${objectiveId}: meeting suggestion not recorded (${(err as Error).message}); the objective's outcome is unchanged`);
+      }
+    }
+  };
+
   if (lc.phase === 'PINNED') lc = lifecycle.transition(objectiveId, 'EXECUTING', { actor, expectFrom: 'PINNED', reason: 'oracle pinned; execution starts' });
 
   const signature = (): string => {
@@ -198,7 +220,9 @@ async function driveObjective(deps: LifecycleDeps, objectiveId: string, options:
       const stops = (root.length > 0 ? root : dead).map((t) => `${t.id} is ${t.state}${t.failureCategory ? ` [${t.failureCategory}]` : ''}: ${t.stateReason ?? 'no reason recorded'}`);
       const partial = required.filter((t) => t.state === 'DONE').map((t) => t.id);
       stops.push(`partial integration: ${partial.length > 0 ? `${partial.join(', ')} are integrated on lead-integration/${batchId}` : 'nothing was integrated'}; main is untouched`);
-      return stop('ESCALATED', 'EXECUTING', 'task_dead_end', stops);
+      const outcome = stop('ESCALATED', 'EXECUTING', 'task_dead_end', stops);
+      if (outcome.phase === 'ESCALATED') suggest('task_dead_end', () => suggestForDeadTasks(store, { objectiveId, batchId, tasks: root, actor: DRIVER }));
+      return outcome;
     }
     // a required task that reached DONE but whose implementation was reverted since is not part of the integrated result:
     // the objective cannot be accepted on its strength, and nothing in the lifecycle re-does it by itself
@@ -240,6 +264,7 @@ async function driveObjective(deps: LifecycleDeps, objectiveId: string, options:
     return summarize(phaseNow(), rounds, record);
   }
   log(`objective ${objectiveId}: ${record.verdict} (${record.reason})`);
+  if (record.verdict === 'NOT_ACCEPTED') suggest('not_accepted', () => suggestForRejectedObjective(store, { objectiveId, batchId, evidenceHash: record.evidenceHash, actor: 'lifecycle-acceptance' }));
   if (deps.evidenceDir) {
     await mkdir(deps.evidenceDir, { recursive: true });
     await writeFile(join(deps.evidenceDir, `lifecycle-verdict-${objectiveId}.json`), `${JSON.stringify({ objectiveId, verdict: record.verdict, ...result, events: lifecycle.events(objectiveId) }, null, 2)}\n`);
