@@ -541,6 +541,19 @@ describe('M12 lifecycle: meeting suggestions on technical escalations', () => {
     assert.equal(listSuggestions(h.store).length, 1, 'a re-escalation never suggests the same meeting twice');
   });
 
+  it('a failure to record a suggestion is audited and never changes the objective outcome', async () => {
+    const h = harness({ solutions: { ...solutions, pad: [GOOD.padWrong] }, maxReviewCorrections: 2 });
+    // an incompatible table is already there: the guards are missing, so nothing may be written
+    h.store.db.exec('CREATE TABLE meeting_suggestions (id TEXT)');
+    await h.pin();
+    const out = await runObjectiveLifecycle(h.deps, 'obj1');
+    assert.equal(out.verdict, 'ESCALATED', 'the objective still ends exactly as it would have');
+    assert.ok(kinds(h).includes('meeting_suggestion_failed'));
+    assert.equal(kinds(h).includes('meeting_suggested'), false);
+    assert.match(JSON.stringify(h.lifecycle.events('obj1')), /missing its guard/);
+    assert.equal(h.store.db.prepare('SELECT count(*) AS n FROM meeting_suggestions').get()?.n, 0);
+  });
+
   it('an authorization stop is for the operator: no meeting is suggested', async () => {
     const h = harness({ solutions, tasks: standardTasks({ pad: 'codex' }) });
     await h.pin();

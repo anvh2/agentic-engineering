@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +14,7 @@ import { ProviderRegistry, type ProviderEntry } from '../../workers/providers/re
 import { directoryOf, runMeetingCommand, sidecarPath, verifiedRefs, type MeetingCommandDeps, type MeetingSidecar } from './meeting-cli.ts';
 import { buildTurnPrompt, parseModelReply } from './meeting-participants.ts';
 import { ENGINEERING_LEAD_ID } from './roster.ts';
-import { listSuggestions, suggestForDeadTasks } from './suggestions.ts';
+import { decideSuggestion, listSuggestions, suggestForDeadTasks } from './suggestions.ts';
 
 /** Deterministic: no network, no model, no paid provider. Ollama is a fake fetch; Gemini is the fake CLI under its real adapter. */
 
@@ -457,6 +457,43 @@ describe('M12 lead meeting: accepting or dismissing a meeting suggestion', () =>
     assert.equal(listSuggestions(e.store)[0].status, 'pending');
     assert.equal(await e.open('m-op', ['--suggestion', s.id, '--accepted-by', 'anvh2']), 0);
     assert.equal(listSuggestions(e.store)[0].decidedBy, 'anvh2');
+    e.store.close();
+  });
+
+  it('an unwritable meetings directory fails BEFORE the acceptance commits, so the same command works again afterwards', async () => {
+    const e = env();
+    const s = withSuggestion(e);
+    writeFileSync(e.deps.meetingsDir, 'not a directory');
+    let code: number | string;
+    try {
+      code = await e.open('m-fs', ['--suggestion', s.id]);
+    } catch {
+      code = 'threw';
+    }
+    assert.notEqual(code, 0);
+    assert.equal(listSuggestions(e.store)[0].status, 'pending', 'nothing was accepted');
+    assert.equal((e.store.db.prepare('SELECT COUNT(*) AS n FROM collab_events').get() as { n: number }).n, 0, 'no thread or session was written');
+    rmSync(e.deps.meetingsDir);
+    assert.equal(await e.open('m-fs', ['--suggestion', s.id]), 0, 'the identical command now succeeds');
+    assert.deepEqual([listSuggestions(e.store)[0].status, listSuggestions(e.store)[0].sessionId], ['accepted', 'm-fs']);
+    assert.equal(existsSync(`${sidecarPath(e.deps.meetingsDir, 'm-fs')}.opening`), false, 'no half-published sidecar is left');
+    e.store.close();
+  });
+
+  it('a suggestion decided by someone else after the pre-check but before the commit opens nothing', async () => {
+    const e = env();
+    const s = withSuggestion(e);
+    const racing: ProviderEntry = { ...ollamaDescriptorEntry(), probe: async () => {
+      decideSuggestion(e.store, s.id, { status: 'dismissed', by: 'anvh2', reason: 'handled elsewhere' });
+      return { state: 'available', detail: `${MODEL} is installed` };
+    } };
+    e.deps.registry = new ProviderRegistry().register(racing);
+    assert.equal(await e.open('m-race', ['--suggestion', s.id]), 2);
+    assert.match(e.errs.join('\n'), /already dismissed/);
+    assert.equal(existsSync(sidecarPath(e.deps.meetingsDir, 'm-race')), false);
+    assert.equal(existsSync(`${sidecarPath(e.deps.meetingsDir, 'm-race')}.opening`), false);
+    assert.equal((e.store.db.prepare('SELECT COUNT(*) AS n FROM collab_events').get() as { n: number }).n, 0, 'the thread and session rolled back with it');
+    assert.equal(listSuggestions(e.store)[0].status, 'dismissed');
     e.store.close();
   });
 

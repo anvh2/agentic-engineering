@@ -377,7 +377,7 @@ test('suggested meetings: runtime records labelled NOT MEETINGS, scoped, decided
     const a = suggestForDeadTasks(h.scheduler, { objectiveId: 'OBJ-A', batchId: 'A1', tasks: tasks(['a1-pad', 'a1-code', 'a1-sec']), actor: 'lifecycle-driver' });
     assert.deepEqual(a.created.map(s => s.refs.taskId), ['a1-pad', 'a1-code'], 'a security stop is never suggested');
     const [b] = suggestForDeadTasks(h.scheduler, { objectiveId: 'OBJ-B', batchId: 'B1', tasks: tasks(['b-int']), actor: 'lifecycle-driver' }).created;
-    decideSuggestion(h.scheduler, a.created[1].id, { status: 'accepted', by: ENGINEERING_LEAD_ID, sessionId: 'm-accepted' });
+    decideSuggestion(h.scheduler, a.created[1].id, { status: 'accepted', by: ENGINEERING_LEAD_ID, sessionId: 's-alpha' });
     decideSuggestion(h.scheduler, b.id, { status: 'dismissed', by: 'anvh2', reason: 'already re-planned' });
     openMeeting(h.store, { threadId: 't-alpha', sessionId: 's-alpha', refs: { batchId: 'A1' } });
     h.scheduler.close();
@@ -408,7 +408,7 @@ test('suggested meetings: runtime records labelled NOT MEETINGS, scoped, decided
     assert.match(pending, new RegExp(`Proposed participants: ${ENGINEERING_LEAD_ID} \\(engineering_lead\\).*reviewer \\(reviewer\\)`));
     assert.match(pending, /Evidence: task a1-pad: ESCALATED \[review_rejected\]/);
     const decided = (await rows.nth(1).innerText()) + (await rows.nth(2).innerText());
-    assert.match(decided, new RegExp(`Accepted by ${ENGINEERING_LEAD_ID} · meeting m-accepted`));
+    assert.match(decided, new RegExp(`Accepted by ${ENGINEERING_LEAD_ID} · meeting s-alpha`));
     assert.match(decided, /Dismissed by anvh2: already re-planned/);
     assert.doesNotMatch(decided, /objective OBJ-B/, 'an objective label without a pinned lifecycle is not shown as verified');
     assert.equal(await panel.getByText('a1-sec', { exact: false }).count(), 0);

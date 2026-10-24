@@ -13,6 +13,7 @@ export interface MeetingSuggestionView {
   status: 'pending' | 'accepted' | 'dismissed';
   meetingType: string;
   category: string;
+  /** Shown only when the objective's pinned lifecycle confirms it runs as this batch; otherwise null. */
   objectiveId: string | null;
   batchId: string;
   taskId: string | null;
@@ -24,7 +25,7 @@ export interface MeetingSuggestionView {
   decidedAt: string | null;
   decidedBy: string | null;
   decisionReason: string | null;
-  /** Shown only when the objective's pinned lifecycle confirms it runs as this batch; otherwise null. */
+  /** The meeting opened when the suggestion was accepted: written in the same transaction that opened it, and fixed by the table's CHECK. */
   sessionId: string | null;
 }
 
@@ -50,11 +51,13 @@ export function createSuggestionReader(options: { dbPath: string }): SuggestionR
           return { availability: 'AVAILABLE', reason: 'No meeting has been suggested in this scheduler database.', pending: 0, suggestions: [] };
         }
         // The rows are presented as fixed runtime records only while the table's own guards are in place.
-        const guards = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name IN ('meeting_suggestions_fixed', 'meeting_suggestions_no_delete')").all() as { name: string }[]).length;
-        if (guards !== 2) return { availability: 'CORRUPT', reason: 'meeting_suggestions guard missing: its rows cannot be shown as fixed runtime records.', pending: 0, suggestions: [] };
+        const guards = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name IN ('meeting_suggestions_fixed', 'meeting_suggestions_no_delete', 'meeting_suggestions_insert_new')").all() as { name: string }[]).length;
+        if (guards !== 3) return { availability: 'CORRUPT', reason: 'meeting_suggestions guard missing: its rows cannot be shown as fixed runtime records.', pending: 0, suggestions: [] };
         const hasLifecycle = Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'objective_lifecycle'").get());
         const verifiedObjective = (objectiveId: string | null, batchId: string): string | null =>
           objectiveId && hasLifecycle && db.prepare('SELECT 1 FROM objective_lifecycle WHERE objective_id = ? AND batch_id = ?').get(objectiveId, batchId) ? objectiveId : null;
+        // One read transaction, so a suggestion decided while this runs is never listed twice or counted against the wrong list.
+        db.exec('BEGIN');
         // Every pending suggestion (the ones waiting for a person), plus the most recent decided ones.
         const rows = [
           ...(db.prepare("SELECT * FROM meeting_suggestions WHERE status = 'pending' ORDER BY created_at, id").all() as Record<string, any>[]),
@@ -68,6 +71,7 @@ export function createSuggestionReader(options: { dbPath: string }): SuggestionR
           reason: r.reason, evidence: JSON.parse(r.evidence), participants: JSON.parse(r.participants),
           createdAt: iso(r.created_at)!, decidedAt: iso(r.decided_at ?? null), decidedBy: r.decided_by ?? null, decisionReason: r.decision_reason ?? null, sessionId: r.session_id ?? null,
         }));
+        db.exec('COMMIT');
         return { availability: 'AVAILABLE', reason: null, pending, suggestions };
       } finally {
         db.close();

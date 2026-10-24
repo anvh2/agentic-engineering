@@ -85,4 +85,29 @@ describe('M12 meeting suggestions: durable, deduplicated, bounded', () => {
     assert.throws(() => store.db.prepare("UPDATE meeting_suggestions SET task_id = NULL WHERE id = ?").run(s.id), /never changes/);
     assert.throws(() => store.db.prepare("UPDATE meeting_suggestions SET created_by = 'operator', created_at = 0 WHERE id = ?").run(s.id), /never changes/, 'provenance and order are fixed too');
   });
+
+  it('the database itself refuses a half-made decision, a decision on a pending row, and replacing a decided row (INSERT OR REPLACE)', () => {
+    const { store, fail } = batchWith(['t1', 't2', 't3']);
+    const [a, b, c] = suggest(store, [fail('t1', 'coding_attempts_exhausted', 'r1'), fail('t2', 'coding_attempts_exhausted', 'r2'), fail('t3', 'coding_attempts_exhausted', 'r3')]).created;
+    assert.throws(() => store.db.prepare("UPDATE meeting_suggestions SET decided_by = 'mallory', session_id = 'fake', decided_at = 1 WHERE id = ?").run(a.id), /CHECK constraint/, 'a pending row carries no decision');
+    assert.throws(() => store.db.prepare("UPDATE meeting_suggestions SET status = 'accepted' WHERE id = ?").run(b.id), /CHECK constraint/, 'accepted needs who, when and the meeting');
+    assert.throws(() => store.db.prepare("UPDATE meeting_suggestions SET status = 'dismissed', decided_by = 'x', decided_at = 1, decision_reason = '  ' WHERE id = ?").run(b.id), /CHECK constraint/, 'dismissed needs a reason');
+    decideSuggestion(store, c.id, { status: 'dismissed', by: 'anvh2', reason: 'known' });
+    const replace = "INSERT OR REPLACE INTO meeting_suggestions (id, dedupe_key, status, meeting_type, category, project, objective_id, batch_id, task_id, reason, evidence, participants, created_at, created_by) SELECT id, dedupe_key, 'pending', meeting_type, category, project, objective_id, batch_id, task_id, 'REWRITTEN', evidence, participants, created_at, created_by FROM meeting_suggestions WHERE id = ?";
+    assert.throws(() => store.db.prepare(replace).run(c.id), /never replaced/);
+    assert.throws(() => store.db.prepare(replace).run(a.id), /never replaced/, 'nor a pending one');
+    assert.throws(() => store.db.prepare("INSERT INTO meeting_suggestions SELECT * FROM meeting_suggestions WHERE id = ?").run(a.id), /never replaced|UNIQUE/);
+    const rows = listSuggestions(store);
+    assert.deepEqual(rows.map((r) => [r.status, r.reason]), [['pending', 't1 is ESCALATED [coding_attempts_exhausted]: r1'], ['pending', 't2 is ESCALATED [coding_attempts_exhausted]: r2'], ['dismissed', 't3 is ESCALATED [coding_attempts_exhausted]: r3']]);
+    assert.equal(rows[0].decidedBy, null);
+  });
+
+  it('a dropped guard is not quietly recreated: writing is refused until someone looks', () => {
+    const { store, fail } = batchWith(['t1', 't2']);
+    suggest(store, [fail('t1', 'coding_attempts_exhausted', 'r1')]);
+    store.db.exec('DROP TRIGGER meeting_suggestions_insert_new');
+    assert.throws(() => suggest(store, [fail('t2', 'coding_attempts_exhausted', 'r2')]), /missing its guard.*meeting_suggestions_insert_new/);
+    assert.equal(listSuggestions(store).length, 1);
+    assert.equal(store.db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name = 'meeting_suggestions_insert_new'").get()?.n, 0, 'not healed behind anyone\'s back');
+  });
 });

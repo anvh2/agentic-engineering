@@ -92,9 +92,21 @@ CREATE TABLE IF NOT EXISTS meeting_suggestions (
   project TEXT NOT NULL, objective_id TEXT, batch_id TEXT NOT NULL REFERENCES batches(id), task_id TEXT REFERENCES tasks(id),
   reason TEXT NOT NULL, evidence TEXT NOT NULL, participants TEXT NOT NULL,
   created_at INTEGER NOT NULL, created_by TEXT NOT NULL,
-  decided_at INTEGER, decided_by TEXT, decision_reason TEXT, session_id TEXT
+  decided_at INTEGER, decided_by TEXT, decision_reason TEXT, session_id TEXT,
+  -- the status and the decision columns agree: a pending row carries no decision; an accepted one names who and the meeting it
+  -- opened; a dismissed one names who and a reason (so nothing can be "accepted" or "decided" by half a record)
+  CHECK (
+    (status = 'pending' AND decided_at IS NULL AND decided_by IS NULL AND decision_reason IS NULL AND session_id IS NULL)
+    OR (status = 'accepted' AND decided_at IS NOT NULL AND decided_by IS NOT NULL AND session_id IS NOT NULL AND decision_reason IS NULL)
+    OR (status = 'dismissed' AND decided_at IS NOT NULL AND decided_by IS NOT NULL AND trim(decision_reason) <> '' AND session_id IS NULL)
+  )
 );
 CREATE INDEX IF NOT EXISTS meeting_suggestions_batch ON meeting_suggestions(batch_id);
+-- A row is only ever INSERTed new and pending. Without this, INSERT OR REPLACE would overwrite a decided row: REPLACE fires neither
+-- the UPDATE nor (unless recursive_triggers is on) the DELETE trigger, but it does fire BEFORE INSERT, before the conflict is resolved.
+CREATE TRIGGER IF NOT EXISTS meeting_suggestions_insert_new BEFORE INSERT ON meeting_suggestions
+  WHEN NEW.status <> 'pending' OR EXISTS (SELECT 1 FROM meeting_suggestions WHERE id = NEW.id OR dedupe_key = NEW.dedupe_key)
+BEGIN SELECT RAISE(ABORT, 'a meeting suggestion is created once, pending; it is never replaced'); END;
 CREATE TRIGGER IF NOT EXISTS meeting_suggestions_no_delete BEFORE DELETE ON meeting_suggestions BEGIN SELECT RAISE(ABORT, 'meeting_suggestions is never deleted'); END;
 CREATE TRIGGER IF NOT EXISTS meeting_suggestions_fixed BEFORE UPDATE ON meeting_suggestions
   WHEN OLD.status <> 'pending' OR NEW.id <> OLD.id OR NEW.dedupe_key <> OLD.dedupe_key OR NEW.meeting_type <> OLD.meeting_type OR NEW.category <> OLD.category
@@ -103,6 +115,21 @@ CREATE TRIGGER IF NOT EXISTS meeting_suggestions_fixed BEFORE UPDATE ON meeting_
     OR NEW.created_at <> OLD.created_at OR NEW.created_by <> OLD.created_by
 BEGIN SELECT RAISE(ABORT, 'a meeting suggestion is decided once and its content never changes'); END;
 `;
+
+const GUARDS = ['meeting_suggestions_insert_new', 'meeting_suggestions_no_delete', 'meeting_suggestions_fixed'];
+
+/**
+ * Creates the table on first use. Once it exists, a missing guard is NOT recreated (that would quietly make rows that were
+ * editable in the meantime look protected again): writing is refused until an operator investigates. The console reports the same
+ * condition as CORRUPT.
+ */
+function ensureSchema(store: SchedulerStore): void {
+  const exists = Boolean(store.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meeting_suggestions'").get());
+  if (!exists) return void store.db.exec(SCHEMA);
+  const present = new Set((store.db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'meeting_suggestions'").all() as { name: string }[]).map((r) => r.name));
+  const missing = GUARDS.filter((g) => !present.has(g));
+  if (missing.length > 0) throw new SuggestionError('invalid', `meeting_suggestions is missing its guard(s) ${missing.join(', ')}; refusing to write until an operator has checked the table`);
+}
 
 export class SuggestionError extends Error {
   readonly code: 'not_found' | 'not_pending' | 'invalid';
@@ -194,7 +221,7 @@ function insert(store: SchedulerStore, c: Candidate, actor: string, out: Suggest
 export function suggestForDeadTasks(store: SchedulerStore, input: { objectiveId: string; batchId: string; tasks: readonly TaskRow[]; actor: string }): SuggestOutcome {
   const out: SuggestOutcome = { created: [], skipped: [] };
   store.transact(() => {
-    store.db.exec(SCHEMA);
+    ensureSchema(store);
     for (const task of input.tasks) {
       const cls = classifyEscalation(task.failureCategory);
       if (cls.kind !== 'technical') {
@@ -222,7 +249,7 @@ export function suggestForDeadTasks(store: SchedulerStore, input: { objectiveId:
 export function suggestForRejectedObjective(store: SchedulerStore, input: { objectiveId: string; batchId: string; detail: string; evidenceHash: string; actor: string }): SuggestOutcome {
   const out: SuggestOutcome = { created: [], skipped: [] };
   store.transact(() => {
-    store.db.exec(SCHEMA);
+    ensureSchema(store);
     insert(store, {
       meetingType: 'acceptance_failure', category: 'not_accepted', objectiveId: input.objectiveId, batchId: input.batchId, rootTask: null,
       reason: `objective ${input.objectiveId} is NOT_ACCEPTED by its pinned oracle: ${input.detail}`,

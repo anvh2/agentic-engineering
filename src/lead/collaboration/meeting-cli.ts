@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { capacityFor } from '../../runtime/capacity/model-capacity.ts';
 import { MeetingCoordinator, type Participant } from '../../runtime/collaboration/coordinator.ts';
@@ -338,17 +338,27 @@ async function open(sessionId: string, a: ReturnType<typeof argsOf>, deps: Meeti
     openedAt: new Date().toISOString(),
   };
   const collab = new CollaborationStore(deps.store, directoryOf(sidecar, leadOf(sidecar).model));
-  // One transaction: the thread, the session and (when accepting a suggestion) its acceptance commit together or not at all.
-  deps.store.transact(() => {
-    collab.openThread({ threadId: sidecar.threadId, title, refs, participants: participants.map((p) => p.id), actorId: ENGINEERING_LEAD_ID, idempotencyKey: `meeting-open-thread:${sessionId}` });
-    if (suggestion) collab.post({ threadId: sidecar.threadId, authorId: ENGINEERING_LEAD_ID, kind: 'comment', body: `Opened from meeting suggestion ${suggestion.id} (${suggestion.meetingType}): ${suggestion.reason}`, evidence: suggestion.refs.taskId ? [{ kind: 'task', ref: suggestion.refs.taskId }] : [], idempotencyKey: `meeting-suggestion:${sessionId}` });
-    // Excluded participants are recorded in the thread itself, so the record shows who could not take part and why.
-    for (const x of excluded) collab.post({ threadId: sidecar.threadId, authorId: ENGINEERING_LEAD_ID, kind: 'comment', body: `${x.id} (${x.provider}/${x.model}) is not in this meeting: ${x.reason}`, idempotencyKey: `meeting-excluded:${sessionId}:${x.id}` });
-    collab.openSession({ sessionId, threadId: sidecar.threadId, agenda, participants: participants.map((p) => p.id), chair: ENGINEERING_LEAD_ID, limits: sidecar.limits, actorId: ENGINEERING_LEAD_ID, idempotencyKey: `meeting-open-session:${sessionId}` });
-    if (suggestion) decideSuggestion(deps.store, suggestion.id, { status: 'accepted', by: acceptedBy!, sessionId });
-  });
+  // The files come first: a filesystem failure (unwritable meetings directory) must not happen AFTER an acceptance has committed,
+  // because that suggestion could then no longer be opened again. The sidecar becomes visible only by the rename below.
+  const sidecarFile = sidecarPath(deps.meetingsDir, sessionId);
+  const pendingSidecar = `${sidecarFile}.opening`;
   mkdirSync(join(deps.meetingsDir, sessionId, 'inbox'), { recursive: true });
-  writeFileSync(sidecarPath(deps.meetingsDir, sessionId), JSON.stringify(sidecar, null, 2) + '\n');
+  writeFileSync(pendingSidecar, JSON.stringify(sidecar, null, 2) + '\n');
+  // One transaction: the thread, the session and (when accepting a suggestion) its acceptance commit together or not at all.
+  try {
+    deps.store.transact(() => {
+      collab.openThread({ threadId: sidecar.threadId, title, refs, participants: participants.map((p) => p.id), actorId: ENGINEERING_LEAD_ID, idempotencyKey: `meeting-open-thread:${sessionId}` });
+      if (suggestion) collab.post({ threadId: sidecar.threadId, authorId: ENGINEERING_LEAD_ID, kind: 'comment', body: `Opened from meeting suggestion ${suggestion.id} (${suggestion.meetingType}): ${suggestion.reason}`, evidence: suggestion.refs.taskId ? [{ kind: 'task', ref: suggestion.refs.taskId }] : [], idempotencyKey: `meeting-suggestion:${sessionId}` });
+      // Excluded participants are recorded in the thread itself, so the record shows who could not take part and why.
+      for (const x of excluded) collab.post({ threadId: sidecar.threadId, authorId: ENGINEERING_LEAD_ID, kind: 'comment', body: `${x.id} (${x.provider}/${x.model}) is not in this meeting: ${x.reason}`, idempotencyKey: `meeting-excluded:${sessionId}:${x.id}` });
+      collab.openSession({ sessionId, threadId: sidecar.threadId, agenda, participants: participants.map((p) => p.id), chair: ENGINEERING_LEAD_ID, limits: sidecar.limits, actorId: ENGINEERING_LEAD_ID, idempotencyKey: `meeting-open-session:${sessionId}` });
+      if (suggestion) decideSuggestion(deps.store, suggestion.id, { status: 'accepted', by: acceptedBy!, sessionId });
+    });
+  } catch (error) {
+    rmSync(pendingSidecar, { force: true });
+    throw error;
+  }
+  renameSync(pendingSidecar, sidecarFile);
   out(JSON.stringify({ opened: sessionId, threadId: sidecar.threadId, participants: participants.map((p) => `${p.id} (${p.provider}/${p.model})`), excluded, limits: sidecar.limits, participantLimits: limitsDefault }, null, 2));
   return 0;
 }
