@@ -8,6 +8,9 @@ import type { SchedulerStore } from '../../../runtime/scheduler/store.ts';
 import { git, makeStore, tempDir } from '../../../runtime/scheduler/test-helpers.ts';
 import type { TaskSpecInput } from '../../../runtime/scheduler/types.ts';
 import { WorktreeManager } from '../../../runtime/worktree/worktree.ts';
+import type { ProviderBudgetEntry } from '../../../runtime/execution/provider-routing.ts';
+import type { ProviderDescriptor } from '../../../runtime/execution/worker-provider.ts';
+import { codexDescriptor } from '../../../workers/providers/codex.ts';
 import type { LifecycleDeps, LifecycleHooks } from '../driver.ts';
 import { pinOracle, type OracleSpecInput } from '../oracle.ts';
 import { LifecycleStore } from '../store.ts';
@@ -237,14 +240,22 @@ export interface Harness {
   pin(spec?: Partial<OracleSpecInput>): Promise<void>;
 }
 
-export function harness(options: { solutions: Record<string, (string | 'noop')[]>; tasks?: TaskSpecInput[]; oracle?: string; allowProviders?: string[]; maxReviewCorrections?: number; provider?: Parameters<typeof fakeProvider>[1]; objectiveId?: string; negativeControl?: OracleSpecInput['negativeControl'] }): Harness {
+/** The free local default as a production registry describes it (no Ollama is contacted). */
+const OLLAMA: ProviderDescriptor = { identity: { id: 'ollama', kind: 'local', model: 'qwen3:8b' }, capabilities: { taskTypes: ['go', 'js'], editsFiles: 'via-runtime-tools', fileScope: 'tool-enforced', cancellation: 'abort-signal', usage: 'tokens', billing: 'local-free' }, capacity: { resource: 'ollama', defaultPermits: 1 } };
+
+export function harness(options: { solutions: Record<string, (string | 'noop')[]>; tasks?: TaskSpecInput[]; oracle?: string; allowProviders?: string[]; providerBudgets?: ProviderBudgetEntry[]; maxReviewCorrections?: number; provider?: Parameters<typeof fakeProvider>[1]; objectiveId?: string; negativeControl?: OracleSpecInput['negativeControl'] }): Harness {
   const objectiveId = options.objectiveId ?? 'obj1';
   const repo = goRepo();
   const store = makeStore();
   const lifecycle = new LifecycleStore(store);
   const worktrees = new WorktreeManager(join(tempDir('lc-wt-'), 'worktrees'));
   const provider = fakeProvider(options.solutions, options.provider);
-  const scheduler = new Scheduler({ store, executor: provider, workspace: worktrees, config: { pollMs: 20, maxTasksPerBatch: 8, maxReviewCorrections: options.maxReviewCorrections ?? 2 }, allowProviders: options.allowProviders });
+  const scheduler = new Scheduler({ store, executor: provider, workspace: worktrees, config: { pollMs: 20, maxTasksPerBatch: 8, maxReviewCorrections: options.maxReviewCorrections ?? 2 },
+    allowProviders: options.allowProviders,
+    // The operator budget mirrors the allow-list here, so these tests exercise the lifecycle's own authorization gates.
+    providerBudgets: options.providerBudgets ?? (options.allowProviders ?? []).map((entry) => ({ provider: entry.split(':')[0], claims: 10 })),
+    describeProvider: (id) => (id === 'codex' ? codexDescriptor() : id === 'ollama' ? OLLAMA : undefined),
+  });
   store.createBatch({ batchId: objectiveId, project: 'fmtkit', repository: repo, description: 'lifecycle fixture', integrationCommands: [['go', 'vet', './...']], tasks: options.tasks ?? standardTasks() });
   store.promote();
   const oracleDir = tempDir('lc-oracle-');
