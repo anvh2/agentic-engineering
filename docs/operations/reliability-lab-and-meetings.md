@@ -38,7 +38,7 @@ The decision and the evidence are in the store; `lead meeting status` and the St
 
 ### What a meeting is about: verified references (M12)
 
-`lead meeting open` takes `--objective <id>`, `--batch <id>` and `--task <id>`. Each is checked against the scheduler database before anything is contacted or written: the objective must have a lifecycle there and contributes its batch; a batch or task must exist, and all of them must agree. A reference that does not resolve refuses the meeting (exit 2). The Organization console attributes a thread only through a verified batch or task; a meeting opened without references is shown **Unattributed**, and nothing is inferred from titles or labels.
+`lead meeting open` takes `--objective <id>`, `--batch <id>` and `--task <id>`. Each is checked read-only against the scheduler database before anything is contacted or written: the objective must be pinned (its lifecycle) or submitted (its batch carries the objective's id) and contributes its batch; a batch or task must exist, and all of them must agree. A reference that does not resolve, a reference flag without a value and a repeated one refuse the meeting (exit 2). The collaboration store itself still records an `objectiveId` label from other callers as given; the console never attributes through it. The Organization console attributes a thread only through a verified batch or task; a meeting opened without references is shown **Unattributed**, and nothing is inferred from titles or labels.
 
 ### When meetings happen
 

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { EventEmitter } from 'node:events';
 import { describe, it } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import type { CapacityLease } from '../../runtime/capacity/model-capacity.ts';
@@ -63,6 +64,7 @@ function setup() {
   const ollama = fakeOllama('obj1.t1-entry');
   const lines: string[] = [];
   const errors: string[] = [];
+  const signals = new EventEmitter();
   const deps: MeetingCommandDeps = {
     store,
     meetingsDir: join(dir, 'meetings'),
@@ -73,12 +75,13 @@ function setup() {
     out: (l) => lines.push(l),
     err: (l) => errors.push(l),
     inboxPollMs: 5,
+    signalSource: signals,
   };
   const open = (id: string, refs: string[]) =>
     runMeetingCommand(['open', id, '--title', 'Escalation: comment_removed on obj1.t1-entry', '--agenda', 'Why was correct code rejected?', '--operator', 'anvh2', '--lead-model', 'claude-opus-5-5', '--participant', `reviewer-qwen=ollama:${MODEL}@reviewer`, '--rounds', '2', ...refs], deps);
   const sidecar = (id: string) => JSON.parse(readFileSync(sidecarPath(deps.meetingsDir, id), 'utf8')) as MeetingSidecar;
   const collabOn = (s: SchedulerStore, id: string) => new CollaborationStore(s, directoryOf(sidecar(id), 'claude-opus-5-5'));
-  return { dir, dbPath, store, deps, errors, open, sidecar, collabOn, ollama, cmd: (...argv: string[]) => runMeetingCommand(argv, deps) };
+  return { dir, dbPath, store, deps, errors, signals, open, sidecar, collabOn, ollama, cmd: (...argv: string[]) => runMeetingCommand(argv, deps) };
 }
 
 const collabRows = (dbPath: string) => {
@@ -95,13 +98,20 @@ describe('M12 collaboration visibility: a real meeting about scheduler work', ()
     const h = setup();
     assert.equal(await h.open('m-esc', ['--objective', 'obj1', '--task', 'obj1.t1-entry']), 0);
     const running = h.cmd('run', 'm-esc');
-    await waitFor(() => h.collabOn(h.store, 'm-esc').session('m-esc').session.pending?.participant === ENGINEERING_LEAD_ID, "the Lead's turn");
-    assert.equal(await h.cmd('record', 'm-esc', '--kind', 'proposal', '--body', 'The plan told the worker to replace a placeholder comment.', '--evidence', 'task:obj1.t1-entry'), 0);
-    await waitFor(() => h.collabOn(h.store, 'm-esc').session('m-esc').session.pending?.round === 2, "the Lead's round-2 turn");
-    const ids = h.collabOn(h.store, 'm-esc').thread('t-m-esc').messages.filter((m) => m.kind === 'proposal').map((m) => m.id);
-    writeFileSync(join(h.dir, 'decision.json'), JSON.stringify({ outcome: 'accept', proposalIds: ids, rationale: 'Placeholder-free stubs; the gate stays as it is.', actionItems: [] }));
-    assert.equal(await h.cmd('record', 'm-esc', '--kind', 'decision', '--body', 'Re-plan on placeholder-free stubs.', '--decision-file', join(h.dir, 'decision.json')), 0);
-    assert.equal(await running, 0);
+    let settled = false;
+    void running.finally(() => { settled = true; }).catch(() => {});
+    try {
+      await waitFor(() => h.collabOn(h.store, 'm-esc').session('m-esc').session.pending?.participant === ENGINEERING_LEAD_ID, "the Lead's turn");
+      assert.equal(await h.cmd('record', 'm-esc', '--kind', 'proposal', '--body', 'The plan told the worker to replace a placeholder comment.', '--evidence', 'task:obj1.t1-entry'), 0);
+      await waitFor(() => h.collabOn(h.store, 'm-esc').session('m-esc').session.pending?.round === 2, "the Lead's round-2 turn");
+      const ids = h.collabOn(h.store, 'm-esc').thread('t-m-esc').messages.filter((m) => m.kind === 'proposal').map((m) => m.id);
+      writeFileSync(join(h.dir, 'decision.json'), JSON.stringify({ outcome: 'accept', proposalIds: ids, rationale: 'Placeholder-free stubs; the gate stays as it is.', actionItems: [] }));
+      assert.equal(await h.cmd('record', 'm-esc', '--kind', 'decision', '--body', 'Re-plan on placeholder-free stubs.', '--decision-file', join(h.dir, 'decision.json')), 0);
+      assert.equal(await running, 0);
+    } finally {
+      // A failure above must not leave the meeting run waiting on the Lead's inbox: suspend it the way an operator would.
+      if (!settled) { h.signals.emit('SIGINT'); await running.catch(() => {}); }
+    }
     assert.equal(h.ollama.calls(), 1, 'one real participant call');
 
     // Persisted with references the scheduler verified: the objective contributed its batch.
@@ -136,6 +146,7 @@ describe('M12 collaboration visibility: a real meeting about scheduler work', ()
     assert.deepEqual(h.collabOn(h.store, 'm-free').thread('t-m-free').thread.refs, {});
     const thread = createCollaborationReader({ dbPath: h.dbPath, schedulerOfRecord: true }).snapshot().threads.find((t) => t.id === 't-m-free')!;
     assert.equal(thread.attribution.status, 'UNATTRIBUTED');
+    h.store.close();
   });
 
   it('a reference that does not resolve refuses the meeting before anything is written', async () => {
@@ -146,6 +157,7 @@ describe('M12 collaboration visibility: a real meeting about scheduler work', ()
       assert.equal(collabRows(h.dbPath), 0, `${refs.join(' ')}: no collaboration event`);
       assert.equal(existsSync(sidecarPath(h.deps.meetingsDir, 'm-bad')), false, `${refs.join(' ')}: no sidecar`);
       assert.equal(h.ollama.calls(), 0);
+      h.store.close();
     }
   });
 });

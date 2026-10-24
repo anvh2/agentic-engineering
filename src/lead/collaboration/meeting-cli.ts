@@ -7,7 +7,6 @@ import { CollaborationStore } from '../../runtime/collaboration/store.ts';
 import { CollaborationError, idSchema, MESSAGE_KINDS, type EngineeringRole, type EvidenceRef, type MessageKind, type ParticipantIdentity } from '../../runtime/collaboration/types.ts';
 import { allowedProvidersFromEnv, authorizeProvider, DEFAULT_PROVIDER_ID, parseAllowList } from '../../runtime/execution/worker-provider.ts';
 import type { SchedulerStore } from '../../runtime/scheduler/store.ts';
-import { LifecycleStore } from '../lifecycle/store.ts';
 import { defaultProviderRegistry } from '../../workers/providers/default.ts';
 import type { ProviderRegistry } from '../../workers/providers/registry.ts';
 import { inboxEntries, inboxPath, LeadInboxParticipant, ollamaChatTransport, ProviderParticipant, workerProviderTransport, type CapacityLike, type LeadInboxReply, type MeetingTransport, type MeetingTransportKind, type ParticipantLimits } from './meeting-participants.ts';
@@ -89,8 +88,9 @@ function argsOf(argv: string[]) {
   const flag = (name: string) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : undefined);
   const all = (name: string) => argv.flatMap((a, i) => (a === name && argv[i + 1] !== undefined ? [argv[i + 1]] : []));
   const has = (name: string) => argv.includes(name);
+  const count = (name: string) => argv.filter((a) => a === name).length;
   const positional = argv.filter((a, i) => !a.startsWith('--') && !(argv[i - 1] ?? '').startsWith('--'));
-  return { flag, all, has, positional };
+  return { flag, all, has, count, positional };
 }
 
 const num = (v: string | undefined, fallback: number, what: string) => {
@@ -177,11 +177,31 @@ export async function runMeetingCommand(argv: string[], deps: MeetingCommandDeps
   return 2;
 }
 
+/** A reference flag: absent, or exactly one value. A missing or repeated value is refused, never dropped. */
+function refFlag(a: ReturnType<typeof argsOf>, name: string): string | undefined {
+  const n = a.count(name);
+  if (n === 0) return undefined;
+  if (n > 1) throw new MeetingCliError(`lead meeting open: ${name} is given ${n} times; a meeting is about one ${name.slice(2)}`);
+  const value = a.flag(name);
+  if (value === undefined || value.startsWith('--')) throw new MeetingCliError(`lead meeting open: ${name} needs a value`);
+  return value;
+}
+
 /**
- * The work a meeting is about, as references the scheduler of record can verify. An objective must have a lifecycle here
- * (the lifecycle table belongs to lead, so the collaboration store cannot check it) and contributes its batch; a batch or task
- * must exist and agree with each other and with the objective. Nothing is guessed: a meeting with no reference stays
- * unattributed, and a reference that does not resolve refuses the meeting instead of being recorded as a label.
+ * The batch an objective runs as, read without writing: its lifecycle row when it was pinned, else the batch `lead objective
+ * --submit` created under the objective's own id. Undefined when neither exists. (An objective's batch never changes once set.)
+ */
+function objectiveBatch(store: SchedulerStore, objectiveId: string): string | undefined {
+  const hasLifecycle = store.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'objective_lifecycle'").get();
+  const row = hasLifecycle ? (store.db.prepare('SELECT batch_id FROM objective_lifecycle WHERE objective_id = ?').get(objectiveId) as { batch_id: string } | undefined) : undefined;
+  if (row) return row.batch_id;
+  return store.getBatch(objectiveId) ? objectiveId : undefined;
+}
+
+/**
+ * The work a meeting is about, as references the scheduler of record can verify, checked read-only before anything is contacted
+ * or written. An objective must resolve to its batch (objectiveBatch); a batch or task must exist, and all must agree. Nothing is
+ * guessed: a meeting with no reference stays unattributed, and a reference that does not resolve refuses the meeting.
  */
 export function verifiedRefs(store: SchedulerStore, input: { objectiveId?: string; batchId?: string; taskId?: string }): { objectiveId?: string; batchId?: string; taskId?: string } | undefined {
   const { objectiveId, taskId } = input;
@@ -190,10 +210,10 @@ export function verifiedRefs(store: SchedulerStore, input: { objectiveId?: strin
     if (value !== undefined && !idSchema.safeParse(value).success) throw new MeetingCliError(`lead meeting open: ${flag} ${JSON.stringify(value)} is not a valid id`);
   }
   if (objectiveId) {
-    const lifecycle = new LifecycleStore(store).get(objectiveId);
-    if (!lifecycle) throw new MeetingCliError(`lead meeting open: objective ${objectiveId} has no lifecycle in this scheduler database; refusing an unverifiable reference`);
-    if (batchId && batchId !== lifecycle.batchId) throw new MeetingCliError(`lead meeting open: objective ${objectiveId} runs as batch ${lifecycle.batchId}, not ${batchId}`);
-    batchId = lifecycle.batchId;
+    const objectiveBatchId = objectiveBatch(store, objectiveId);
+    if (!objectiveBatchId) throw new MeetingCliError(`lead meeting open: objective ${objectiveId} is neither pinned nor submitted in this scheduler database; refusing an unverifiable reference`);
+    if (batchId && batchId !== objectiveBatchId) throw new MeetingCliError(`lead meeting open: objective ${objectiveId} runs as batch ${objectiveBatchId}, not ${batchId}`);
+    batchId = objectiveBatchId;
   }
   if (batchId && !store.getBatch(batchId)) throw new MeetingCliError(`lead meeting open: batch ${batchId} does not exist in this scheduler database`);
   if (taskId) {
@@ -218,7 +238,7 @@ async function open(sessionId: string, a: ReturnType<typeof argsOf>, deps: Meeti
   const operators = a.all('--operator');
   if (operators.length === 0) throw new MeetingCliError('lead meeting open: name the operator with --operator <id> (who can cancel the meeting)');
   // Checked before anything is contacted or written: a meeting about real work carries references the console can verify.
-  const refs = verifiedRefs(deps.store, { objectiveId: a.flag('--objective'), batchId: a.flag('--batch'), taskId: a.flag('--task') });
+  const refs = verifiedRefs(deps.store, { objectiveId: refFlag(a, '--objective'), batchId: refFlag(a, '--batch'), taskId: refFlag(a, '--task') });
   const limitsDefault: ParticipantLimits = {
     maxOutputTokens: num(a.flag('--max-output-tokens'), 1_200, '--max-output-tokens'),
     maxInvocations: num(a.flag('--max-participant-invocations'), 4, '--max-participant-invocations'),
