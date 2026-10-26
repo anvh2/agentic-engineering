@@ -34,6 +34,22 @@ npm run lead -- supervisor resume
 npm run lead -- supervisor stop
 ```
 
+### Objective queue (M12)
+
+`lead supervisor start --queue [--once] --server <isolated URL>` replaces `--batch <id>`: the supervisor takes every
+objective whose oracle the Lead has already pinned (lifecycle phase `PINNED`), **oldest pin first, one at a time**, through
+the same lifecycle driver. So a second objective starts when the first is accepted, with nobody naming it. The bounds:
+
+- Only `PINNED` objectives are taken. An objective that already started (`EXECUTING`, for example after a crash) or that
+  stopped for a human (`ESCALATED`, `AWAITING_OPERATOR`) is never resumed by the queue.
+- The queue **stops at the first objective that does not end `ACCEPTED`** (exit 1); later objectives stay `PINNED` until a
+  human has looked. Nothing is planned, submitted or pinned by the supervisor: a queued objective is one the Lead submitted
+  and pinned explicitly (`lead objective --submit`, `lead lifecycle pin`).
+- Without `--once` it waits for newly pinned objectives (polling `--poll-ms`) until `supervisor stop`; with `--once` it runs
+  at most one objective, or reports `idle` and exits.
+- The gate, the DB leadership lock (`supervisor:queue`), pause/stop intents, the isolation checks and the refusal of
+  non-default providers are the same as for `--batch`.
+
 The supervisor start command **runs in foreground**; run controls in a separate
 terminal with identical isolated env variables. The supervisor holds a
 non-expiring filesystem gate under `$AGENTIC_SCHED_ROOT/supervisor/holder` and
