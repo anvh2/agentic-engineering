@@ -10,6 +10,8 @@ import { LifecycleStore } from '../../src/lead/lifecycle/store.ts';
 import { capacityFor } from '../../src/runtime/capacity/model-capacity.ts';
 import { parseAllowList } from '../../src/runtime/execution/worker-provider.ts';
 import { Scheduler } from '../../src/runtime/scheduler/scheduler.ts';
+import { budgetsMirroring } from '../../src/runtime/scheduler/test-helpers.ts';
+import { codexDescriptor } from '../../src/workers/providers/codex.ts';
 import { SchedulerStore } from '../../src/runtime/scheduler/store.ts';
 import { runSandboxedCommand } from '../../src/runtime/sandbox/sandbox.ts';
 import { executableReadPaths } from '../../src/runtime/sandbox/toolchain.ts';
@@ -402,7 +404,7 @@ export async function runM85Objective(options: M85Options): Promise<M85Result> {
 
   const capacity = capacityFor(undefined, capacityDb);
   const config = { maxConcurrentWorkers: 1, pollMs: 500, workerLeaseTimeoutMs: 60_000, taskTimeoutMs: limits.taskActiveTimeoutMs, maxCapacityWaitMs: 60_000, maxTasksPerBatch: 5, maxReviewCorrections: 2 };
-  const scheduler = new Scheduler({ store, executor: backend.executor, workspace: worktrees, config, capacity, allowProviders: options.allowProviders, log: (l) => log(`  ${l}`) });
+  const scheduler = new Scheduler({ store, executor: backend.executor, workspace: worktrees, config, capacity, allowProviders: options.allowProviders, providerBudgets: budgetsMirroring(options.allowProviders, 1), describeProvider: (id) => (id === 'codex' ? codexDescriptor() : undefined), log: (l) => log(`  ${l}`) });
 
   // ---- signals: first = cancel the objective and confirm, second = SIGKILL what this run owns and exit
   const source = options.signalSource ?? process;

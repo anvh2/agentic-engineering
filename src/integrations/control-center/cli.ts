@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { resolveSchedulerDbPath } from '../../observability/scheduler-state.ts';
 import { createReader } from './adapter.ts';
 import { createCollaborationReader } from './collaboration-adapter.ts';
+import { createSuggestionReader } from './suggestions-adapter.ts';
 import { createGateway } from './server.ts';
 
 const port = Number(process.env.CONTROL_CENTER_PORT ?? '4310');
@@ -13,7 +14,7 @@ const reader = createReader({
   capacityDbPath: process.env.CONTROL_CENTER_CAPACITY_DB,
   studioOrigin: process.env.CONTROL_CENTER_STUDIO_ORIGIN ?? 'http://localhost:4111',
 });
-const gateway = createGateway({ reader, collaboration: createCollaborationReader({ dbPath, schedulerOfRecord: true }), assetsDir: fileURLToPath(new URL('../../../apps/control-center/dist/', import.meta.url)) });
+const gateway = createGateway({ reader, collaboration: createCollaborationReader({ dbPath, schedulerOfRecord: true }), suggestions: createSuggestionReader({ dbPath }), assetsDir: fileURLToPath(new URL('../../../apps/control-center/dist/', import.meta.url)) });
 gateway.server.listen(port, '127.0.0.1', () => console.log(`Read-only Control Center: http://127.0.0.1:${port}`));
 gateway.server.on('error', () => {
   console.error('Control Center could not listen on its local port.');

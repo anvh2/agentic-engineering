@@ -219,6 +219,18 @@ CREATE TABLE IF NOT EXISTS integration_facts (
 CREATE INDEX IF NOT EXISTS integration_facts_task ON integration_facts(task_id);
 CREATE TRIGGER IF NOT EXISTS integration_facts_no_update BEFORE UPDATE ON integration_facts BEGIN SELECT RAISE(ABORT, 'integration_facts is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS integration_facts_no_delete BEFORE DELETE ON integration_facts BEGIN SELECT RAISE(ABORT, 'integration_facts is append-only'); END;
+-- M12: one row per worker-provider routing decision at claim time, selected or refused (provider-routing.ts). Append-only and
+-- kept out of the event trajectory, which readers interpret as state history. Rows with charged = 1 are the spend that
+-- operator budgets are counted against, so a budget survives restarts and is shared by every scheduler on this database.
+CREATE TABLE IF NOT EXISTS provider_routing (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(id), at INTEGER NOT NULL, actor TEXT NOT NULL,
+  provider TEXT NOT NULL, outcome TEXT NOT NULL CHECK (outcome IN ('selected', 'refused')), code TEXT NOT NULL,
+  charged INTEGER NOT NULL CHECK (charged IN (0, 1)), decision TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS provider_routing_task ON provider_routing(task_id);
+CREATE INDEX IF NOT EXISTS provider_routing_spend ON provider_routing(provider, charged);
+CREATE TRIGGER IF NOT EXISTS provider_routing_no_update BEFORE UPDATE ON provider_routing BEGIN SELECT RAISE(ABORT, 'provider_routing is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS provider_routing_no_delete BEFORE DELETE ON provider_routing BEGIN SELECT RAISE(ABORT, 'provider_routing is append-only'); END;
 `;
 
 const json = (v: unknown) => JSON.stringify(v);
@@ -901,6 +913,31 @@ export class SchedulerStore {
       const t = this.requireTask(id);
       this.db.prepare('INSERT INTO events (task_id, at, from_state, to_state, actor, reason, detail) VALUES (?,?,?,?,?,?,?)').run(id, this.now(), t.state, t.state, actor, reason, detail ? json(detail) : null);
     });
+  }
+
+  // ---- provider routing (M12) -------------------------------------------------------------------------------------
+
+  /** Appends one routing decision (append-only table, never an event: the event trajectory stays state history). */
+  recordRouting(taskId: string, actor: string, decision: { provider: string; outcome: 'selected' | 'refused'; code: string; charged: boolean }): void {
+    this.tx(() => {
+      this.requireTask(taskId);
+      this.db.prepare('INSERT INTO provider_routing (task_id, at, actor, provider, outcome, code, charged, decision) VALUES (?,?,?,?,?,?,?,?)').run(taskId, this.now(), actor, decision.provider, decision.outcome, decision.code, decision.charged ? 1 : 0, json(decision));
+    });
+  }
+
+  /** Recorded routing decisions, oldest first; for one task or all. */
+  routingDecisions(taskId?: string): { seq: number; taskId: string; at: number; actor: string; decision: Record<string, unknown> }[] {
+    const rows = (taskId ? this.db.prepare('SELECT * FROM provider_routing WHERE task_id = ? ORDER BY seq').all(taskId) : this.db.prepare('SELECT * FROM provider_routing ORDER BY seq').all()) as Record<string, any>[];
+    return rows.map((r) => ({ seq: r.seq, taskId: r.task_id, at: r.at, actor: r.actor, decision: parseJson('provider_routing', r.seq, 'decision', r.decision) }));
+  }
+
+  /**
+   * Claims charged to `provider` by recorded routing decisions: across every task in this database, and for `taskId` alone.
+   * Read inside the caller's transaction, it makes check-and-charge atomic across schedulers and processes.
+   */
+  chargedProviderClaims(provider: string, taskId: string): { provider: number; task: number } {
+    const row = this.db.prepare('SELECT COUNT(*) AS total, COALESCE(SUM(task_id = ?), 0) AS task FROM provider_routing WHERE provider = ? AND charged = 1').get(taskId, provider) as { total: number; task: number };
+    return { provider: Number(row.total), task: Number(row.task) };
   }
 
   /** Merge-patch artifacts without a state change (worktree path, artifact dirs...). */

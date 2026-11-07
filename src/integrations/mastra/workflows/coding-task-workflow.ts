@@ -261,9 +261,13 @@ export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
         if (!auth.ok) return refuse(auth.reason);
         try {
           const entry = (deps.providers ?? defaultProviderRegistry()).get(requestedProvider);
+          // The provider must be cleared for the task's language (the scheduler checks this too); never a guessed default.
+          const language = languageOf(getInitData<CodingTaskWorkflowInput>().contract.allowedFiles);
+          const cleared = entry.describe().capabilities.taskTypes;
+          if (!language || !cleared.includes(language)) return refuse(`language_unsupported: provider ${requestedProvider} is cleared for ${cleared.join(', ') || 'no language'}, not for ${language ?? 'these files'}`);
           const availability = await entry.probe();
           if (availability.state !== 'available') return refuse(`provider_unavailable: ${requestedProvider} is ${availability.state}: ${availability.detail}`);
-          providerWorker = entry.create({ taskType: languageOf(getInitData<CodingTaskWorkflowInput>().contract.allowedFiles) ?? 'go', mastra, tracingContext });
+          providerWorker = entry.create({ taskType: language, mastra, tracingContext });
         } catch (err) {
           if (err instanceof UnknownProviderError) return refuse(`unknown_provider: ${err.message}`);
           throw err;

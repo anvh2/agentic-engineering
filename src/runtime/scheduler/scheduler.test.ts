@@ -33,6 +33,10 @@ describe('M5.1 sequential execution through the executor', () => {
     assert.equal(review.decision, null);
     assert.match(review.request.diff, /module\.exports = "high"/);
     assert.deepEqual(store.events('high').map((e) => e.to), ['BACKLOG', 'READY', 'CLAIMED', 'CODING', 'CODING', 'VERIFYING', 'REVIEW_PENDING']);
+    // The routing decision is recorded beside the trajectory, not in it: the default local provider, nothing charged, no fallback.
+    const [routed] = store.routingDecisions('high');
+    assert.deepEqual({ provider: routed.decision.provider, code: routed.decision.code, charged: routed.decision.charged, fallback: routed.decision.fallback }, { provider: 'ollama', code: 'local_default', charged: false, fallback: 'none' });
+    assert.equal((high.artifacts.routing as { outcome: string }).outcome, 'selected');
   });
 
   it('a worker PASS cannot skip review: the scheduler never writes APPROVED/DONE', async () => {

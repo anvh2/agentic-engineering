@@ -12,6 +12,7 @@ import { cancelTask } from '../../lead/cancel.ts';
 import { pendingReviews } from '../../lead/review.ts';
 import { capacityFor } from '../../runtime/capacity/model-capacity.ts';
 import { Scheduler } from '../../runtime/scheduler/scheduler.ts';
+import type { ProviderBudgetEntry } from '../../runtime/execution/provider-routing.ts';
 import type { SchedulerStore } from '../../runtime/scheduler/store.ts';
 import { git, makeRepo, makeStore, sleep, tempDir, plan } from '../../runtime/scheduler/test-helpers.ts';
 import { WorktreeManager } from '../../runtime/worktree/worktree.ts';
@@ -64,13 +65,18 @@ function taskSpec(provider: string | undefined) {
   };
 }
 
-function harness(options: { provider?: string; fake?: Record<string, string>; schedulerAllow?: string[]; workflowAllow?: string[]; store?: SchedulerStore } = {}) {
+function harness(options: { provider?: string; fake?: Record<string, string>; schedulerAllow?: string[]; schedulerBudgets?: ProviderBudgetEntry[]; workflowAllow?: string[]; workflowCleared?: ('go' | 'js')[]; store?: SchedulerStore } = {}) {
   const repo = makeRepo({ 'go.mod': 'module example.com/calc\n\ngo 1.22\n', 'calc/calc.go': STUB, 'calc/calc_test.go': TEST_SRC });
   const dir = tempDir('codex-sched-');
   const log = join(dir, 'calls.jsonl');
   const config: CodexConfig = { command: FAKE, model: 'gpt-fake', env: { FAKE_LOG: log, FAKE_FILE: 'calc/calc.go', FAKE_CONTENT: JSON.stringify(RIGHT), ...options.fake }, termGraceMs: 200 };
   const providers = new ProviderRegistry().register(codexEntry(config));
-  const workflow = createCodingTaskWorkflow({ providers, allowProviders: () => options.workflowAllow ?? ['codex:T'], artifactRoot: join(dir, 'artifacts'), runOptions: { runtimeRetryDelayMs: 0 } });
+  // The workflow's own registry: the same codex, optionally cleared for fewer languages than the scheduler believes.
+  const entry = codexEntry(config);
+  const workflowProviders = options.workflowCleared
+    ? new ProviderRegistry().register({ ...entry, describe: () => ({ ...entry.describe(), capabilities: { ...entry.describe().capabilities, taskTypes: options.workflowCleared! } }) })
+    : providers;
+  const workflow = createCodingTaskWorkflow({ providers: workflowProviders, allowProviders: () => options.workflowAllow ?? ['codex:T'], artifactRoot: join(dir, 'artifacts'), runOptions: { runtimeRetryDelayMs: 0 } });
   const executor = createInProcessExecutor(workflow);
   const store = options.store ?? makeStore();
   store.createBatch(plan(repo, [taskSpec(options.provider === undefined ? 'codex' : options.provider || undefined)] as never));
@@ -81,6 +87,8 @@ function harness(options: { provider?: string; fake?: Record<string, string>; sc
     workspace: new WorktreeManager(join(dir, 'worktrees')),
     capacity: capacityFor(),
     allowProviders: options.schedulerAllow ?? ['codex:T'],
+    providerBudgets: options.schedulerBudgets ?? [{ provider: 'codex', taskId: 'T', claims: 5 }],
+    describeProvider: (id) => (providers.ids().includes(id) ? providers.get(id).describe() : undefined),
     cancelGraceMs: 2_000,
     // A 1s lease (three ~333ms heartbeats) expired mid-attempt on a loaded CI runner (CI run 39283415933). Lease expiry itself is
     // covered with a fake clock in the fencing test below; these cases test attempt bounding, not lease timing.
@@ -157,6 +165,27 @@ describe('scheduler -> codex adapter -> verifier (mock CLI)', () => {
     assert.equal(task.state, 'RUNTIME_FAILURE');
     assert.equal(task.failureCategory, 'provider_not_authorized');
     assert.equal(h.records().length, 0);
+  });
+
+  it('M12: the operator budget is required too: an allow-listed codex task without a budget runs nothing and falls back to nothing', async () => {
+    const h = harness({ schedulerAllow: ['codex:T'], schedulerBudgets: [] });
+    await h.scheduler.run();
+    const task = h.store.requireTask('T');
+    assert.equal(task.state, 'RUNTIME_FAILURE');
+    assert.equal(task.failureCategory, 'provider_not_authorized');
+    assert.match(task.stateReason ?? '', /^budget_not_approved: .*no fallback provider is tried$/);
+    assert.equal(h.executor.started.length, 0, 'the executor was never called');
+    assert.equal(h.records().length, 0, 'the CLI was never started, not even probed');
+    assert.deepEqual(h.store.routingDecisions('T').map((r) => [r.decision.provider, r.decision.outcome, r.decision.charged]), [['codex', 'refused', false]]);
+  });
+
+  it('M12: the workflow refuses a language the provider is not cleared for, even when the scheduler let the task through', async () => {
+    const h = harness({ workflowCleared: ['js'] });
+    await h.scheduler.run();
+    const task = h.store.requireTask('T');
+    assert.equal(task.state, 'RUNTIME_FAILURE');
+    assert.match(task.stateReason ?? '', /language_unsupported: provider codex is cleared for js, not for go/);
+    assert.equal(h.execCalls().length, 0, 'codex exec never ran');
   });
 
   it('an allow-list entry for one task authorizes only that task', async () => {

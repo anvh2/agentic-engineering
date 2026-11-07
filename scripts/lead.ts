@@ -9,6 +9,9 @@
 //        the machine-wide capacity database (AGENTIC_MODEL_CONCURRENCY, default 1); more workers never mean more model calls.
 //        non-default worker providers (a task's request.provider, e.g. "codex") run ONLY if the operator allows them:
 //        --allow-provider codex:<taskId> (or AGENTIC_ALLOW_PROVIDERS), and the Mastra server needs the same allow-list in its own env.
+//        One that is not local-free also needs an operator budget in claims: --provider-budget codex:<taskId>=1 (or
+//        AGENTIC_PROVIDER_BUDGETS); allow-list without budget is refused, and nothing ever falls back to another provider.
+//   npm run lead -- providers [--json]                    capability matrix: languages, availability, authorization, billing, budget
 //   npm run lead:status -- [--batch B]                     states, pending reviews, issues, metrics
 //   npm run lead:review -- list | pack [--out F] | decide <task> approve|reject|escalate [--feedback "..."]
 //   npm run lead -- integrate <batch>                merge APPROVED tasks into lead-integration/<batch>, verify
@@ -22,6 +25,7 @@
 //   npm run lead -- objective <objective.json> [--draft F] | --show <id> | --submit <id>   M7.5: plan, then explicit submit; never executes
 //   npm run lead -- lifecycle pin|run|status|authorize|resume|cancel <objective-id> ...   M8.5: execute -> verified review -> integrate -> independent acceptance (see src/lead/lifecycle/cli.ts)
 //   npm run lead -- meeting open|run|status|record|cancel <session-id> ...   M10: model-backed engineering meetings (see src/lead/collaboration/meeting-cli.ts)
+//        open takes --objective/--batch/--task, verified against this scheduler database (M12)
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -41,12 +45,19 @@ import { runMeetingCommand } from '../src/lead/collaboration/meeting-cli.ts';
 import { runSupervisorCommand } from '../src/lead/supervisor/cli.ts';
 import { recoverRuntimeFailure } from '../src/lead/recovery.ts';
 import { cancelTask } from '../src/lead/cancel.ts';
-import { allowedProvidersFromEnv, parseAllowList, providerOf } from '../src/runtime/execution/worker-provider.ts';
+import { allowedProvidersFromEnv, DEFAULT_PROVIDER_ID, parseAllowList, providerOf } from '../src/runtime/execution/worker-provider.ts';
+import { parseProviderBudgets, PROVIDER_BUDGETS_ENV } from '../src/runtime/execution/provider-routing.ts';
+import { defaultProviderRegistry } from '../src/workers/providers/default.ts';
 
 const args = process.argv.slice(2);
 const [command, ...rest] = args;
 const flag = (name: string) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
 const has = (name: string) => args.includes(name);
+// Provider routing inputs (M12): static descriptors of the registered providers (no contact) and the operator's budgets.
+// A malformed budget fails the command; it is never half-applied.
+const providerRegistry = defaultProviderRegistry();
+const describeProvider = (id: string) => (providerRegistry.ids().includes(id) ? providerRegistry.get(id).describe() : undefined);
+const providerBudgets = () => parseProviderBudgets([process.env[PROVIDER_BUDGETS_ENV], flag('--provider-budget')].filter((v) => v?.trim()).join(','));
 const positional = rest.filter((a, i) => !a.startsWith('--') && !(rest[i - 1] ?? '').startsWith('--'));
 
 const root = findProjectRoot() ?? process.cwd();
@@ -118,7 +129,7 @@ async function main(): Promise<void> {
           out: (t) => console.log(t), err: (t) => console.error(t), config,
           makeRuntime: () => {
             const executor = createMastraExecutor({ server: urlText, taskTimeoutMs: config.taskTimeoutMs + config.maxCapacityWaitMs });
-            const scheduler = new Scheduler({ store, executor, workspace: worktrees, config, capacity: sharedModelCapacity(), allowProviders: [], log: (line) => console.log('  ' + line) });
+            const scheduler = new Scheduler({ store, executor, workspace: worktrees, config, capacity: sharedModelCapacity(), allowProviders: [], providerBudgets: [], describeProvider, log: (line) => console.log('  ' + line) });
             return { scheduler, executor, capacity: sharedModelCapacity() };
           },
         }),
@@ -141,7 +152,7 @@ async function main(): Promise<void> {
         makeRuntime: () => {
           const executor = createMastraExecutor({ server: flag('--server'), taskTimeoutMs: config.taskTimeoutMs + config.maxCapacityWaitMs });
           const allowProviders = [...allowedProvidersFromEnv(), ...parseAllowList(flag('--allow-provider'))];
-          const scheduler = new Scheduler({ store, executor, workspace: worktrees, config, capacity: sharedModelCapacity(), allowProviders, log: (l) => console.log(`  ${l}`) });
+          const scheduler = new Scheduler({ store, executor, workspace: worktrees, config, capacity: sharedModelCapacity(), allowProviders, providerBudgets: providerBudgets(), describeProvider, log: (l) => console.log(`  ${l}`) });
           process.on('SIGINT', () => scheduler.stop());
           process.on('SIGTERM', () => scheduler.stop());
           return { scheduler, executor, capacity: sharedModelCapacity() };
@@ -169,7 +180,7 @@ async function main(): Promise<void> {
       const config = await loadConfig();
       const executor = createMastraExecutor({ server: flag('--server'), taskTimeoutMs: config.taskTimeoutMs + config.maxCapacityWaitMs /* poll backstop = the hard bound: active budget + queueing budget */ });
       const allowProviders = [...allowedProvidersFromEnv(), ...parseAllowList(flag('--allow-provider'))];
-      const scheduler = new Scheduler({ store, executor, workspace: worktrees, config, capacity: sharedModelCapacity(), allowProviders, log: (l) => console.log(`  ${l}`) });
+      const scheduler = new Scheduler({ store, executor, workspace: worktrees, config, capacity: sharedModelCapacity(), allowProviders, providerBudgets: providerBudgets(), describeProvider, log: (l) => console.log(`  ${l}`) });
       if (allowProviders.length > 0) console.log(`operator-allowed providers: ${allowProviders.join(', ')} (the Mastra server must carry the same allow-list)`);
       // First signal: graceful (claim nothing new, cancel and confirm every in-flight run). A second signal exits at once and
       // says which runs may still be executing, because nothing was confirmed for them.
@@ -237,7 +248,7 @@ async function main(): Promise<void> {
     }
     case 'resume': {
       const config = await loadConfig();
-      const scheduler = new Scheduler({ store, executor: createMastraExecutor({ server: flag('--server'), taskTimeoutMs: config.taskTimeoutMs + config.maxCapacityWaitMs /* poll backstop = the hard bound: active budget + queueing budget */ }), workspace: worktrees, config, capacity: sharedModelCapacity(), log: (l) => console.log(`  ${l}`) });
+      const scheduler = new Scheduler({ store, executor: createMastraExecutor({ server: flag('--server'), taskTimeoutMs: config.taskTimeoutMs + config.maxCapacityWaitMs /* poll backstop = the hard bound: active budget + queueing budget */ }), workspace: worktrees, config, capacity: sharedModelCapacity(), describeProvider, log: (l) => console.log(`  ${l}`) });
       const r = scheduler.recover({ stealLeases: has('--steal') });
       console.log(`requeued: ${r.requeued.join(', ') || '-'}; claim budget exhausted: ${r.exhausted.join(', ') || '-'}`);
       if (has('--run')) console.log(JSON.stringify(await scheduler.run({ batchId: flag('--batch') }), null, 2));
@@ -292,6 +303,30 @@ async function main(): Promise<void> {
       console.log(`${taskId}: execution ${p.execution.state}; integration ${p.integration.state}; ${p.accepted ? 'currently accepted' : 'NOT currently accepted'}. Recorded as an event; no state or earlier event was changed.`);
       break;
     }
+    case 'providers': {
+      // The capability matrix: what each registered provider is, whether it can run now, and whether THIS operator lets it.
+      // Probes contact the local model server and the CLIs' own --help/session checks; no model is called.
+      const allow = [...allowedProvidersFromEnv(), ...parseAllowList(flag('--allow-provider'))];
+      const budgets = providerBudgets();
+      const rows = await Promise.all(providerRegistry.ids().map(async (id) => {
+        const d = providerRegistry.get(id).describe();
+        const availability = await providerRegistry.get(id).probe();
+        const local = d.capabilities.billing === 'local-free';
+        const entries = allow.filter((e) => e === id || e.startsWith(`${id}:`));
+        const authorized = id === DEFAULT_PROVIDER_ID ? 'default' : entries.length ? entries.join(' ') : 'no';
+        const own = budgets.filter((b) => b.provider === id);
+        const charged = store.chargedProviderClaims(id, '').provider;
+        const budget = local ? 'not needed (local-free)' : own.length ? `${own.map((b) => `${b.taskId ?? 'all tasks'}=${b.claims}`).join(', ')}; charged ${charged}` : 'none';
+        const runnable = availability.state === 'available' && authorized !== 'no' && (local || own.length > 0);
+        return { id, kind: d.identity.kind, model: d.identity.model, languages: d.capabilities.taskTypes, availability: availability.state, availabilityDetail: availability.detail, authorized, billing: d.capabilities.billing, budget, charged, limits: d.limits ?? null, runnable };
+      }));
+      if (has('--json')) { console.log(JSON.stringify(rows, null, 2)); break; }
+      console.log('| Worker | Languages | Available | Authorized | Cost class | Budget (claims) | Runs tasks now |');
+      console.log('|---|---|---|---|---|---|---|');
+      for (const r of rows) console.log(`| ${r.id} (${r.kind}, ${r.model}) | ${r.languages.join(', ')} | ${r.availability}: ${r.availabilityDetail} | ${r.authorized} | ${r.billing} | ${r.budget} | ${r.runnable ? 'yes: bounded 1-file tasks the delegation gate admits' : 'no'} |`);
+      console.log('TypeScript: no worker (the ts language adapter is disabled until a human approves its verifier).');
+      break;
+    }
     case 'metrics':
       console.log(JSON.stringify(computeMetrics(store, flag('--batch')), null, 2));
       break;
@@ -302,7 +337,7 @@ async function main(): Promise<void> {
       process.exitCode = await runMeetingCommand(rest, { store, meetingsDir: process.env.AGENTIC_MEETINGS_DIR ?? join(workdir, 'meetings') });
       break;
     default:
-      console.error('usage: lead <supervisor|objective|lifecycle|meeting|plan|tasks|run|status|review|integrate|integration|resume|cancel|retry|claude|metrics|reconcile> ...');
+      console.error('usage: lead <providers|supervisor|objective|lifecycle|meeting|plan|tasks|run|status|review|integrate|integration|resume|cancel|retry|claude|metrics|reconcile> ...');
       process.exit(2);
   }
 }

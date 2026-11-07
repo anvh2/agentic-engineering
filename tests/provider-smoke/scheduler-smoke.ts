@@ -6,6 +6,8 @@ import { createInProcessExecutor } from '../../src/integrations/mastra/__testing
 import { createCodingTaskWorkflow } from '../../src/integrations/mastra/workflows/coding-task-workflow.ts';
 import { capacityFor } from '../../src/runtime/capacity/model-capacity.ts';
 import { Scheduler } from '../../src/runtime/scheduler/scheduler.ts';
+import { budgetsMirroring } from '../../src/runtime/scheduler/test-helpers.ts';
+import type { ProviderBudgetEntry } from '../../src/runtime/execution/provider-routing.ts';
 import { SchedulerStore } from '../../src/runtime/scheduler/store.ts';
 import { WorktreeManager } from '../../src/runtime/worktree/worktree.ts';
 import { codexEntry, type CodexConfig } from '../../src/workers/providers/codex.ts';
@@ -65,6 +67,8 @@ export interface SmokeOptions {
   };
   /** The scheduler's own operator allow-list (default: `<provider>:smoke-double`). */
   schedulerAllowProviders?: string[];
+  /** The scheduler's operator budget (M12). Default: one claim per allow-list entry. */
+  schedulerBudgets?: ProviderBudgetEntry[];
   /** Active-execution budget of the task (default: modelTimeoutMs + 2 minutes). */
   taskTimeoutMs?: number;
   /** Where SIGINT/SIGTERM are heard (default: this process). Tests inject an emitter. */
@@ -161,6 +165,9 @@ export async function runSchedulerSmoke(options: SmokeOptions) {
     workspace: new WorktreeManager(join(outDir, 'worktrees')),
     capacity: capacityFor(undefined, options.http?.capacityDb),
     allowProviders: schedulerAllow,
+    // M12: the operator budget is one claim per authorized task, the same bound the smoke states for its single claim.
+    providerBudgets: options.schedulerBudgets ?? budgetsMirroring(schedulerAllow, 1),
+    describeProvider: (id) => (id === 'codex' ? codexEntry().describe() : id === 'gemini' ? geminiEntry().describe() : undefined),
     config: { maxConcurrentWorkers: 1, pollMs: 500, workerLeaseTimeoutMs: 60_000, taskTimeoutMs, maxCapacityWaitMs },
     log: (l) => {
       schedulerLog.push(l);
