@@ -1,0 +1,1173 @@
+{
+  "schema": "agentic.m12-evidence/1",
+  "exportedFrom": "scheduler.db (M12 isolated state root)",
+  "objectives": [
+    {
+      "objective_id": "m12-quota",
+      "batch_id": "m12-quota",
+      "phase": "CANCELLED",
+      "base_commit": "6e29721c0f1ccb36c4b19e62655ada5836af9bd6",
+      "result": {
+        "reason": "cancelled",
+        "detail": "Re-planned as m12-quota-r2: Qwen (qwen3:8b) failed t1-parse within its 30-min budget (attempt 1 wrong: validated the name before trimming; attempt 2 no change; attempt 3 cut by task_timeout). The parser is split into smaller single-concept tasks. Nothing was integrated.",
+        "stops": []
+      },
+      "created_at": 1792687339696,
+      "updated_at": 1792690429330,
+      "events": [
+        {
+          "at": 1792687339696,
+          "from_phase": "PINNED",
+          "to_phase": "PINNED",
+          "actor": "human",
+          "kind": "pin",
+          "reason": "oracle 88ef09a938bc pinned (1 file(s), 2 command(s))"
+        },
+        {
+          "at": 1792687680685,
+          "from_phase": "PINNED",
+          "to_phase": "EXECUTING",
+          "actor": "human",
+          "kind": "phase",
+          "reason": "oracle pinned; execution starts"
+        },
+        {
+          "at": 1792687836207,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-driver",
+          "kind": "execution",
+          "reason": "round 1: claimed m12-quota.t1-parse; review pending -; failed m12-quota.t1-parse(RUNTIME_FAILURE)"
+        },
+        {
+          "at": 1792687836209,
+          "from_phase": "EXECUTING",
+          "to_phase": "ESCALATED",
+          "actor": "human",
+          "kind": "phase",
+          "reason": "task_dead_end"
+        },
+        {
+          "at": 1792687968156,
+          "from_phase": "ESCALATED",
+          "to_phase": "EXECUTING",
+          "actor": "human",
+          "kind": "phase",
+          "reason": "resumed by operator: t1-parse failed with run_restarted because the Lead's dev server hot-reloaded mid-run (Lead edited src/ in the watched checkout). Execution now runs from a clean master checkout; the task was re-dispatched with lead retry (claim 2 of its budget)."
+        },
+        {
+          "at": 1792689777724,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-driver",
+          "kind": "execution",
+          "reason": "round 1: claimed m12-quota.t1-parse; review pending -; failed m12-quota.t1-parse(RUNTIME_FAILURE)"
+        },
+        {
+          "at": 1792689777726,
+          "from_phase": "EXECUTING",
+          "to_phase": "ESCALATED",
+          "actor": "human",
+          "kind": "phase",
+          "reason": "task_dead_end"
+        },
+        {
+          "at": 1792690429330,
+          "from_phase": "ESCALATED",
+          "to_phase": "CANCELLED",
+          "actor": "human",
+          "kind": "phase",
+          "reason": "Re-planned as m12-quota-r2: Qwen (qwen3:8b) failed t1-parse within its 30-min budget (attempt 1 wrong: validated the name before trimming; attempt 2 no change; attempt 3 cut by task_timeout). The parser is split into smaller single-concept tasks. Nothing was integrated."
+        },
+        {
+          "at": 1792690429481,
+          "from_phase": "CANCELLED",
+          "to_phase": "CANCELLED",
+          "actor": "human",
+          "kind": "cancel",
+          "reason": "cancelled: 2 task(s) cancelled, 0 not cancellable; runs confirmed stopped"
+        }
+      ]
+    },
+    {
+      "objective_id": "m12-quota-r2",
+      "batch_id": "m12-quota-r2",
+      "phase": "CANCELLED",
+      "base_commit": "3de5c9f7505db2f07e541f4db81c6d4d36a6d4b6",
+      "result": {
+        "reason": "cancelled",
+        "detail": "Lead planning defect, not a worker failure: all three t1-entry versions by Qwen passed the runtime verifier but were rejected by verified review for finding:comment_removed, because the stubs carried an 'It is not implemented yet.' comment that the task constraint told the worker to replace. Re-planned as m12-quota-r3 on stubs without placeholder comments. Nothing was integrated.",
+        "stops": []
+      },
+      "created_at": 1792690513106,
+      "updated_at": 1792692273688,
+      "events": [
+        {
+          "at": 1792690513106,
+          "from_phase": "PINNED",
+          "to_phase": "PINNED",
+          "actor": "human",
+          "kind": "pin",
+          "reason": "oracle 88ef09a938bc pinned (1 file(s), 2 command(s))"
+        },
+        {
+          "at": 1792690513751,
+          "from_phase": "PINNED",
+          "to_phase": "EXECUTING",
+          "actor": "human",
+          "kind": "phase",
+          "reason": "oracle pinned; execution starts"
+        },
+        {
+          "at": 1792691025184,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-driver",
+          "kind": "execution",
+          "reason": "round 1: claimed m12-quota-r2.t1-entry; review pending m12-quota-r2.t1-entry; failed -"
+        },
+        {
+          "at": 1792691030965,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-verified-reviewer",
+          "kind": "review",
+          "reason": "m12-quota-r2.t1-entry: REPAIR_REQUIRED (finding:comment_removed)"
+        },
+        {
+          "at": 1792691030971,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-verified-reviewer",
+          "kind": "repair",
+          "reason": "m12-quota-r2.t1-entry: correction 1/2 created"
+        },
+        {
+          "at": 1792691597271,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-driver",
+          "kind": "execution",
+          "reason": "round 2: claimed m12-quota-r2.t1-entry-fix1; review pending m12-quota-r2.t1-entry-fix1; failed -"
+        },
+        {
+          "at": 1792691602991,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-verified-reviewer",
+          "kind": "review",
+          "reason": "m12-quota-r2.t1-entry-fix1: REPAIR_REQUIRED (finding:comment_removed)"
+        },
+        {
+          "at": 1792691602994,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-verified-reviewer",
+          "kind": "repair",
+          "reason": "m12-quota-r2.t1-entry-fix1: correction 2/2 created"
+        },
+        {
+          "at": 1792692159285,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-driver",
+          "kind": "execution",
+          "reason": "round 3: claimed m12-quota-r2.t1-entry-fix2; review pending m12-quota-r2.t1-entry-fix2; failed -"
+        },
+        {
+          "at": 1792692165034,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-verified-reviewer",
+          "kind": "review",
+          "reason": "m12-quota-r2.t1-entry-fix2: REPAIR_REQUIRED (finding:comment_removed)"
+        },
+        {
+          "at": 1792692165037,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-verified-reviewer",
+          "kind": "repair",
+          "reason": "m12-quota-r2.t1-entry-fix2: correction budget (2) exhausted; escalated instead of repaired"
+        },
+        {
+          "at": 1792692165038,
+          "from_phase": "EXECUTING",
+          "to_phase": "ESCALATED",
+          "actor": "human",
+          "kind": "phase",
+          "reason": "task_dead_end"
+        },
+        {
+          "at": 1792692273688,
+          "from_phase": "ESCALATED",
+          "to_phase": "CANCELLED",
+          "actor": "human",
+          "kind": "phase",
+          "reason": "Lead planning defect, not a worker failure: all three t1-entry versions by Qwen passed the runtime verifier but were rejected by verified review for finding:comment_removed, because the stubs carried an 'It is not implemented yet.' comment that the task constraint told the worker to replace. Re-planned as m12-quota-r3 on stubs without placeholder comments. Nothing was integrated."
+        },
+        {
+          "at": 1792692273821,
+          "from_phase": "CANCELLED",
+          "to_phase": "CANCELLED",
+          "actor": "human",
+          "kind": "cancel",
+          "reason": "cancelled: 5 task(s) cancelled, 0 not cancellable; runs confirmed stopped"
+        }
+      ]
+    },
+    {
+      "objective_id": "m12-quota-r3",
+      "batch_id": "m12-quota-r3",
+      "phase": "ACCEPTED",
+      "base_commit": "f64f3ad012a5112204b2695a1618c94e56a8d9e1",
+      "result": {
+        "reason": "accepted",
+        "detail": "oracle passes on 4f3cba06a3 and fails on the base f64f3ad012",
+        "acceptance": {
+          "objectiveId": "m12-quota-r3",
+          "batchId": "m12-quota-r3",
+          "verdict": "ACCEPTED",
+          "reason": "accepted",
+          "detail": "oracle passes on 4f3cba06a3 and fails on the base f64f3ad012",
+          "oracle": {
+            "specHash": "88ef09a938bcf8b52a7861725a13a61228f3a7262f218751ef0d64ef2314f4b3",
+            "files": {
+              "acceptance_test.go": "b5fe19aabaa1ad8ceaa0068280d2b88e09bdd7b08bd73ec821b7214685da8c69"
+            },
+            "unchanged": true,
+            "mismatches": [],
+            "pinnedAt": 1792692728592,
+            "pinnedBeforeFirstClaim": true
+          },
+          "integration": {
+            "branch": "lead-integration/m12-quota-r3",
+            "tip": "4f3cba06a3ca21f90f194791add0dc242621ef30",
+            "baseCommit": "f64f3ad012a5112204b2695a1618c94e56a8d9e1",
+            "tasks": [
+              {
+                "taskId": "m12-quota-r3.t1-entry",
+                "implementedBy": "worker",
+                "workerHead": "4d63af7cecc73ca4790ba1ac3d81d4b4446071c1",
+                "integratedCommit": "ee25921b543e95f2a6d46b7b3f72aafd73e61caf",
+                "runIds": [
+                  "5ba68bde-a9fb-4cc1-b0f5-4f8f14832e83"
+                ]
+              },
+              {
+                "taskId": "m12-quota-r3.t2-parse",
+                "implementedBy": "worker",
+                "workerHead": "5ccd2905a0d04d4f0f791b258cbfa61e46654f45",
+                "integratedCommit": "8e01b852e389073111d8ad3952207807d295d295",
+                "runIds": [
+                  "ee358da3-843c-47f2-8c8f-d4b19a269bcd"
+                ]
+              },
+              {
+                "taskId": "m12-quota-r3.t3-ledger",
+                "implementedBy": "worker",
+                "workerHead": "1f3b5f8d37e5bbbfed95e8f73ec9a3bdf4b12e56",
+                "integratedCommit": "4f3cba06a3ca21f90f194791add0dc242621ef30",
+                "runIds": [
+                  "67a1c1b8-f6b5-407a-8841-14df0f61a4cd"
+                ]
+              }
+            ]
+          },
+          "candidate": {
+            "label": "candidate",
+            "commit": "4f3cba06a3ca21f90f194791add0dc242621ef30",
+            "treeId": "67ad1cdaa8be243fb5ca0ec03ac89ce6fe6c1050",
+            "startedAt": 1792694719298,
+            "durationMs": 5404,
+            "commands": [
+              {
+                "command": [
+                  "go",
+                  "vet",
+                  "./..."
+                ],
+                "exitCode": 0,
+                "timedOut": false,
+                "durationMs": 2331,
+                "outputSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "outputTail": ""
+              },
+              {
+                "command": [
+                  "go",
+                  "test",
+                  "-count=1",
+                  "./..."
+                ],
+                "exitCode": 0,
+                "timedOut": false,
+                "durationMs": 3072,
+                "outputSha256": "00a29da738add381d338636aac425d336b7fd0db36ac141a22cd6d492bd86b8b",
+                "outputTail": "ok  \texample.com/quota\t0.314s"
+              }
+            ],
+            "passed": true,
+            "conclusive": true,
+            "evidenceHash": "2c9d4ccdd4d1ca26d7333fb2a9ff615b5547df60e0203215a37a539130897dcd"
+          },
+          "negativeControl": {
+            "label": "negative_control",
+            "commit": "f64f3ad012a5112204b2695a1618c94e56a8d9e1",
+            "treeId": "0115401028e11f465a9baa2dcd4b71960d4d3f21",
+            "startedAt": 1792694724729,
+            "durationMs": 5774,
+            "commands": [
+              {
+                "command": [
+                  "go",
+                  "vet",
+                  "./..."
+                ],
+                "exitCode": 0,
+                "timedOut": false,
+                "durationMs": 2381,
+                "outputSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "outputTail": ""
+              },
+              {
+                "command": [
+                  "go",
+                  "test",
+                  "-count=1",
+                  "./..."
+                ],
+                "exitCode": 1,
+                "timedOut": false,
+                "durationMs": 3392,
+                "outputSha256": "09bc96a9aec9cb863a411f65178b65db303bb58ba66f52f2cb0e3f84ba7753f9",
+                "outputTail": "--- FAIL: TestAcceptParseValid (0.00s)\n    acceptance_test.go:25: ParseBudgets(\"\") = map[string]int(nil), quota: ParseBudgets not implemented; want map[]\n    acceptance_test.go:25: ParseBudgets(\"   \\t\\n\") = map[string]int(nil), quota: ParseBudgets not implemented; want map[]\n    acceptance_test.go:25: ParseBudgets(\"codex=2\") = map[string]int(nil), quota: ParseBudgets not implemented; want map[codex:2]\n    acceptance_test.go:25: ParseBudgets(\"\\tcodex = 007 ,\\ngemini=0\") = map[string]int(nil), quota: ParseBudgets not implemented; want map[codex:7 gemini:0]\n    acceptance_test.go:25: ParseBudgets(\"a-1=999999\") = map[string]int(nil), quota: ParseBudgets not implemented; want map[a-1:999999]\n    acceptance_test.go:25: ParseBudgets(\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=1\") = map[string]int(nil), quota: ParseBudgets not implemented; want map[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1]\n--- FAIL: TestAcceptLedger (0.00s)\n    acceptance_test.go:46: NewLedger: quota: NewLedger not implemented\n--- FAIL: TestAcceptLedgerConcurrent (0.00s)\n    acceptance_test.go:80: NewLedger: quota: NewLedger not implemented\nFAIL\nFAIL\texample.com/quota\t0.304s\nFAIL"
+              }
+            ],
+            "passed": false,
+            "conclusive": true,
+            "evidenceHash": "e51dda4e1fb1774dc0a8ed3f641d45aacfed318a6f9cea59d3566274773435e5"
+          },
+          "decidedAt": 1792694730504,
+          "evidenceHash": "273e64768a80cdff7e332919f12e533c37b9891b5e99d0b172453a6c278fde4a"
+        },
+        "provenance": [
+          {
+            "taskId": "m12-quota-r3.t1-entry",
+            "correctionOf": null,
+            "runIds": [
+              "5ba68bde-a9fb-4cc1-b0f5-4f8f14832e83"
+            ],
+            "claimEpoch": 1,
+            "workerHead": "4d63af7cecc73ca4790ba1ac3d81d4b4446071c1",
+            "integratedCommit": "ee25921b543e95f2a6d46b7b3f72aafd73e61caf",
+            "reviews": [
+              {
+                "verdict": "APPROVE",
+                "verdictHash": "1d38c59bd67ba00d4b29da151287ad1a69c2d0ef578f8e3462122dc70a9b535f",
+                "reviewId": 4
+              }
+            ]
+          },
+          {
+            "taskId": "m12-quota-r3.t2-parse",
+            "correctionOf": null,
+            "runIds": [
+              "ee358da3-843c-47f2-8c8f-d4b19a269bcd"
+            ],
+            "claimEpoch": 1,
+            "workerHead": "5ccd2905a0d04d4f0f791b258cbfa61e46654f45",
+            "integratedCommit": "8e01b852e389073111d8ad3952207807d295d295",
+            "reviews": [
+              {
+                "verdict": "APPROVE",
+                "verdictHash": "318bbadfa654547575e7f0754eceb3c4865a17b42056af5307585504d4c10d60",
+                "reviewId": 5
+              }
+            ]
+          },
+          {
+            "taskId": "m12-quota-r3.t3-ledger",
+            "correctionOf": null,
+            "runIds": [
+              "67a1c1b8-f6b5-407a-8841-14df0f61a4cd"
+            ],
+            "claimEpoch": 1,
+            "workerHead": "1f3b5f8d37e5bbbfed95e8f73ec9a3bdf4b12e56",
+            "integratedCommit": "4f3cba06a3ca21f90f194791add0dc242621ef30",
+            "reviews": [
+              {
+                "verdict": "APPROVE",
+                "verdictHash": "b0cfea4ff1d9bb10e69f7ad1819d8e1d0b3f66d46d2542afb0c427bc1ddc66f8",
+                "reviewId": 6
+              }
+            ]
+          }
+        ],
+        "repairs": [],
+        "stops": []
+      },
+      "created_at": 1792692728593,
+      "updated_at": 1792694730506,
+      "events": [
+        {
+          "at": 1792692728593,
+          "from_phase": "PINNED",
+          "to_phase": "PINNED",
+          "actor": "human",
+          "kind": "pin",
+          "reason": "oracle 88ef09a938bc pinned (1 file(s), 2 command(s))"
+        },
+        {
+          "at": 1792692744845,
+          "from_phase": "PINNED",
+          "to_phase": "EXECUTING",
+          "actor": "human",
+          "kind": "phase",
+          "reason": "oracle pinned; execution starts"
+        },
+        {
+          "at": 1792693346756,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-driver",
+          "kind": "execution",
+          "reason": "round 1: claimed m12-quota-r3.t1-entry; review pending m12-quota-r3.t1-entry; failed -"
+        },
+        {
+          "at": 1792693352708,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-verified-reviewer",
+          "kind": "review",
+          "reason": "m12-quota-r3.t1-entry: APPROVE"
+        },
+        {
+          "at": 1792693358406,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-integrator",
+          "kind": "integration",
+          "reason": "m12-quota-r3.t1-entry: DONE -> ee25921b54"
+        },
+        {
+          "at": 1792694014904,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-driver",
+          "kind": "execution",
+          "reason": "round 2: claimed m12-quota-r3.t2-parse; review pending m12-quota-r3.t2-parse; failed -"
+        },
+        {
+          "at": 1792694020642,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-verified-reviewer",
+          "kind": "review",
+          "reason": "m12-quota-r3.t2-parse: APPROVE"
+        },
+        {
+          "at": 1792694026411,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-integrator",
+          "kind": "integration",
+          "reason": "m12-quota-r3.t2-parse: DONE -> 8e01b852e3"
+        },
+        {
+          "at": 1792694707891,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-driver",
+          "kind": "execution",
+          "reason": "round 3: claimed m12-quota-r3.t3-ledger; review pending m12-quota-r3.t3-ledger; failed -"
+        },
+        {
+          "at": 1792694713573,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-verified-reviewer",
+          "kind": "review",
+          "reason": "m12-quota-r3.t3-ledger: APPROVE"
+        },
+        {
+          "at": 1792694719203,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-integrator",
+          "kind": "integration",
+          "reason": "m12-quota-r3.t3-ledger: DONE -> 4f3cba06a3"
+        },
+        {
+          "at": 1792694719207,
+          "from_phase": "EXECUTING",
+          "to_phase": "ACCEPTING",
+          "actor": "human",
+          "kind": "phase",
+          "reason": "all 3 required task(s) are DONE and integrated"
+        },
+        {
+          "at": 1792694730506,
+          "from_phase": "ACCEPTING",
+          "to_phase": "ACCEPTED",
+          "actor": "lifecycle-acceptance",
+          "kind": "phase",
+          "reason": "accepted: oracle passes on 4f3cba06a3 and fails on the base f64f3ad012"
+        }
+      ]
+    },
+    {
+      "objective_id": "m12-retry",
+      "batch_id": "m12-retry",
+      "phase": "ACCEPTED",
+      "base_commit": "d2a07cd0ea0ab2f7617b0200c0cb273c9c4b15f8",
+      "result": {
+        "reason": "accepted",
+        "detail": "oracle passes on b9c097fc4f and fails on the base d2a07cd0ea",
+        "acceptance": {
+          "objectiveId": "m12-retry",
+          "batchId": "m12-retry",
+          "verdict": "ACCEPTED",
+          "reason": "accepted",
+          "detail": "oracle passes on b9c097fc4f and fails on the base d2a07cd0ea",
+          "oracle": {
+            "specHash": "5ef401e12eee185e816aaf47c5b122271faad3c4aad6e59a4661dcc2fe756ded",
+            "files": {
+              "tests/acceptance.test.js": "087cde3137ea0e1d3de5b84aa827d5f2d8a0c9ba3993e1f74879058dba8ce3e6"
+            },
+            "unchanged": true,
+            "mismatches": [],
+            "pinnedAt": 1792692735969,
+            "pinnedBeforeFirstClaim": true
+          },
+          "integration": {
+            "branch": "lead-integration/m12-retry",
+            "tip": "b9c097fc4f1340db793fbd7077c34b2f782fd1ed",
+            "baseCommit": "d2a07cd0ea0ab2f7617b0200c0cb273c9c4b15f8",
+            "tasks": [
+              {
+                "taskId": "m12-retry.t1-backoff",
+                "implementedBy": "worker",
+                "workerHead": "e4879802e34a4cf8ed84eefa897bcb82c42810d1",
+                "integratedCommit": "55f6092ed8e99ca78086c481275175353eee1c41",
+                "runIds": [
+                  "362844bf-951e-4cd6-8f82-1163de549cb1"
+                ]
+              },
+              {
+                "taskId": "m12-retry.t2-retry",
+                "implementedBy": "worker",
+                "workerHead": "669496ba9e7c4022cdce30e9022c5a5f537cbb85",
+                "integratedCommit": "b9c097fc4f1340db793fbd7077c34b2f782fd1ed",
+                "runIds": [
+                  "b1d6647e-4fb6-4379-9862-3d1ff4dabca3"
+                ]
+              }
+            ]
+          },
+          "candidate": {
+            "label": "candidate",
+            "commit": "b9c097fc4f1340db793fbd7077c34b2f782fd1ed",
+            "treeId": "aef1410c513a5d7d4f16532774b479462a46026a",
+            "startedAt": 1792695380465,
+            "durationMs": 800,
+            "commands": [
+              {
+                "command": [
+                  "npx",
+                  "--no-install",
+                  "jest",
+                  "--ci",
+                  "tests/acceptance.test.js"
+                ],
+                "exitCode": 0,
+                "timedOut": false,
+                "durationMs": 799,
+                "outputSha256": "b5e4964575de52bbe469eb9c238520f0c8d0fd2a7c90277314b21d357380a13c",
+                "outputTail": "PASS tests/acceptance.test.js\n  delays\n    ✓ capped exponential schedule, one wait between consecutive attempts (2 ms)\n    ✓ rejects bad input with RangeError (5 ms)\n  retry\n    ✓ first success: no sleep, attempt number passed in (1 ms)\n    ✓ retries with the delays schedule, then succeeds\n    ✓ exhausted: rethrows the last error itself, after attempts-1 sleeps\n    ✓ a synchronous throw counts as a failed attempt\n    ✓ invalid options reject before fn is ever called (1 ms)\n\nTest Suites: 1 passed, 1 total\nTests:       7 passed, 7 total\nSnapshots:   0 total\nTime:        0.181 s\nRan all test suites matching /tests\\/acceptance.test.js/i."
+              }
+            ],
+            "passed": true,
+            "conclusive": true,
+            "evidenceHash": "c1d654e8a01c3bd1c534e29954a40f20c84405f6f09fb7780161870c60f56e4e"
+          },
+          "negativeControl": {
+            "label": "negative_control",
+            "commit": "d2a07cd0ea0ab2f7617b0200c0cb273c9c4b15f8",
+            "treeId": "d405d502e8295fef7eb0aae123a6ad31ca802e63",
+            "startedAt": 1792695381294,
+            "durationMs": 815,
+            "commands": [
+              {
+                "command": [
+                  "npx",
+                  "--no-install",
+                  "jest",
+                  "--ci",
+                  "tests/acceptance.test.js"
+                ],
+                "exitCode": 1,
+                "timedOut": false,
+                "durationMs": 814,
+                "outputSha256": "8bb9f2842bbc54b0f367c47e876badd7fcaa762a8e6979a668d01170aae87a72",
+                "outputTail": "\u001b[39m \u001b[35m1\u001b[39m]\u001b[33m,\u001b[39m [\u001b[33mNaN\u001b[39m\u001b[33m,\u001b[39m \u001b[35m1\u001b[39m\u001b[33m,\u001b[39m \u001b[35m1\u001b[39m]\u001b[33m,\u001b[39m [\u001b[32m'3'\u001b[39m\u001b[33m,\u001b[39m \u001b[35m1\u001b[39m\u001b[33m,\u001b[39m \u001b[35m1\u001b[39m]\u001b[33m,\u001b[39m [\u001b[35m2\u001b[39m\u001b[33m,\u001b[39m \u001b[33m-\u001b[39m\u001b[35m1\u001b[39m\u001b[33m,\u001b[39m \u001b[35m1\u001b[39m]\u001b[33m,\u001b[39m [\u001b[35m2\u001b[39m\u001b[33m,\u001b[39m \u001b[33mNaN\u001b[39m\u001b[33m,\u001b[39m \u001b[35m1\u001b[39m]\u001b[33m,\u001b[39m [\u001b[35m2\u001b[39m\u001b[33m,\u001b[39m \u001b[35m1\u001b[39m\u001b[33m,\u001b[39m \u001b[33m-\u001b[39m\u001b[35m1\u001b[39m]\u001b[33m,\u001b[39m [\u001b[35m2\u001b[39m\u001b[33m,\u001b[39m \u001b[35m1\u001b[39m\u001b[33m,\u001b[39m \u001b[33mInfinity\u001b[39m]\u001b[33m,\u001b[39m [\u001b[35m2\u001b[39m\u001b[33m,\u001b[39m \u001b[33mInfinity\u001b[39m\u001b[33m,\u001b[39m \u001b[35m1\u001b[39m]]) {\n    \u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 17 |\u001b[39m       expect(() \u001b[33m=>\u001b[39m delays(\u001b[33m...\u001b[39margs))\u001b[33m.\u001b[39mtoThrow(\u001b[33mRangeError\u001b[39m)\u001b[33m;\u001b[39m\n     \u001b[90m    |\u001b[39m                                     \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n     \u001b[90m 18 |\u001b[39m     }\n     \u001b[90m 19 |\u001b[39m   })\u001b[33m;\u001b[39m\n     \u001b[90m 20 |\u001b[39m })\u001b[33m;\u001b[39m\u001b[0m\n\n      at Object.toThrow (tests/acceptance.test.js:17:37)\n\n  ● retry › first success: no sleep, attempt number passed in\n\n    expect(received).resolves.toBe()\n\n    Received promise rejected instead of resolved\n    Rejected to value: [Error: retry: not implemented]\n\n    \u001b[0m \u001b[90m 26 |\u001b[39m     \u001b[36mconst\u001b[39m { calls\u001b[33m,\u001b[39m sleep } \u001b[33m=\u001b[39m sleeper()\u001b[33m;\u001b[39m\n     \u001b[90m 27 |\u001b[39m     \u001b[36mconst\u001b[39m seen \u001b[33m=\u001b[39m []\u001b[33m;\u001b[39m\n    \u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 28 |\u001b[39m     \u001b[36mawait\u001b[39m expect(retry(\u001b[36masync\u001b[39m (n) \u001b[33m=>\u001b[39m { seen\u001b[3\n\n[output truncated; additional output was produced]"
+              }
+            ],
+            "passed": false,
+            "conclusive": true,
+            "evidenceHash": "e946ec5c953524ee8a648b77de0678573509fb526aa7e270a1c0b61e97cc1270"
+          },
+          "decidedAt": 1792695382110,
+          "evidenceHash": "e04919d1f13614980c746ba2f082103a0c8e2d1aebf27e1ae943e9542af9401a"
+        },
+        "provenance": [
+          {
+            "taskId": "m12-retry.t1-backoff",
+            "correctionOf": null,
+            "runIds": [
+              "362844bf-951e-4cd6-8f82-1163de549cb1"
+            ],
+            "claimEpoch": 1,
+            "workerHead": "e4879802e34a4cf8ed84eefa897bcb82c42810d1",
+            "integratedCommit": "55f6092ed8e99ca78086c481275175353eee1c41",
+            "reviews": [
+              {
+                "verdict": "APPROVE",
+                "verdictHash": "07b73a7901a34e6d773c177235f43f5b2272f7c4dd1029ae0bf730f751a58e05",
+                "reviewId": 7
+              }
+            ]
+          },
+          {
+            "taskId": "m12-retry.t2-retry",
+            "correctionOf": null,
+            "runIds": [
+              "b1d6647e-4fb6-4379-9862-3d1ff4dabca3"
+            ],
+            "claimEpoch": 1,
+            "workerHead": "669496ba9e7c4022cdce30e9022c5a5f537cbb85",
+            "integratedCommit": "b9c097fc4f1340db793fbd7077c34b2f782fd1ed",
+            "reviews": [
+              {
+                "verdict": "APPROVE",
+                "verdictHash": "451b4e77bf95c9f63eeee6d67f9350cc9b7b30461c78d51c6a154b175dd9f551",
+                "reviewId": 8
+              }
+            ]
+          }
+        ],
+        "repairs": [],
+        "stops": []
+      },
+      "created_at": 1792692735969,
+      "updated_at": 1792695382111,
+      "events": [
+        {
+          "at": 1792692735969,
+          "from_phase": "PINNED",
+          "to_phase": "PINNED",
+          "actor": "human",
+          "kind": "pin",
+          "reason": "oracle 5ef401e12eee pinned (1 file(s), 1 command(s))"
+        },
+        {
+          "at": 1792694730510,
+          "from_phase": "PINNED",
+          "to_phase": "EXECUTING",
+          "actor": "human",
+          "kind": "phase",
+          "reason": "oracle pinned; execution starts"
+        },
+        {
+          "at": 1792695112051,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-driver",
+          "kind": "execution",
+          "reason": "round 1: claimed m12-retry.t1-backoff; review pending m12-retry.t1-backoff; failed -"
+        },
+        {
+          "at": 1792695113269,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-verified-reviewer",
+          "kind": "review",
+          "reason": "m12-retry.t1-backoff: APPROVE"
+        },
+        {
+          "at": 1792695115285,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-integrator",
+          "kind": "integration",
+          "reason": "m12-retry.t1-backoff: DONE -> 55f6092ed8"
+        },
+        {
+          "at": 1792695376029,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-driver",
+          "kind": "execution",
+          "reason": "round 2: claimed m12-retry.t2-retry; review pending m12-retry.t2-retry; failed -"
+        },
+        {
+          "at": 1792695377300,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-verified-reviewer",
+          "kind": "review",
+          "reason": "m12-retry.t2-retry: APPROVE"
+        },
+        {
+          "at": 1792695380402,
+          "from_phase": "EXECUTING",
+          "to_phase": "EXECUTING",
+          "actor": "lifecycle-integrator",
+          "kind": "integration",
+          "reason": "m12-retry.t2-retry: DONE -> b9c097fc4f"
+        },
+        {
+          "at": 1792695380402,
+          "from_phase": "EXECUTING",
+          "to_phase": "ACCEPTING",
+          "actor": "human",
+          "kind": "phase",
+          "reason": "all 2 required task(s) are DONE and integrated"
+        },
+        {
+          "at": 1792695382111,
+          "from_phase": "ACCEPTING",
+          "to_phase": "ACCEPTED",
+          "actor": "lifecycle-acceptance",
+          "kind": "phase",
+          "reason": "accepted: oracle passes on b9c097fc4f and fails on the base d2a07cd0ea"
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "m12-quota.t1-parse",
+      "batch_id": "m12-quota",
+      "state": "CANCELLED",
+      "attempts": 0,
+      "claims": 2,
+      "run_id": "fba99c5b-1fe6-4f00-9bd6-e7f878e44b6e",
+      "failure_category": "cancelled",
+      "state_reason": "objective m12-quota cancelled: Re-planned as m12-quota-r2: Qwen (qwen3:8b) failed t1-parse within its 30-min budget (attempt 1 wrong: validated the name before trimming; attempt 2 no change; attempt 3 cut by task_timeout). The parser is split into smaller single-concept tasks. Nothing was integrated."
+    },
+    {
+      "id": "m12-quota.t2-ledger",
+      "batch_id": "m12-quota",
+      "state": "CANCELLED",
+      "attempts": 0,
+      "claims": 0,
+      "run_id": null,
+      "failure_category": "cancelled",
+      "state_reason": "objective m12-quota cancelled: Re-planned as m12-quota-r2: Qwen (qwen3:8b) failed t1-parse within its 30-min budget (attempt 1 wrong: validated the name before trimming; attempt 2 no change; attempt 3 cut by task_timeout). The parser is split into smaller single-concept tasks. Nothing was integrated."
+    },
+    {
+      "id": "m12-quota-r2.t1-entry",
+      "batch_id": "m12-quota-r2",
+      "state": "CANCELLED",
+      "attempts": 1,
+      "claims": 1,
+      "run_id": "bbf8aa1c-4039-4dee-8f7b-408aa4992b57",
+      "failure_category": "cancelled",
+      "state_reason": "objective m12-quota-r2 cancelled: Lead planning defect, not a worker failure: all three t1-entry versions by Qwen passed the runtime verifier but were rejected by verified review for finding:comment_removed, because the stubs carried an 'It is not implemented yet.' comment that the task constraint told the worker to replace. Re-planned as m12-quota-r3 on stubs without placeholder comments. Nothing was integrated."
+    },
+    {
+      "id": "m12-quota-r2.t2-parse",
+      "batch_id": "m12-quota-r2",
+      "state": "CANCELLED",
+      "attempts": 0,
+      "claims": 0,
+      "run_id": null,
+      "failure_category": "cancelled",
+      "state_reason": "objective m12-quota-r2 cancelled: Lead planning defect, not a worker failure: all three t1-entry versions by Qwen passed the runtime verifier but were rejected by verified review for finding:comment_removed, because the stubs carried an 'It is not implemented yet.' comment that the task constraint told the worker to replace. Re-planned as m12-quota-r3 on stubs without placeholder comments. Nothing was integrated."
+    },
+    {
+      "id": "m12-quota-r2.t3-ledger",
+      "batch_id": "m12-quota-r2",
+      "state": "CANCELLED",
+      "attempts": 0,
+      "claims": 0,
+      "run_id": null,
+      "failure_category": "cancelled",
+      "state_reason": "objective m12-quota-r2 cancelled: Lead planning defect, not a worker failure: all three t1-entry versions by Qwen passed the runtime verifier but were rejected by verified review for finding:comment_removed, because the stubs carried an 'It is not implemented yet.' comment that the task constraint told the worker to replace. Re-planned as m12-quota-r3 on stubs without placeholder comments. Nothing was integrated."
+    },
+    {
+      "id": "m12-quota-r2.t1-entry-fix1",
+      "batch_id": "m12-quota-r2",
+      "state": "CANCELLED",
+      "attempts": 1,
+      "claims": 1,
+      "run_id": "5f5bfc16-360d-4287-8e4f-22d9737b7dbd",
+      "failure_category": "cancelled",
+      "state_reason": "objective m12-quota-r2 cancelled: Lead planning defect, not a worker failure: all three t1-entry versions by Qwen passed the runtime verifier but were rejected by verified review for finding:comment_removed, because the stubs carried an 'It is not implemented yet.' comment that the task constraint told the worker to replace. Re-planned as m12-quota-r3 on stubs without placeholder comments. Nothing was integrated."
+    },
+    {
+      "id": "m12-quota-r2.t1-entry-fix2",
+      "batch_id": "m12-quota-r2",
+      "state": "CANCELLED",
+      "attempts": 1,
+      "claims": 1,
+      "run_id": "cdeeaa5e-113d-4e0d-bb4f-aa14d0516a84",
+      "failure_category": "cancelled",
+      "state_reason": "objective m12-quota-r2 cancelled: Lead planning defect, not a worker failure: all three t1-entry versions by Qwen passed the runtime verifier but were rejected by verified review for finding:comment_removed, because the stubs carried an 'It is not implemented yet.' comment that the task constraint told the worker to replace. Re-planned as m12-quota-r3 on stubs without placeholder comments. Nothing was integrated."
+    },
+    {
+      "id": "m12-quota-r3.t1-entry",
+      "batch_id": "m12-quota-r3",
+      "state": "DONE",
+      "attempts": 1,
+      "claims": 1,
+      "run_id": "5ba68bde-a9fb-4cc1-b0f5-4f8f14832e83",
+      "failure_category": null,
+      "state_reason": "integrated and verified"
+    },
+    {
+      "id": "m12-quota-r3.t2-parse",
+      "batch_id": "m12-quota-r3",
+      "state": "DONE",
+      "attempts": 1,
+      "claims": 1,
+      "run_id": "ee358da3-843c-47f2-8c8f-d4b19a269bcd",
+      "failure_category": null,
+      "state_reason": "integrated and verified"
+    },
+    {
+      "id": "m12-quota-r3.t3-ledger",
+      "batch_id": "m12-quota-r3",
+      "state": "DONE",
+      "attempts": 1,
+      "claims": 1,
+      "run_id": "67a1c1b8-f6b5-407a-8841-14df0f61a4cd",
+      "failure_category": null,
+      "state_reason": "integrated and verified"
+    },
+    {
+      "id": "m12-retry.t1-backoff",
+      "batch_id": "m12-retry",
+      "state": "DONE",
+      "attempts": 1,
+      "claims": 1,
+      "run_id": "362844bf-951e-4cd6-8f82-1163de549cb1",
+      "failure_category": null,
+      "state_reason": "integrated and verified"
+    },
+    {
+      "id": "m12-retry.t2-retry",
+      "batch_id": "m12-retry",
+      "state": "DONE",
+      "attempts": 1,
+      "claims": 1,
+      "run_id": "b1d6647e-4fb6-4379-9862-3d1ff4dabca3",
+      "failure_category": null,
+      "state_reason": "integrated and verified"
+    }
+  ],
+  "reviews": [
+    {
+      "task_id": "m12-quota-r2.t1-entry",
+      "round": 1,
+      "decision": "REJECTED_WITH_FEEDBACK",
+      "feedback": "- finding:comment_removed: entry.go: 4 existing comment line(s) removed: //",
+      "reviewer": "lifecycle-verified-reviewer",
+      "decided_at": 1792691030970
+    },
+    {
+      "task_id": "m12-quota-r2.t1-entry-fix1",
+      "round": 1,
+      "decision": "REJECTED_WITH_FEEDBACK",
+      "feedback": "- finding:comment_removed: entry.go: 2 existing comment line(s) removed: // It is not implemented yet.",
+      "reviewer": "lifecycle-verified-reviewer",
+      "decided_at": 1792691602992
+    },
+    {
+      "task_id": "m12-quota-r2.t1-entry-fix2",
+      "round": 1,
+      "decision": "REJECTED_WITH_FEEDBACK",
+      "feedback": "- finding:comment_removed: entry.go: 4 existing comment line(s) removed: //",
+      "reviewer": "lifecycle-verified-reviewer",
+      "decided_at": 1792692165035
+    },
+    {
+      "task_id": "m12-quota-r3.t1-entry",
+      "round": 1,
+      "decision": "APPROVED",
+      "feedback": "verified review 1d38c59bd67b: 11 evidence check(s) passed, independent verifier passed",
+      "reviewer": "lifecycle-verified-reviewer",
+      "decided_at": 1792693352709
+    },
+    {
+      "task_id": "m12-quota-r3.t2-parse",
+      "round": 1,
+      "decision": "APPROVED",
+      "feedback": "verified review 318bbadfa654: 11 evidence check(s) passed, independent verifier passed",
+      "reviewer": "lifecycle-verified-reviewer",
+      "decided_at": 1792694020643
+    },
+    {
+      "task_id": "m12-quota-r3.t3-ledger",
+      "round": 1,
+      "decision": "APPROVED",
+      "feedback": "verified review b0cfea4ff1d9: 11 evidence check(s) passed, independent verifier passed",
+      "reviewer": "lifecycle-verified-reviewer",
+      "decided_at": 1792694713573
+    },
+    {
+      "task_id": "m12-retry.t1-backoff",
+      "round": 1,
+      "decision": "APPROVED",
+      "feedback": "verified review 07b73a7901a3: 11 evidence check(s) passed, independent verifier passed",
+      "reviewer": "lifecycle-verified-reviewer",
+      "decided_at": 1792695113269
+    },
+    {
+      "task_id": "m12-retry.t2-retry",
+      "round": 1,
+      "decision": "APPROVED",
+      "feedback": "verified review 451b4e77bf95: 11 evidence check(s) passed, independent verifier passed",
+      "reviewer": "lifecycle-verified-reviewer",
+      "decided_at": 1792695377301
+    }
+  ],
+  "routing": [
+    {
+      "seq": 1,
+      "task_id": "m12-quota-r3.t1-entry",
+      "at": 1792692744849,
+      "actor": "worker-52940-w1",
+      "provider": "ollama",
+      "outcome": "selected",
+      "code": "local_default",
+      "charged": 0,
+      "decision": {
+        "schema": "agentic.routing/1",
+        "taskId": "m12-quota-r3.t1-entry",
+        "requested": "ollama",
+        "provider": "ollama",
+        "model": "qwen3:8b-ctx8192",
+        "language": "go",
+        "billing": "local-free",
+        "budget": [],
+        "checks": [
+          {
+            "check": "provider_known",
+            "ok": true,
+            "detail": "local provider ollama, model qwen3:8b-ctx8192"
+          },
+          {
+            "check": "language_supported",
+            "ok": true,
+            "detail": "go is in go, js"
+          },
+          {
+            "check": "operator_authorized",
+            "ok": true,
+            "detail": "default provider"
+          },
+          {
+            "check": "budget",
+            "ok": true,
+            "detail": "local-free: nothing is spent"
+          }
+        ],
+        "fallback": "none",
+        "outcome": "selected",
+        "code": "local_default",
+        "reason": "default local provider ollama (qwen3:8b-ctx8192)",
+        "charged": false
+      }
+    },
+    {
+      "seq": 2,
+      "task_id": "m12-quota-r3.t2-parse",
+      "at": 1792693358409,
+      "actor": "worker-52940-w1",
+      "provider": "ollama",
+      "outcome": "selected",
+      "code": "local_default",
+      "charged": 0,
+      "decision": {
+        "schema": "agentic.routing/1",
+        "taskId": "m12-quota-r3.t2-parse",
+        "requested": "ollama",
+        "provider": "ollama",
+        "model": "qwen3:8b-ctx8192",
+        "language": "go",
+        "billing": "local-free",
+        "budget": [],
+        "checks": [
+          {
+            "check": "provider_known",
+            "ok": true,
+            "detail": "local provider ollama, model qwen3:8b-ctx8192"
+          },
+          {
+            "check": "language_supported",
+            "ok": true,
+            "detail": "go is in go, js"
+          },
+          {
+            "check": "operator_authorized",
+            "ok": true,
+            "detail": "default provider"
+          },
+          {
+            "check": "budget",
+            "ok": true,
+            "detail": "local-free: nothing is spent"
+          }
+        ],
+        "fallback": "none",
+        "outcome": "selected",
+        "code": "local_default",
+        "reason": "default local provider ollama (qwen3:8b-ctx8192)",
+        "charged": false
+      }
+    },
+    {
+      "seq": 3,
+      "task_id": "m12-quota-r3.t3-ledger",
+      "at": 1792694026413,
+      "actor": "worker-52940-w1",
+      "provider": "ollama",
+      "outcome": "selected",
+      "code": "local_default",
+      "charged": 0,
+      "decision": {
+        "schema": "agentic.routing/1",
+        "taskId": "m12-quota-r3.t3-ledger",
+        "requested": "ollama",
+        "provider": "ollama",
+        "model": "qwen3:8b-ctx8192",
+        "language": "go",
+        "billing": "local-free",
+        "budget": [],
+        "checks": [
+          {
+            "check": "provider_known",
+            "ok": true,
+            "detail": "local provider ollama, model qwen3:8b-ctx8192"
+          },
+          {
+            "check": "language_supported",
+            "ok": true,
+            "detail": "go is in go, js"
+          },
+          {
+            "check": "operator_authorized",
+            "ok": true,
+            "detail": "default provider"
+          },
+          {
+            "check": "budget",
+            "ok": true,
+            "detail": "local-free: nothing is spent"
+          }
+        ],
+        "fallback": "none",
+        "outcome": "selected",
+        "code": "local_default",
+        "reason": "default local provider ollama (qwen3:8b-ctx8192)",
+        "charged": false
+      }
+    },
+    {
+      "seq": 4,
+      "task_id": "m12-retry.t1-backoff",
+      "at": 1792694730512,
+      "actor": "worker-52940-w1",
+      "provider": "ollama",
+      "outcome": "selected",
+      "code": "local_default",
+      "charged": 0,
+      "decision": {
+        "schema": "agentic.routing/1",
+        "taskId": "m12-retry.t1-backoff",
+        "requested": "ollama",
+        "provider": "ollama",
+        "model": "qwen3:8b-ctx8192",
+        "language": "js",
+        "billing": "local-free",
+        "budget": [],
+        "checks": [
+          {
+            "check": "provider_known",
+            "ok": true,
+            "detail": "local provider ollama, model qwen3:8b-ctx8192"
+          },
+          {
+            "check": "language_supported",
+            "ok": true,
+            "detail": "js is in go, js"
+          },
+          {
+            "check": "operator_authorized",
+            "ok": true,
+            "detail": "default provider"
+          },
+          {
+            "check": "budget",
+            "ok": true,
+            "detail": "local-free: nothing is spent"
+          }
+        ],
+        "fallback": "none",
+        "outcome": "selected",
+        "code": "local_default",
+        "reason": "default local provider ollama (qwen3:8b-ctx8192)",
+        "charged": false
+      }
+    },
+    {
+      "seq": 5,
+      "task_id": "m12-retry.t2-retry",
+      "at": 1792695115288,
+      "actor": "worker-52940-w1",
+      "provider": "ollama",
+      "outcome": "selected",
+      "code": "local_default",
+      "charged": 0,
+      "decision": {
+        "schema": "agentic.routing/1",
+        "taskId": "m12-retry.t2-retry",
+        "requested": "ollama",
+        "provider": "ollama",
+        "model": "qwen3:8b-ctx8192",
+        "language": "js",
+        "billing": "local-free",
+        "budget": [],
+        "checks": [
+          {
+            "check": "provider_known",
+            "ok": true,
+            "detail": "local provider ollama, model qwen3:8b-ctx8192"
+          },
+          {
+            "check": "language_supported",
+            "ok": true,
+            "detail": "js is in go, js"
+          },
+          {
+            "check": "operator_authorized",
+            "ok": true,
+            "detail": "default provider"
+          },
+          {
+            "check": "budget",
+            "ok": true,
+            "detail": "local-free: nothing is spent"
+          }
+        ],
+        "fallback": "none",
+        "outcome": "selected",
+        "code": "local_default",
+        "reason": "default local provider ollama (qwen3:8b-ctx8192)",
+        "charged": false
+      }
+    }
+  ]
+}

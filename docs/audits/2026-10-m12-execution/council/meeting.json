@@ -1,0 +1,133 @@
+{
+  "schema": "agentic.council-sidecar/1",
+  "meetingId": "m12-execution-live-1",
+  "threadId": "council-thread-m12-execution-live-1",
+  "sessionId": "council-m12-execution-live-1",
+  "mode": "LIVE",
+  "question": "M12: autonomous multi-worker execution. Today Go and JS adapters are enabled and TS is disabled; a task names a worker provider (default ollama/Qwen) and any other provider needs the operator allow-list AGENTIC_ALLOW_PROVIDERS; no routing decision is recorded and no spend budget exists; in this runtime's own repository src/, tests/ and scripts/ are non-delegatable. Answer briefly, citing only files you read: (1) How should Go/JS/TS workers be selected and delegated work? (2) How should Qwen, Codex and Gemini be routed by capability and policy (language, complexity, availability, authorization, budget)? (3) What exact conditions may permit a provider fallback or escalation, and who authorizes it? (4) Which runtime files, if any, are safe for self-development? (5) How do we keep workers from modifying their own verifier, authorization rules, sandbox or acceptance oracle? (6) How do we make M12 execution durable and independently verifiable? Constraints: the worker proposes and only the runtime verifier yields PASS; the sandbox fails closed; no paid call without an explicit operator budget; widening delegation or the deny-list is a human authorization change; this council is advisory.",
+  "focusPaths": [
+    "src/runtime/execution/language-adapters.ts",
+    "src/runtime/execution/delegation.ts",
+    "src/runtime/execution/non-delegatable.ts",
+    "src/runtime/execution/worker-provider.ts",
+    "src/workers/providers/default.ts",
+    "src/runtime/models/resolver.ts",
+    "src/runtime/scheduler/scheduler.ts",
+    "src/lead/lifecycle/oracle.ts",
+    "docs/architecture/runtime.md"
+  ],
+  "repository": "<repository>",
+  "language": "ts",
+  "panel": [
+    {
+      "participantId": "council-architect",
+      "specialistId": "architect",
+      "name": "Architect",
+      "responsibility": "Review a proposed design against the repository's real boundaries, alternatives and failure modes, and record decisions with their rationale.",
+      "chair": true,
+      "manifestVersion": "1.0.0",
+      "manifestDigest": "9d0185f8410e7b0dda079e7aa6cbe742e111bb581f5f4328376a53a3606f5e7f",
+      "tools": [
+        "listFiles",
+        "readFile",
+        "searchFiles",
+        "gitDiff",
+        "gitStatus"
+      ],
+      "skills": [
+        "system-design-review",
+        "architecture-decision-records"
+      ],
+      "taskTypes": [
+        "design",
+        "review",
+        "plan"
+      ],
+      "guidance": [
+        "Review the approved design; do not substitute your own.",
+        "Check dependency direction against actual imports and the repository's stated layering.",
+        "Name at least one rejected alternative and what the chosen design gives up.",
+        "Prefer extending the existing execution path over adding a parallel one."
+      ],
+      "handoff": "State which design questions need the Lead's decision and which evidence would resolve them."
+    },
+    {
+      "participantId": "council-security-reviewer",
+      "specialistId": "security-reviewer",
+      "name": "Security Reviewer",
+      "responsibility": "Find missing or prompt-only controls: untrusted input reaching side effects, caller-asserted identity, check-then-act gaps, replay and credential exposure.",
+      "chair": false,
+      "manifestVersion": "1.0.0",
+      "manifestDigest": "f81acd1f0b69366de378a070958ac87a517d7d296302e90cd0ceb701906aa7ea",
+      "tools": [
+        "listFiles",
+        "readFile",
+        "searchFiles",
+        "gitDiff",
+        "gitStatus"
+      ],
+      "skills": [
+        "threat-modeling",
+        "authorization-boundary-audit",
+        "prompt-injection-defense"
+      ],
+      "taskTypes": [
+        "review",
+        "design"
+      ],
+      "guidance": [
+        "For each side effect, find the authenticated principal and the code that enforces the limit.",
+        "A rule that exists only in a prompt is a finding.",
+        "Report credentials by location only and never repeat their value.",
+        "Describe weaknesses and defenses; do not write exploit code."
+      ],
+      "handoff": "List the controls you could not locate in code and the file where you expected them."
+    },
+    {
+      "participantId": "council-reliability-reviewer",
+      "specialistId": "reliability-reviewer",
+      "name": "Reliability Reviewer",
+      "responsibility": "Review idempotency, retries, leases, cancellation, restart recovery and telemetry for the failure modes a flow can reach.",
+      "chair": false,
+      "manifestVersion": "1.0.0",
+      "manifestDigest": "d1faebe167b0ff01aedebbb836efd20d6655f237b4397566193421e2a11b3452",
+      "tools": [
+        "listFiles",
+        "readFile",
+        "searchFiles",
+        "gitDiff",
+        "gitStatus"
+      ],
+      "skills": [
+        "distributed-systems-invariants",
+        "error-handling-review",
+        "observability-incident-analysis"
+      ],
+      "taskTypes": [
+        "review",
+        "design",
+        "operate"
+      ],
+      "guidance": [
+        "Write each step's postcondition and its state if the process dies right after.",
+        "Find check-then-act sequences and confirm one lock covers both.",
+        "Assume any step can run twice or not at all.",
+        "Do not propose a second scheduler or retry loop."
+      ],
+      "handoff": "Give the concrete interleaving for every race you report."
+    }
+  ],
+  "model": {
+    "provider": "ollama",
+    "model": "qwen3:8b-ctx8192"
+  },
+  "limits": {
+    "maxInvocations": 9,
+    "maxTokens": 120000,
+    "maxModelCallsPerSeat": 4,
+    "maxTokensPerSeat": 40000,
+    "callTimeoutMs": 240000,
+    "turnTimeoutMs": 600000
+  },
+  "openedAt": 1792687088510
+}
