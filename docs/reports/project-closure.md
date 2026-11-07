@@ -33,7 +33,7 @@ Closure merges, all normal merge commits (never squash or rebase):
 | --- | --- | --- | --- |
 | #66 | `bb01119` | `6db44d9`, `0dd6669` | Head `0dd6669` is master `6db44d9` merged into the PR branch. Merged with the repository-admin bypass of the `protect-master` ruleset (it requires one approving review and there is one reviewer, who is the author), on the Engineering Director's explicit instruction. |
 
-Not merged yet: **#63** (docs-only M12 evidence) and **#69** (this report).
+Not merged yet: **#63** (docs-only M12 evidence). This report is #69; its own merge commit and the post-merge CI result for it are recorded in the PR #69 closing comment, because a commit cannot contain its own SHA.
 
 ## Gate evidence
 
@@ -52,15 +52,11 @@ Node v22.23.2, macOS.
 | Studio build | `npm run build --prefix apps/control-center`; `MASTRA_TELEMETRY_DISABLED=1 npm run build -- --studio` | `bb01119` | PASS; runtime contains `studio: true` |
 | PR CI for #66 | `CI` workflow on head `0dd6669` | `0dd6669` | run 42360458323 **cancelled** (superseded on the same SHA when marking the PR ready re-triggered CI under the workflow's concurrency group), then run 42360482904 **success**: typecheck + 4 test shards |
 | PR CI for #63 | `CI` workflow | `7d4500f` | PASS: typecheck + 4 shards |
-| Post-merge CI | `Post-merge smoke and E2E`, run 42361360126 | `bb01119` | see [Post-merge result](#post-merge-result) |
+| Post-merge CI | `Post-merge smoke and E2E` (10-shard full regression), run 42361360126 | `bb01119` | **PASS** (typecheck and all 10 shards) |
 
 `bb01119` and `0dd6669` have the identical git tree (`48eea24`), so the regression, app and browser results for `0dd6669` apply to the merged master exactly. The reliability lab and the baseline ran on `6db44d9`, whose differences from `bb01119` are the #66 files only; they were not re-run on `bb01119`.
 
 Smoke and E2E on disposable repositories (`tests/smoke-e2e`: `m85-objective`, `m86-recovery`, `m87-credential-isolation`, `m8final-objective`) are part of `npm test` and passed in both full runs. Real-provider smokes are opt-in and were **not** run: no paid provider was called, and Ollama was not running during closure. A normal full run leaves no processes behind (checked before and after).
-
-### Post-merge result
-
-Run 42361360126 on `bb01119`: 9 of 10 shards and typecheck were green when this report was written. The final conclusion is recorded in the PR #69 closing comment.
 
 ## Acceptance gates
 
@@ -93,7 +89,7 @@ Run 42361360126 on `bb01119`: 9 of 10 shards and typecheck were green when this 
 
 ### Merge blockers (block COMPLETE)
 
-1. **#63 is verified but not merged.** It is a draft; marking it ready was blocked by the automated permission check because the Engineering Director said "do not merge yet" and set conditions. The conditions are now met: updated against master (`1807a04`, a normal merge), claims rechecked (see its README, "Status at merge"), CI green on `7d4500f`. It needs the Director's go-ahead to mark ready and merge with the admin bypass. #69 (this report) is merged the same way after that.
+1. **#63 is verified but not merged.** It is a draft; marking it ready was blocked by the automated permission check because the Engineering Director said "do not merge yet" and set conditions. The conditions are now met: updated against master (`1807a04`, a normal merge), claims rechecked (see its README, "Status at merge"), CI green on `7d4500f`. It needs the Director's go-ahead to mark ready and merge with the admin bypass. Until it merges, this project is NOT COMPLETE; once it does, the only change to this report is flipping the status after a final check.
 
 ### Operator-owned cleanup (not authorized, not done; block "no orphaned processes" in the definition of done)
 
