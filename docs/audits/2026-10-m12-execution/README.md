@@ -10,9 +10,9 @@ M12 asks the runtime to route bounded work to authorized coding workers under ex
 | 2. The runtime selects an authorized coding worker | 5 `provider_routing` rows: `ollama` / `qwen3:8b-ctx8192`, `local_default`, all four checks passed, nothing charged, `fallback: none` | met (code from PR "provider routing", run from a local integration checkout) |
 | 3. A task is coded by a real worker through the runtime | 5 of 5 tasks coded by Qwen through `coding-task-workflow`, each on its first attempt and first claim | met |
 | 4. Independently verified | runtime verifier (sandbox) PASS per task, then verified review APPROVED per task, then the pinned oracle PASS on the integration tip and FAIL on the base (negative control) | met |
-| 5. Failures and retries handled safely | 3 failures, all contained: a server restart (`run_restarted`, no blind re-run); a wrong implementation, a no-change attempt and a `task_timeout`; 2 review rejections then a bounded `REVIEW_REJECTED` escalation. Nothing failed was integrated; `main` untouched | met |
+| 5. Failures and retries handled safely | 3 failures, all contained: a server restart (`run_restarted`, no blind re-run); a wrong implementation, a no-change attempt and a `task_timeout`; 3 review rejections (the original task and both bounded corrections) ended the objective; nothing rejected was integrated. Nothing failed was integrated; `main` untouched | met |
 | 6. Visible in Mastra and Organization | Mastra runs below; `control-center/v1/snapshot?objectiveId=…`, `/council`, `/agents` on the isolated server | met on the isolated server; **not** on :4111 (see Limitations) |
-| 7. Delivered as a reviewable PR | Draft PRs for provider routing, supervisor queue, and this evidence | Draft; merging needs a human code-owner review |
+| 7. Delivered as a reviewable PR | The code shipped as PRs #62 (provider routing) and #64 (supervisor queue), both merged to master (2026-10-24 and 2026-10-26); this evidence is PR #63 | met (see Status at merge) |
 | 8. A second objective begins without the Technical Architect | `lead supervisor start --queue` started `m12-retry` itself once `m12-quota-r3` was ACCEPTED | met (supervisor code from PR "supervisor queue") |
 
 ## Who did what
@@ -42,7 +42,7 @@ Outcome: **decided, advisory** (`authority: none`, human approval pending). The 
 | gemini CLI 0.63.0 | go, js | yes, sign-in not verifiable | **no** | unknown | none |
 | TypeScript | | no worker | `ts` adapter disabled pending human approval | | none |
 
-Reproduce with `npm run lead -- providers` (code from the provider-routing PR).
+Reproduce with `npm run lead -- providers` (on master since #62). Re-probed on 2026-11-07 on master `bb01119`: unchanged (codex 0.161.0 and gemini 0.63.0 available, neither authorized, budget none, charged 0); Ollama was not running at that moment.
 
 ## Objectives
 
@@ -78,12 +78,21 @@ The read-only specialist review workflow ran on the merged changes, in-process o
 - `security-reviewer` (run `b273e502-7605-4d94-bb0a-493639294e95`): REPORTED, 0 findings, **0 tool calls**. It did not read the code, so this is not evidence of safety.
 - `reliability-reviewer` (run `59741a00-075d-4dcf-8b3e-194efbc2cc8b`): INVALID_OUTPUT (the reply was not JSON).
 
-The review is **inconclusive**. Independent review rests on the required human code-owner review.
+The two run ids above come from the session log; they are not in the exported files, so they cannot be checked from this folder. The review is **inconclusive**. Independent review rests on the required human code-owner review.
 
 ## Limitations
 
-- **:4111 cannot show this work.** It is another session's 12-day-old build reading the main checkout's production `scheduler.db`, and it has no `council` or `agents` endpoints. The M11 runbook forbids reusing that database, and stopping that server is not this session's call. M12 is observable on the isolated server (:4311) with the same console code from master.
-- The routing records and the queue ran from a **local** merge of the two Draft PRs (`494209f`, not pushed); the execution server ran master `b9b00e1`.
+- **:4111 cannot show this work.** At the time of the run it was another session's 12-day-old build reading the main checkout's production `scheduler.db`, with no `council` or `agents` endpoints (see Status at merge for today). The M11 runbook forbids reusing that database, and stopping that server is not this session's call. M12 is observable on the isolated server (:4311) with the same console code from master.
+- The routing records and the queue ran from a **local** merge of the two PRs while they were drafts (`494209f`, not pushed); the execution server ran master `b9b00e1`. Both PRs are now merged, so the merged code is not byte-identical to what ran.
 - Two small objectives with exact specifications and a 16 GB Mac do not measure a success rate. qwen3:8b needs 4 to 12 minutes per attempt here, so the 30-minute active budget fits about 2.5 attempts; that budget was not changed.
 - Self-development of this runtime by workers stays closed (PR #58), and TypeScript stays disabled.
 - A verifier step cancelled by the task timeout is labelled `E_verifier_infrastructure`, which is misleading.
+
+## Status at merge (2026-11-07)
+
+Rechecked against master `bb01119` before merging; the evidence above is unchanged and is a record of 2026-10-22 and 2026-10-23, not of today's tree.
+
+- Verified from the files in this folder: 7 council calls (12 016 in / 7 910 out tokens, 0 tool calls, one trace), 4 objectives with the phases above, 12 tasks, 8 reviews (3 rejected, 5 approved), 5 routing rows, the five task run ids, and the oracle and evidence hashes named above.
+- Verified in the current code: the 90-second supervisor lease, `lead providers`, the `E_verifier_infrastructure` label (so that limitation still stands), and that nothing reads `AGENTIC_MAX_CLOUD_COST_USD` or `AGENTIC_PAID_PROVIDER_ENABLED`.
+- :4111 today is a Studio build from 2026-10-24 (after #67). It has the `council` and `agents` endpoints, but it still reads the canonical `.workdir` database, so it still cannot show this isolated-state run. Execution-data publication (`AGENTS.md`) is **not implemented**; this folder is the manual substitute.
+- This is not a success rate. The accepted objectives are 2 of 4 attempted, each small and exactly specified, on a local 8B model.
