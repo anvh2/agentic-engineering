@@ -1,6 +1,12 @@
 # Project closure report: Agentic Engineering
 
-Written 2026-11-07 by the Engineering Lead. **Status: NOT COMPLETE.** Every number below comes from a command in [Gate evidence](#gate-evidence) or from GitHub and runtime state read on the date above. Two things block the label COMPLETE: the Engineering Director has not yet reviewed and merged the two documentation PRs (#63, #69), and one mandatory gate in `AGENTS.md`, **execution-data publication, is not satisfied** and needs a Director decision ([below](#execution-data-publication-gate)). Separately, four housekeeping categories await the operator's authorization; none of them is a safety blocker ([classification](#leftovers-safety-blockers-versus-housekeeping)). The :4111 handoff is done and verified.
+Written 2026-11-07 by the Engineering Lead. **Status: COMPLETE WITH APPROVED SCOPE EXCEPTIONS, effective when #63 and #69 are merged and post-merge CI on `master` is green; never plain COMPLETE.** Every number below comes from a command in [Gate evidence](#gate-evidence) or from GitHub and runtime state read on the date above.
+
+Two unmet requirements are carried as exceptions the Engineering Director approved on 2026-11-07. **Neither is a passed requirement.**
+1. **Execution-data publication** (`AGENTS.md`, mandatory) is **not satisfied**; the Director approved closing without publication tooling, on conditions ([below](#execution-data-publication-gate)).
+2. **Definition of Done item 7** (no orphaned processes) is **not met**; the four orphaned processes are accepted as an operator-owned residual under the same closure exception ([below](#definition-of-done-reconciliation)).
+
+Four housekeeping categories remain untouched and await the operator; none is a safety blocker ([classification](#leftovers-safety-blockers-versus-housekeeping)). The :4111 handoff is done and verified.
 
 ## Architecture and capabilities
 
@@ -66,7 +72,7 @@ Smoke and E2E on disposable repositories (`tests/smoke-e2e`: `m85-objective`, `m
 | B. Security and mutation boundaries | Sandbox fails closed with no opt-out; credential isolation, forbidden-mutation and protected-path tests pass; a provider is denied unless the operator allows it, and a budget is required for any non-free provider. |
 | C. Supervisor and recovery | Read independently (`src/lead/supervisor/cli.ts`): every exit other than verified normal completion keeps the gate, the leadership lock and the objective claims for a human; ownership is re-asserted after each lifecycle run; one objective runs under one supervisor. Queue, restart and ownership-loss tests pass; `m86-recovery` and the reliability lab pass. |
 | D. Review and acceptance | Meeting suggestions open no meeting; security, authorization, budget, cancellation and dirty-tree stops are classified `operator` or `none` and never suggested; acceptance writes the meeting and the decision in one transaction; the table is append-only with database triggers and a CHECK tying status to decision. |
-| E. Operations | **Partly met.** Met: :4111 is the read-only canonical Studio and now runs the `bb01119` build (verified by endpoint checks and a write-method refusal); preview ports and worktrees follow `AGENTS.md`. **Not met:** "represent verified activity across worktrees, including live and historical evidence" and the separate execution-data publication gate. :4111 reads only the canonical `.workdir/scheduler/scheduler.db`, so isolated-state runs (the M12 execution) are not shown on it. See [Execution-data publication gate](#execution-data-publication-gate). |
+| E. Operations | **Partly met.** Met: :4111 is the read-only canonical Studio and now runs the `bb01119` build (verified by endpoint checks and a write-method refusal); preview ports and worktrees follow `AGENTS.md`. **Not met:** "represent verified activity across worktrees, including live and historical evidence" and the separate execution-data publication gate. :4111 reads only the canonical `.workdir/scheduler/scheduler.db`, so isolated-state runs (the M12 execution) are not shown on it. Exception approved by the Director for the publication part only (see [Execution-data publication gate](#execution-data-publication-gate)); the gate is still not satisfied. |
 
 ## :4111 handoff (done, verified 2026-11-07)
 
@@ -88,17 +94,17 @@ Smoke and E2E on disposable repositories (`tests/smoke-e2e`: `m85-objective`, `m
 
 ## Definition of Done reconciliation
 
-The mission's definition of done, item by item, against evidence. "Pending" means done and verified except for the Director's review and merge.
+The mission's definition of done, item by item, against evidence. "Pending" means done and verified except for the merge. "Not met, excepted" means the requirement is **not satisfied** and the Director approved closing with it open on 2026-11-07; it is not a pass.
 
 | # | Requirement | Status | Evidence or reason |
 | --- | --- | --- | --- |
 | 1 | All accepted project work is in `master` | **Pending** | #66 merged (`bb01119`). #63 (evidence only) and #69 (this report) wait for the Director's review. |
-| 2 | No unresolved P0/P1 issues | **Not met** | No open defect found in code. The unmet publication gate (below) is a mandatory `AGENTS.md` gate; it is treated as P1 until the Director rules on it. |
-| 3 | All critical acceptance gates have passing evidence | **Not met** | Gates A to D pass. Gate E is partly met: publication and cross-worktree visibility are not. |
+| 2 | No unresolved P0/P1 issues | **Not met, excepted** | No open defect found in code. The unmet publication gate (below) is a mandatory `AGENTS.md` gate and counts as P1 while it is open. The Director approved closing with it open (Option A), on the conditions listed below. |
+| 3 | All critical acceptance gates have passing evidence | **Not met, excepted** | Gates A to D pass. Gate E is partly met: publication and cross-worktree visibility are not met. The Director approved closing with that part of gate E open (Option A). |
 | 4 | Full regression and applicable E2E pass | **Met** | 1609/1609 on the tree of `bb01119`; post-merge CI green on `bb01119`. |
 | 5 | Operational and architecture docs match reality | **Pending** | README and control-center runbook corrected; #63 README corrected; both ship with #63 and #69. Older dated reports still name `/private/tmp` paths as history. |
 | 6 | Mastra :4111 stays the canonical view and is not disrupted | **Met with a recorded interruption** | Replaced by a Director-directed handoff, so there was an interruption: the old server was stopped and the new one started about a minute of tool calls later (exact gap not timed), and two open Chrome connections were dropped. Verified up on the new build. |
-| 7 | No unintended background processes, orphaned sessions or dirty worktrees remain | **Not met** | Four orphaned processes from older runs are still running; they are housekeeping and need the operator's authorization. This session's worktrees carry only the untracked `CLAUDE.md` copies the Director asked for. |
+| 7 | No unintended background processes, orphaned sessions or dirty worktrees remain | **Not met; accepted as an operator-owned residual** | Four orphaned processes from older runs are still running. They are not a safety blocker (none holds a permit, lock or gate), so they do not block closure, but the requirement is not satisfied: the processes are untouched and removing them needs the operator's authorization. Accepted by the Director as a residual under the approved closure exception. This session's worktrees carry only the untracked `CLAUDE.md` copies the Director asked for. |
 | 8 | Final Git and CI state reported accurately | **Pending** | Recorded in the PR #69 closing comment once the merges happen. |
 
 ## Execution-data publication gate
@@ -123,11 +129,14 @@ The mission's definition of done, item by item, against evidence. "Pending" mean
 
 I inventoried only these default locations. I did not assess the value of any database, and other state in other worktrees was not inventoried. The committed export in #63 (`execution.json`, the council records) copies the M12 scheduler records into a document: it preserves the facts if the database is lost, but it is a record, not publication into the canonical view, and nothing verifies that the source was published.
 
-**Consequence.** Until the Director rules on it, this project cannot be marked COMPLETE, and no worktree's `.workdir` that holds unpublished data may be deleted. That constrains the housekeeping below, in particular `agentic-engineering-m12-exec`.
+**Decision (Engineering Director, 2026-11-07): Option A approved.** The gate is **not satisfied** and stays recorded as unmet. The project closes under an approved scope exception because publication tooling is new work that `AGENTS.md` and the mission forbid. The approval carries these conditions:
+1. The project closes as COMPLETE WITH APPROVED SCOPE EXCEPTIONS, never plain COMPLETE.
+2. All worktrees and every `.workdir` holding unpublished execution records are preserved. In particular, `agentic-engineering-m12-exec` is not deleted, and its supervisor gate is not removed without a human reconcile.
+3. The M12 export stays in #63.
+4. :4111 reflects only the canonical database (`agentic-engineering/.workdir/scheduler/scheduler.db`). It does not show the M12 execution or the other rows marked "no" above.
+5. Execution-data publication is carried into the next project as a design requirement. No publication tooling is implemented and no isolated data is copied into the canonical database now. The M11 headless-preview runbook ([m11-headless-preview.md](../operations/m11-headless-preview.md)) also says isolated runs must not reuse the live :4111 service or the production SQLite.
 
-**Decision requested from the Engineering Director (nothing is accepted yet).**
-- **Option A, proposed: accepted scope exception.** The project closes without publication tooling, because building it is a new feature and `AGENTS.md` and the mission forbid new scope. If approved, the status becomes "COMPLETE WITH AN APPROVED SCOPE EXCEPTION" and not plain COMPLETE, on these conditions: no deletion of any `.workdir` holding unpublished data; :4111 documented as showing only the canonical database; the #63 export kept; publication carried into the next project as a design requirement. A one-off copy of the M12 rows into the canonical database is not recommended: the M11 headless-preview runbook says isolated runs must not reuse the live :4111 service or the production SQLite ([m11-headless-preview.md](../operations/m11-headless-preview.md)), and copying disposable-repository rows into it would cut against that rule.
-- **Option B: close the gate.** The Director names which datasets must be published and how they are verified. This is new work beyond closure and is not started.
+Option B (the Director names the datasets to publish and how they are verified) was not chosen and is not started.
 
 ## Leftovers: safety blockers versus housekeeping
 
@@ -147,17 +156,17 @@ Checks made read-only on 2026-11-07: no integration guard exists; the model-capa
 
 ### Merge blockers
 
-1. The Director reviews the corrected documentation, then #63 (still a draft; it must be marked ready) and #69 are merged with normal merge commits and the admin bypass of the `protect-master` ruleset (one required review, one reviewer who is also the author). Neither has been merged.
+1. #63 (a draft; it must be marked ready) and #69 are merged with normal merge commits and the admin bypass of the `protect-master` ruleset (one required review, one reviewer who is also the author), as the Director directed after reviewing the documentation. The merge commits and the post-merge CI result are recorded in the #69 closing comment, because this report cannot contain its own merge SHA.
 
-### Mandatory gate needing a decision
+### Mandatory gate closed by approved exception (still unmet)
 
-2. Execution-data publication: see the [gate](#execution-data-publication-gate). Not satisfied.
+2. Execution-data publication: see the [gate](#execution-data-publication-gate). Not satisfied; Option A approved with conditions. The unpublished data must be preserved.
 
-### Operator-owned housekeeping (four categories; not authorized, not done)
+### Operator-owned housekeeping (four categories; untouched, not authorized)
 
-3. The orphaned processes listed above.
+3. The orphaned processes listed above (Definition of Done item 7, accepted as an operator-owned residual).
 4. The `m86-*` temporary directories.
-5. The worktrees: 32 registered. This session created four (`closure`, `pr66`, `pr63`, `studio-master`); `studio-master` hosts the live :4111 Studio and must stay.
+5. The worktrees: 32 registered. This session created four (`closure`, `pr66`, `pr63`, `studio-master`); `studio-master` hosts the live :4111 Studio and must stay, and no worktree whose `.workdir` holds unpublished data may be deleted.
 6. The 43 stale issues.
 
 ### Deferred limitations (do not block)
