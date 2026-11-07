@@ -57,7 +57,7 @@ npm run lead -- cancel <task-id>
 npm run lead -- resume
 ```
 
-See `package.json` for the canonical scripts. CI (`.github/workflows/`) runs typecheck and a sharded test lane on every PR and the full smoke/E2E lane after every merge to `master`. Measured on `master` `6db44d9` (Node v22.23.2, macOS): `npm run typecheck` clean and `npm test` **1578/1578** passing; see [the project closure report](docs/reports/project-closure.md) for the full gate evidence and known limitations. Hosted CI is a safety net for this repository, not a certification of unattended operation.
+See `package.json` for the canonical scripts. CI (`.github/workflows/`) runs typecheck and a sharded test lane on every PR and the full smoke/E2E lane after every merge to `master`. Measured on the `master` tree of `bb01119` (identical to the tested `0dd6669`; Node v22.23.2, macOS): `npm run typecheck` clean and `npm test` **1609/1609** passing; see [the project closure report](docs/reports/project-closure.md) for the full gate evidence and known limitations. Hosted CI is a safety net for this repository, not a certification of unattended operation.
 
 ## Safety, source privacy and model costs
 
