@@ -6,6 +6,7 @@ import type { Reader } from './adapter.ts';
 import { isCollaborationId, type CollaborationReader } from './collaboration-adapter.ts';
 import type { AgentRoster } from './agents-adapter.ts';
 import type { CouncilReader } from './council-adapter.ts';
+import type { SuggestionReader } from './suggestions-adapter.ts';
 
 type Send = (name: string, data: unknown, id?: string) => void;
 
@@ -14,6 +15,8 @@ export function createControlCenterApp(options: {
   reader: Reader; assetsDir: string; pollMs?: number; embedded?: boolean; collaboration?: CollaborationReader;
   /** Council meetings: the same verified Core B reader over the council's own database, plus its derived records. */
   council?: CouncilReader;
+  /** Meeting suggestions the lifecycle recorded (not meetings). */
+  suggestions?: SuggestionReader;
   /** The agents this process registered, with their model bindings. */
   agents?: () => AgentRoster;
 }) {
@@ -133,6 +136,10 @@ export function createControlCenterApp(options: {
         return collaborationRead(() => options.council!.snapshot());
       }
       if (url.pathname === `${api}/council/events`) return options.council ? collaborationStream(request, url, options.council) : json(404, { error: 'Not found' });
+      if (url.pathname === `${api}/meeting-suggestions`) {
+        if (!options.suggestions) return json(200, { availability: 'NOT_AVAILABLE', reason: 'No suggestion reader is configured for this Gateway.', pending: 0, suggestions: [] });
+        try { return json(200, options.suggestions.snapshot()); } catch { return json(503, { error: 'Meeting suggestions unavailable' }); }
+      }
       if (url.pathname === `${api}/agents`) {
         if (!options.agents) return json(200, { source: 'unavailable', agents: [], counts: { registered: 0, refused: 0, unavailable: 0 }, error: 'This Gateway is not running inside the Mastra server; no registration to read.' });
         try { return json(200, options.agents()); } catch { return json(503, { error: 'Agent registration unavailable' }); }
