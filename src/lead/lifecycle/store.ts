@@ -170,6 +170,14 @@ export class LifecycleStore {
     return r ? rowToLifecycle(r) : undefined;
   }
 
+  /**
+   * Objectives in `phase`, oldest pin first: the order a queue takes them in. Pin order is insertion order (`rowid`), not
+   * `created_at`: that is a wall-clock millisecond, so two pins in the same millisecond tie and a clock step back inverts them.
+   */
+  listByPhase(phase: LifecyclePhase): LifecycleRow[] {
+    return this.scheduler.db.prepare('SELECT * FROM objective_lifecycle WHERE phase = ? ORDER BY rowid').all(phase).map(rowToLifecycle);
+  }
+
   /** Registers an objective with its pinned oracle, in phase PINNED. One lifecycle per objective and per batch. */
   create(input: { objectiveId: string; batchId: string; oracle: PinnedOracle; baseCommit: string; actor: string }): LifecycleRow {
     return this.scheduler.transact(() => {
