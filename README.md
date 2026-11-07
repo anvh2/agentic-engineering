@@ -57,7 +57,7 @@ npm run lead -- cancel <task-id>
 npm run lead -- resume
 ```
 
-See `package.json` for the canonical scripts. At PR #44 final HEAD `4fa9bc6`, the operator reported **1,082/1,082** local regression tests passing (Node v22.23.2, macOS, exit 0); this is historical local evidence, **not** a claim about the current tree or hosted CI. No hosted CI guarantee is implied.
+See `package.json` for the canonical scripts. CI (`.github/workflows/`) runs typecheck and a sharded test lane on every PR and the full smoke/E2E lane after every merge to `master`. Measured on `master` `6db44d9` (Node v22.23.2, macOS): `npm run typecheck` clean and `npm test` **1578/1578** passing; see [the project closure report](docs/reports/project-closure.md) for the full gate evidence and known limitations. Hosted CI is a safety net for this repository, not a certification of unattended operation.
 
 ## Safety, source privacy and model costs
 

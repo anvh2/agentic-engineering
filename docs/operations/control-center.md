@@ -1,6 +1,6 @@
 # Local Engineering Control Center
 
-**Studio integration status:** the standalone slice below is preserved and validated, but it does not satisfy the subsequent mandatory localhost:4111 Studio-sidebar requirement. See the [version-pinned integration proposal](../plans/m8.4-studio-integration.md); implementation is awaiting explicit approval for a Studio source fork.
+**Studio integration status:** the Organization, Runs, Collaboration and Usage views are served inside Mastra Studio at `localhost:4111` through the version-pinned Studio fork ([PR #67](https://github.com/anvh2/agentic-engineering/pull/67); see [Studio build and launch](m8.4-studio-organization.md)). The standalone Gateway described below is the same read-only console code on its own loopback port, used for isolated worktrees and tests. :4111 is read-only and owned by the canonical Studio; a preview must use a free port from 4112 and never 4111.
 
 A local, read-only Gateway and React UI for the existing scheduler. The Organization page is the main slice: compact agent table and keyboard-accessible inspector, task and run evidence, scoped token fields, provider summary and scheduler timeline. Overview/Objectives/Runs/Reviews are small views of that same snapshot. Token telemetry and live inference remain UNKNOWN until Core exposes the required read models.
 
@@ -8,14 +8,13 @@ A local, read-only Gateway and React UI for the existing scheduler. The Organiza
 
 Requires the repository's Node >=22.13 (the validated runtime is Node 22.23.2). The shell default on this machine is Node 20; use the Homebrew Node path below. No Mastra server is started or changed by these commands.
 
-From the implementation worktree:
+From the repository root (or any worktree under `.worktrees/`):
 
 ```sh
-cd /private/tmp/agentic-m84-control-center
 export PATH="/opt/homebrew/bin:$PATH"
 npm ci --prefix apps/control-center
 npm run build --prefix apps/control-center
-AGENTIC_SCHED_DB=/Users/anvh/go/src/github.com/anvh2/agentic-engineering/.workdir/scheduler/scheduler.db npm run start --prefix apps/control-center
+AGENTIC_SCHED_DB="$PWD/.workdir/scheduler/scheduler.db" npm run start --prefix apps/control-center
 ```
 
 Open `http://127.0.0.1:4310`. Select a persisted scheduler batch in the Objective selector. Missing/unreadable databases produce the disconnected screen. No fixtures are served by the CLI; screenshots/tests use an explicitly synthetic test database.
