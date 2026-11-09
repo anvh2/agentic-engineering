@@ -45,7 +45,7 @@ Load the `mastra` skill BEFORE any Mastra work. Never rely on cached knowledge; 
 - TypeScript, ESM, Node ≥ 22.13 running `.ts` directly; imports use explicit `.ts` extensions.
 - Unit tests sit next to the code as `*.test.ts`; benchmark fixtures and runner live in `tests/bench/`.
 - Use the `dev` and `build` scripts from `package.json`, not `mastra dev` / `mastra build` directly (they pass `--dir src/integrations/mastra`).
-- Docs: `README.md` and this file at the root; everything else under `docs/{architecture,operations,plans,audits}`. Do not add stray Markdown beside code.
+- Docs: `README.md` and this file at the root; everything else under `docs/{architecture,operations,plans,audits,case-studies}`. Do not add stray Markdown beside code. A case study (`docs/case-studies/<project>/`) records a target project built with this runtime; the project's own product docs live in its repository.
 
 ## Verify before claiming done
 
