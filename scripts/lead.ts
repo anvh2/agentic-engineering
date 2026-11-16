@@ -50,7 +50,7 @@ import { parseProviderBudgets, PROVIDER_BUDGETS_ENV } from '../src/runtime/execu
 import { defaultProviderRegistry } from '../src/workers/providers/default.ts';
 import { resolveTargetRepository } from '../src/runtime/project/target-repository.ts';
 import { runProjectCommand } from '../src/lead/project/cli.ts';
-import { localMemoryBudgetGb, ollamaInventory, routeWorkerModel, type ModelRoutingDecision } from '../src/runtime/models/routing.ts';
+import { localMemoryBudgetGb, observedModelEvidence, ollamaInventory, routeWorkerModel, type ModelRoutingDecision } from '../src/runtime/models/routing.ts';
 import { modelResolverFromEnv, ollamaSettings } from '../src/runtime/models/index.ts';
 import { languageOfSpec } from '../src/runtime/scheduler/types.ts';
 import type { TaskRow } from '../src/runtime/scheduler/store.ts';
@@ -91,7 +91,7 @@ const selectModel = async (task: TaskRow): Promise<ModelRoutingDecision> => {
   return routeWorkerModel(
     { taskId: task.id, agentId: `coding-worker-${language === 'js' ? 'js' : 'go'}`, language, complexity: assessment?.complexity ?? task.spec.complexity, risk: assessment?.risk ?? task.spec.risk, requested: task.spec.request?.model },
     modelResolverFromEnv(),
-    { ollama: await ollamaInventory(ollamaSettings().baseUrl), memoryBudgetGb: localMemoryBudgetGb() },
+    { ollama: await ollamaInventory(ollamaSettings().baseUrl), memoryBudgetGb: localMemoryBudgetGb(), observed: observedModelEvidence(store.db) },
   );
 };
 

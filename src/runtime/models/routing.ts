@@ -36,6 +36,47 @@ export interface LiveModelInventory {
   ollama: Map<string, number> | null;
   /** Memory budget for one local model, in GB. */
   memoryBudgetGb: number;
+  /**
+   * What earlier agent executions on this runtime actually did, per `provider/model` and language (observedModelEvidence).
+   * Measured, not declared: it outweighs declared evidence, and a model that made no tool call in its last
+   * OBSERVED_TOOLLESS_LIMIT completed executions is refused (`observed_no_tool_use`) until the operator intervenes.
+   */
+  observed?: Map<string, ObservedEvidence>;
+}
+
+export interface ObservedEvidence {
+  executions: number;
+  passes: number;
+  /** Consecutive most recent completed executions with zero tool calls. */
+  recentToolless: number;
+}
+
+export const OBSERVED_TOOLLESS_LIMIT = 3;
+
+/** Reads per model+language outcomes of completed agent executions from the scheduler database (read-only). */
+export function observedModelEvidence(db: { prepare(sql: string): { all(...args: unknown[]): unknown[] } }): Map<string, ObservedEvidence> {
+  const out = new Map<string, ObservedEvidence>();
+  let rows: { model: string; language: string | null; outcome: string | null; tool_calls: number }[];
+  try {
+    rows = db.prepare(`SELECT a.assigned_model AS model, t.language AS language, a.outcome, a.tool_calls FROM agent_executions a JOIN tasks t ON t.id = a.task_id
+      WHERE a.assigned_model IS NOT NULL AND a.status = 'COMPLETED' ORDER BY a.spawned_at DESC`).all() as typeof rows;
+  } catch {
+    return out; // no agent table yet: nothing observed
+  }
+  const streakOpen = new Set<string>();
+  for (const r of rows) {
+    const key = `${r.model}|${r.language ?? ''}`;
+    const e = out.get(key) ?? { executions: 0, passes: 0, recentToolless: 0 };
+    if (!out.has(key)) streakOpen.add(key);
+    e.executions += 1;
+    if (r.outcome === 'PASS') e.passes += 1;
+    if (streakOpen.has(key)) {
+      if (r.tool_calls === 0) e.recentToolless += 1;
+      else streakOpen.delete(key);
+    }
+    out.set(key, e);
+  }
+  return out;
 }
 
 export interface ModelCandidate {
@@ -145,11 +186,18 @@ function judge(m: ModelEntry, request: WorkerModelRequest, resolver: ModelResolv
     else if (m.capabilities.contextTokens < request.contextTokens) refusals.push(`context_too_small: ${m.capabilities.contextTokens} < ${request.contextTokens}`);
   }
 
+  // Observed history on this runtime outweighs anything declared.
+  const observed = inventory.observed?.get(`${m.providerId}/${m.modelId}|${request.language ?? ''}`);
+  if (observed) {
+    factors.observed = `${observed.passes}/${observed.executions} PASS, last ${observed.recentToolless} without a tool call`;
+    if (observed.recentToolless >= OBSERVED_TOOLLESS_LIMIT) refusals.push(`observed_no_tool_use: the last ${observed.recentToolless} completed executions on this runtime made no tool call (the model answers with text instead of structured tool calls)`);
+  }
   // Score: evidence first (0..60), tier fit (0..25), footprint (0..15). Missing evidence scores as unproven, never as proven.
   const evidence = request.language ? routing.evidence?.filter((e) => e.language === request.language) : undefined;
-  const runs = evidence?.reduce((a, e) => a + e.runs, 0) ?? 0;
-  const passRate = runs > 0 ? evidence!.reduce((a, e) => a + e.passRate * e.runs, 0) / runs : null;
-  factors.evidence = passRate === null ? 'none' : `${Math.round(passRate * 100)}% over ${runs} run(s)`;
+  const declaredRuns = evidence?.reduce((a, e) => a + e.runs, 0) ?? 0;
+  const runs = observed?.executions ? observed.executions : declaredRuns;
+  const passRate = observed?.executions ? observed.passes / observed.executions : declaredRuns > 0 ? evidence!.reduce((a, e) => a + e.passRate * e.runs, 0) / declaredRuns : null;
+  factors.evidence = passRate === null ? 'none' : `${Math.round(passRate * 100)}% over ${runs} run(s) (${observed?.executions ? 'observed' : 'declared'})`;
   const evidenceScore = passRate === null ? 15 : Math.round(passRate * 60 * Math.min(1, runs / 5));
   const want = request.complexity === 'small' ? 0 : request.complexity === 'medium' ? 1 : 2;
   const tier = routing.tier;
