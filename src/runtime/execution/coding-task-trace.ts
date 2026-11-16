@@ -14,6 +14,7 @@ export type TraceEventType =
   | 'task_started'
   | 'attempt_started'
   | 'model_bound'
+  | 'permit_wait_started'
   | 'model_started'
   | 'model_finished'
   | 'provider_unresponsive'

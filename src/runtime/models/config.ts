@@ -83,6 +83,12 @@ const modelSchema = z.strictObject({
   availability: availability.default({ state: 'available' }),
   roles: z.array(role).min(1).max(AGENT_ROLES.length),
   agents: z.array(agentId).min(1).max(64).optional(),
+  routing: z.strictObject({
+    languages: z.array(z.enum(['go', 'js'])).min(1).max(2).optional(),
+    tier: z.enum(['small', 'medium', 'large']).optional(),
+    memoryGb: z.number().positive().max(1024).optional(),
+    evidence: z.array(z.strictObject({ language: z.enum(['go', 'js']), passRate: z.number().min(0).max(1), runs: z.number().int().min(1).max(100_000), source: z.string().min(1).max(300) })).max(16).optional(),
+  }).optional(),
 });
 
 export const modelConfigFileSchema = z.strictObject({

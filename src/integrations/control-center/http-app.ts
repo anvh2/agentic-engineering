@@ -7,6 +7,7 @@ import { isCollaborationId, type CollaborationReader } from './collaboration-ada
 import type { AgentRoster } from './agents-adapter.ts';
 import type { CouncilReader } from './council-adapter.ts';
 import type { SuggestionReader } from './suggestions-adapter.ts';
+import type { RuntimeReader } from './runtime-view.ts';
 
 type Send = (name: string, data: unknown, id?: string) => void;
 
@@ -17,6 +18,8 @@ export function createControlCenterApp(options: {
   council?: CouncilReader;
   /** Meeting suggestions the lifecycle recorded (not meetings). */
   suggestions?: SuggestionReader;
+  /** Projects, target repositories, issues, task DAGs, spawned agent processes, agent events and metrics (agentic.runtime-view/1). */
+  runtime?: RuntimeReader;
   /** The agents this process registered, with their model bindings. */
   agents?: () => AgentRoster;
 }) {
@@ -136,6 +139,10 @@ export function createControlCenterApp(options: {
         return collaborationRead(() => options.council!.snapshot());
       }
       if (url.pathname === `${api}/council/events`) return options.council ? collaborationStream(request, url, options.council) : json(404, { error: 'Not found' });
+      if (url.pathname === `${api}/runtime`) {
+        if (!options.runtime) return json(200, { schema: 'agentic.runtime-view/1', source: 'disconnected', limitations: ['No runtime reader is configured for this Gateway.'] });
+        try { return json(200, options.runtime.view(scope)); } catch { return json(503, { error: 'Runtime view unavailable' }); }
+      }
       if (url.pathname === `${api}/meeting-suggestions`) {
         if (!options.suggestions) return json(200, { availability: 'NOT_AVAILABLE', reason: 'No suggestion reader is configured for this Gateway.', pending: 0, suggestions: [] });
         try { return json(200, options.suggestions.snapshot()); } catch { return json(503, { error: 'Meeting suggestions unavailable' }); }

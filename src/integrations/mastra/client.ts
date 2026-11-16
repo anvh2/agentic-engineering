@@ -25,6 +25,8 @@ export interface RunWorkflowOptions {
   onProgress?: (line: string) => void;
   /** Stops polling (the workflow run itself is NOT cancelled; it is identified by its run id for later reconciliation). */
   signal?: AbortSignal;
+  /** Execution context the workflow records on the agent process (project, batch, claim epoch, routed model, target identity). */
+  execution?: Record<string, unknown>;
 }
 
 export async function runCodingTaskWorkflow(request: DelegationRequest, repository: string, options: RunWorkflowOptions = {}): Promise<WorkflowRunResult> {
@@ -43,7 +45,7 @@ export async function runCodingTaskWorkflow(request: DelegationRequest, reposito
     // Persist the identity before execution can begin. If the scheduler lost its fence,
     // onStart throws and the created-but-never-started run is safe to abandon/cancel.
     options.onStart?.({ runId, studioUrl });
-    await call(`/start?runId=${runId}`, { method: 'POST', body: JSON.stringify({ inputData: { ...request, repository } }) });
+    await call(`/start?runId=${runId}`, { method: 'POST', body: JSON.stringify({ inputData: { ...request, repository, ...(options.execution ? { execution: options.execution } : {}) } }) });
   } catch (err) {
     return { runId, studioUrl, status: undefined, result: undefined, error: `Cannot start the workflow on ${server} (${(err as Error).message}). Is the server running? Start it with: npm run dev` };
   }

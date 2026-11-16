@@ -47,7 +47,7 @@ export async function makeFixture(files: Record<string, string> = FILES): Promis
 }
 
 export function objectiveFor(fx: Fixture, over: Partial<EngineeringObjective> = {}): EngineeringObjective {
-  return { id: 'rate-limit', title: 'Add API rate limiting', description: 'Add API rate limiting to this service so one client cannot exhaust it.', repository: fx.repo, constraints: [], acceptanceCriteria: [], ...over };
+  return { id: 'rate-limit', title: 'Add API rate limiting', description: 'Add API rate limiting to this service so one client cannot exhaust it.', repository: fx.repo, constraints: [], acceptanceCriteria: [], issues: [], ...over };
 }
 
 export const assessment = { complexity: 'small', risk: 'low', ambiguity: 'none', rationale: 'bounded, mechanically verified' } as const;

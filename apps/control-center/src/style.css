@@ -774,3 +774,13 @@ dd {
   overflow-wrap: anywhere;
 }
 .task-table td:first-child button { text-align: left; }
+
+/* Runtime panel: spawned agent processes and their live state (runtime.tsx). */
+.runtime-panel h3 { margin: 18px 0 8px; font-size: 13px; letter-spacing: 0.02em; }
+.runtime-objective { margin-bottom: 14px; }
+.runtime-metrics { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; margin: 0; }
+.runtime-metrics div { border: 1px solid var(--border, #3333); border-radius: 6px; padding: 6px 8px; }
+.runtime-metrics dt { font-size: 11px; opacity: 0.75; }
+.runtime-metrics dd { margin: 2px 0 0; font-weight: 600; }
+.badge.live-model_inference, .badge.live-tool_execution, .badge.live-verification, .badge.live-waiting_for_model_permit, .badge.live-process_alive { outline: 1px solid currentColor; }
+.badge.live-unknown, .badge.live-failed, .badge.live-lost, .badge.live-timed_out, .badge.live-spawn_failed { font-weight: 700; }

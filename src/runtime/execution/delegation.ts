@@ -49,6 +49,11 @@ export const delegationRequestSchema = z.object({
    * workflow, so writing it into a plan authorizes nothing.
    */
   provider: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional(),
+  /**
+   * A specific registered model the Lead wants for this task (default local provider). Also only a request: the model router
+   * checks it like any candidate and refuses the task if it is ineligible; it never substitutes another model.
+   */
+  model: z.object({ providerId: z.string().min(1).max(40), modelId: z.string().min(1).max(200) }).optional(),
 });
 
 export type DelegationRequest = z.input<typeof delegationRequestSchema>;

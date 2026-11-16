@@ -8,12 +8,18 @@ import { EvidenceError, gitStatusEntries, incompleteInspection, inspectChange, t
 import { resolveCapacity } from '../execution/delegation-capacity.ts';
 import { ownedFilesOf } from '../scheduler/types.ts';
 import type { BatchRow, TaskRow } from '../scheduler/store.ts';
+import { assertTargetIdentity, assertWorktreeOwnedBy, ensureWorktreesExcluded, resolveTargetRepository, type TargetRepository } from '../project/target-repository.ts';
 
 /**
- * Isolated Git worktrees for coding tasks. Layout (all under `root`, never inside the user's working tree):
+ * Isolated Git worktrees for coding tasks. Layout (all under a root, never inside the user's working tree):
  *
  *   <root>/<batch>/<task>/        task worktree on branch  lead-task/<batch>/<task>
  *   <root>/<batch>/_integration/  integration worktree on branch  lead-integration/<batch>
+ *
+ * Two layouts. `new WorktreeManager(dir)` puts every repository's worktrees under one fixed directory (tests, isolated
+ * previews). `WorktreeManager.targetOwned()` is the production layout: the root is the TARGET repository's own
+ * `<canonical root>/.worktrees`, taken from the identity recorded on the batch, so a target's worktrees always belong to
+ * its git common dir and never land in the framework checkout. In that layout every use re-checks the identity first.
  *
  * Worktrees are cut from COMMITS (the integration branch tip), so the user's working tree, index and uncommitted
  * changes are never touched. Because of that, a task whose files have uncommitted edits in the source repo is refused
@@ -33,6 +39,11 @@ export class WorkspaceError extends Error {
 export interface Workspace {
   /** `preserve`: re-attach to an existing task worktree WITHOUT resetting it (to adopt a finished earlier run). */
   prepare(task: TaskRow, batch: BatchRow, options?: { preserve?: boolean }): Promise<{ path: string; branch: string; baseCommit: string }>;
+  /**
+   * Checked immediately before a worker is handed the worktree: the batch's target is still the recorded repository and the
+   * worktree belongs to it. Throws TargetRepositoryError (fail closed). Optional for test doubles.
+   */
+  verifyOwnership?(task: TaskRow, batch: BatchRow): void;
   inspect(task: TaskRow): Promise<ChangeInspection>;
   /** Commits the task's allowed-file changes on its own task branch (never the user's branch). Returns the commit. */
   commit(task: TaskRow): Promise<string>;
@@ -52,7 +63,13 @@ export function integrationBranch(batchId: string): string {
 }
 
 export class WorktreeManager implements Workspace {
+  /** The fixed root (fixed layout). In the target-owned layout it is unused for placement; see rootFor(). */
   readonly root: string;
+  readonly layout: 'fixed' | 'target-owned';
+  /** Production layout: each target's worktrees live in its own `<canonical root>/.worktrees`. */
+  static targetOwned(): WorktreeManager {
+    return new WorktreeManager('', 'target-owned');
+  }
   /** Git takes repository-wide lock files for ref/worktree writes, so mutating ops on one repo are serialized here. */
   private repoQueues = new Map<string, Promise<unknown>>();
 
@@ -68,15 +85,41 @@ export class WorktreeManager implements Workspace {
     }
   }
 
-  constructor(root: string) {
-    this.root = resolve(root);
+  constructor(root: string, layout: 'fixed' | 'target-owned' = 'fixed') {
+    if (layout === 'fixed' && !root) throw new Error('WorktreeManager: a fixed layout needs a root directory');
+    this.layout = layout;
+    this.root = layout === 'fixed' ? resolve(root) : '';
   }
 
-  taskPath(batchId: string, taskId: string): string {
-    return join(this.root, batchId, taskId);
+  /**
+   * The batch's target identity: the recorded one (re-checked against the repository on disk), or for a batch created before
+   * targets were recorded, resolved now. Null only in the fixed layout without a recorded target (nothing to check).
+   */
+  targetOf(batch: Pick<BatchRow, 'repository' | 'target'>): TargetRepository | null {
+    if (batch.target) {
+      assertTargetIdentity(batch.target, batch.repository);
+      return batch.target;
+    }
+    return this.layout === 'target-owned' ? resolveTargetRepository(batch.repository) : null;
   }
-  integrationPath(batchId: string): string {
-    return join(this.root, batchId, '_integration');
+
+  /** Where this batch's worktrees live. */
+  rootFor(batch: Pick<BatchRow, 'repository' | 'target'>): string {
+    if (this.layout === 'fixed') return this.root;
+    return this.targetOf(batch)!.worktreeRoot;
+  }
+
+  taskPath(batchId: string, taskId: string, batch?: Pick<BatchRow, 'repository' | 'target'>): string {
+    return join(batch ? this.rootFor(batch) : this.root, batchId, taskId);
+  }
+  integrationPath(batchId: string, batch?: Pick<BatchRow, 'repository' | 'target'>): string {
+    return join(batch ? this.rootFor(batch) : this.root, batchId, '_integration');
+  }
+
+  /** See Workspace.verifyOwnership. */
+  verifyOwnership(task: TaskRow, batch: BatchRow): void {
+    const target = this.targetOf(batch);
+    if (target && task.worktreePath) assertWorktreeOwnedBy(target, task.worktreePath);
   }
 
   async git(cwd: string, args: string[], timeoutMs = 60_000) {
@@ -159,10 +202,10 @@ export class WorktreeManager implements Workspace {
     return this.mustGit(batch.repository, ['rev-parse', '--verify', `refs/heads/${integrationBranch(batch.id)}`]);
   }
 
-  /** The directory must be an existing git worktree of `repository` located under `root`. */
-  private async assertManaged(path: string, repository: string): Promise<void> {
-    const rel = relative(this.root, resolve(path));
-    if (rel.startsWith('..') || isAbsolute(rel) || rel === '') throw new WorkspaceError('unsafe_path', `${path} is outside the worktree root ${this.root}`);
+  /** The directory must be an existing git worktree of `repository` located under its worktree root. */
+  private async assertManaged(path: string, repository: string, root: string): Promise<void> {
+    const rel = relative(root, resolve(path));
+    if (rel.startsWith('..') || isAbsolute(rel) || rel === '') throw new WorkspaceError('unsafe_path', `${path} is outside the worktree root ${root}`);
     const real = await realpath(path).catch(() => undefined);
     const list = await this.mustGit(repository, ['worktree', 'list', '--porcelain']);
     const registered = list.split('\n').filter((l) => l.startsWith('worktree ')).map((l) => l.slice('worktree '.length));
@@ -175,6 +218,10 @@ export class WorktreeManager implements Workspace {
 
   private async prepareLocked(task: TaskRow, batch: BatchRow, options: { preserve?: boolean }): Promise<{ path: string; branch: string; baseCommit: string }> {
     const { repository } = batch;
+    // Identity first: a target that moved, was replaced or is not the recorded repository gets no worktree at all.
+    const target = this.targetOf(batch);
+    const root = this.rootFor(batch);
+    if (target && this.layout === 'target-owned') ensureWorktreesExcluded(target);
     const spec = task.spec.request?.contract;
     const touched = [...new Set([...(spec?.allowedFiles ?? task.spec.ownedFiles), ...(spec?.contextFiles ?? [])])];
 
@@ -186,12 +233,12 @@ export class WorktreeManager implements Workspace {
     }
 
     const { branch: intBranch } = await this.ensureIntegrationBranch(batch);
-    const path = this.taskPath(batch.id, task.id);
+    const path = join(root, batch.id, task.id);
     const branch = taskBranch(batch.id, task.id);
 
     if (existsSync(path)) {
       // Re-claim after a crash / lease expiry: reuse the worktree, but only after proving it is ours, then reset it.
-      await this.assertManaged(path, repository);
+      await this.assertManaged(path, repository, root);
       const head = await this.mustGit(path, ['rev-parse', '--abbrev-ref', 'HEAD']);
       if (head !== branch) throw new WorkspaceError('not_a_task_worktree', `${path} is on branch ${head}, expected ${branch}`);
       const baseCommit = task.baseCommit ?? (await this.mustGit(path, ['rev-parse', 'HEAD']));
@@ -200,6 +247,7 @@ export class WorktreeManager implements Workspace {
         await this.mustGit(path, ['clean', '-fd']);
       }
       await this.linkPaths(repository, path, batch.linkPaths);
+      if (target) assertWorktreeOwnedBy(target, path);
       return { path, branch, baseCommit };
     }
 
@@ -209,6 +257,7 @@ export class WorktreeManager implements Workspace {
     // A leftover branch without a worktree (worktree dir was removed) is re-pointed at the base; the old tip stays in the reflog.
     await this.mustGit(repository, leftover.success ? ['worktree', 'add', '-B', branch, path, baseCommit] : ['worktree', 'add', '-b', branch, path, baseCommit]);
     await this.linkPaths(repository, path, batch.linkPaths);
+    if (target) assertWorktreeOwnedBy(target, path);
     return { path, branch, baseCommit };
   }
 
@@ -228,10 +277,13 @@ export class WorktreeManager implements Workspace {
   integrationWorktree(batch: BatchRow, assertOwner: () => void = () => {}): Promise<{ path: string; branch: string }> {
     return this.withRepoLock(batch.repository, async () => {
       assertOwner();
+      const target = this.targetOf(batch); // integration is refused on a target that is not the recorded repository
+      const root = this.rootFor(batch);
+      if (target && this.layout === 'target-owned') ensureWorktreesExcluded(target);
       const { branch } = await this.ensureIntegrationBranch(batch, assertOwner);
-      const path = this.integrationPath(batch.id);
+      const path = join(root, batch.id, '_integration');
       if (existsSync(path)) {
-        await this.assertManaged(path, batch.repository);
+        await this.assertManaged(path, batch.repository, root);
         const head = await this.mustGit(path, ['rev-parse', '--abbrev-ref', 'HEAD']);
         if (head !== branch) throw new WorkspaceError('not_a_task_worktree', `${path} is on ${head}, expected ${branch}`);
       } else {
@@ -239,6 +291,7 @@ export class WorktreeManager implements Workspace {
         await this.mustGit(batch.repository, ['worktree', 'add', path, branch], assertOwner);
       }
       await this.linkPaths(batch.repository, path, batch.linkPaths);
+      if (target) assertWorktreeOwnedBy(target, path);
       return { path, branch };
     });
   }
@@ -283,10 +336,11 @@ export class WorktreeManager implements Workspace {
     return task.worktreePath;
   }
 
-  /** Lists worktree directories under root (real paths, for reconciliation). */
-  async listManagedPaths(repository: string): Promise<string[]> {
+  /** Lists worktree directories under the repository's worktree root (real paths, for reconciliation). */
+  async listManagedPaths(repository: string, batch?: Pick<BatchRow, 'repository' | 'target'>): Promise<string[]> {
     const list = await this.mustGit(repository, ['worktree', 'list', '--porcelain']);
-    const root = await realpath(this.root).catch(() => this.root);
+    const base = this.layout === 'fixed' ? this.root : this.rootFor(batch ?? { repository, target: null });
+    const root = await realpath(base).catch(() => base);
     return list
       .split('\n')
       .filter((l) => l.startsWith('worktree '))
@@ -295,10 +349,10 @@ export class WorktreeManager implements Workspace {
   }
 
   /** Removes a finished task's worktree. Refuses anything not proven to be a managed, clean-or-committed worktree. */
-  async remove(task: TaskRow, repository: string): Promise<boolean> {
+  async remove(task: TaskRow, repository: string, batch?: Pick<BatchRow, 'repository' | 'target'>): Promise<boolean> {
     const path = task.worktreePath;
     if (!path || !existsSync(path)) return false;
-    await this.assertManaged(path, repository);
+    await this.assertManaged(path, repository, this.layout === 'fixed' ? this.root : this.rootFor(batch ?? { repository, target: null }));
     const status = await this.mustGit(path, ['status', '--porcelain']);
     const ignoredLinks = (task.artifacts.linkPaths as string[] | undefined) ?? [];
     const dirty = status.split('\n').filter((l) => l && !ignoredLinks.some((p) => l.slice(3).replace(/\/$/, '') === p));

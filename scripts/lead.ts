@@ -48,6 +48,15 @@ import { cancelTask } from '../src/lead/cancel.ts';
 import { allowedProvidersFromEnv, DEFAULT_PROVIDER_ID, parseAllowList, providerOf } from '../src/runtime/execution/worker-provider.ts';
 import { parseProviderBudgets, PROVIDER_BUDGETS_ENV } from '../src/runtime/execution/provider-routing.ts';
 import { defaultProviderRegistry } from '../src/workers/providers/default.ts';
+import { resolveTargetRepository } from '../src/runtime/project/target-repository.ts';
+import { runProjectCommand } from '../src/lead/project/cli.ts';
+import { localMemoryBudgetGb, observedModelEvidence, ollamaInventory, routeWorkerModel, type ModelRoutingDecision } from '../src/runtime/models/routing.ts';
+import { modelResolverFromEnv, ollamaSettings } from '../src/runtime/models/index.ts';
+import { languageOfSpec } from '../src/runtime/scheduler/types.ts';
+import type { TaskRow } from '../src/runtime/scheduler/store.ts';
+import { AgentStore } from '../src/runtime/agents/agent-store.ts';
+import { reconcileAgents } from '../src/runtime/agents/supervisor.ts';
+import { computeAgentMetrics } from '../src/runtime/agents/metrics.ts';
 
 const args = process.argv.slice(2);
 const [command, ...rest] = args;
@@ -75,7 +84,24 @@ if (command === 'supervisor') {
 
 // Planning (`objective` without --submit) must not create or open the scheduler database: it gets a throwaway in-memory store.
 const store = new SchedulerStore(command === 'objective' && !has('--submit') ? ':memory:' : (process.env.AGENTIC_SCHED_DB ?? join(workdir, 'scheduler', 'scheduler.db')));
-const worktrees = new WorktreeManager(join(workdir, 'worktrees'));
+// Per-task model routing over the model registry (models/routing.ts): live inventory of local models, no model call.
+const selectModel = async (task: TaskRow): Promise<ModelRoutingDecision> => {
+  const language = languageOfSpec(task.spec);
+  const assessment = task.spec.request?.assessment;
+  return routeWorkerModel(
+    { taskId: task.id, agentId: `coding-worker-${language === 'js' ? 'js' : 'go'}`, language, complexity: assessment?.complexity ?? task.spec.complexity, risk: assessment?.risk ?? task.spec.risk, requested: task.spec.request?.model },
+    modelResolverFromEnv(),
+    { ollama: await ollamaInventory(ollamaSettings().baseUrl), memoryBudgetGb: localMemoryBudgetGb(), observed: observedModelEvidence(store.db) },
+  );
+};
+
+// Worktrees belong to the TARGET repository (<target>/.worktrees/<batch>/<task>), never to this framework checkout.
+const worktrees = WorktreeManager.targetOwned();
+// Every batch records its target's identity when it is created; worktrees, verification and integration re-check it.
+const createTargetedBatch = (plan: { repository: string } & Record<string, unknown>, actor: string) => {
+  const repository = resolve(plan.repository);
+  return store.createBatch({ ...plan, repository } as Parameters<typeof store.createBatch>[0], actor, { target: resolveTargetRepository(repository) });
+};
 
 async function loadConfig(): Promise<SchedulerConfig> {
   const file = join(workdir, 'scheduler.config.json');
@@ -129,7 +155,7 @@ async function main(): Promise<void> {
           out: (t) => console.log(t), err: (t) => console.error(t), config,
           makeRuntime: () => {
             const executor = createMastraExecutor({ server: urlText, taskTimeoutMs: config.taskTimeoutMs + config.maxCapacityWaitMs });
-            const scheduler = new Scheduler({ store, executor, workspace: worktrees, config, capacity: sharedModelCapacity(), allowProviders: [], providerBudgets: [], describeProvider, log: (line) => console.log('  ' + line) });
+            const scheduler = new Scheduler({ store, executor, workspace: worktrees, config, capacity: sharedModelCapacity(), allowProviders: [], providerBudgets: [], describeProvider, selectModel, log: (line) => console.log('  ' + line) });
             return { scheduler, executor, capacity: sharedModelCapacity() };
           },
         }),
@@ -137,7 +163,7 @@ async function main(): Promise<void> {
       break;
     }
     case 'objective':
-      process.exitCode = await runObjectiveCommand(rest, { out: (t) => console.log(t), err: (t) => console.error(t), cwd: process.cwd(), workdir, sink: store });
+      process.exitCode = await runObjectiveCommand(rest, { out: (t) => console.log(t), err: (t) => console.error(t), cwd: process.cwd(), workdir, sink: { createBatch: (plan) => createTargetedBatch(plan, 'objective-submit'), promote: (actor, scope) => store.promote(actor, scope) } });
       break;
     case 'lifecycle': {
       const config = await loadConfig();
@@ -152,7 +178,7 @@ async function main(): Promise<void> {
         makeRuntime: () => {
           const executor = createMastraExecutor({ server: flag('--server'), taskTimeoutMs: config.taskTimeoutMs + config.maxCapacityWaitMs });
           const allowProviders = [...allowedProvidersFromEnv(), ...parseAllowList(flag('--allow-provider'))];
-          const scheduler = new Scheduler({ store, executor, workspace: worktrees, config, capacity: sharedModelCapacity(), allowProviders, providerBudgets: providerBudgets(), describeProvider, log: (l) => console.log(`  ${l}`) });
+          const scheduler = new Scheduler({ store, executor, workspace: worktrees, config, capacity: sharedModelCapacity(), allowProviders, providerBudgets: providerBudgets(), describeProvider, selectModel, log: (l) => console.log(`  ${l}`) });
           process.on('SIGINT', () => scheduler.stop());
           process.on('SIGTERM', () => scheduler.stop());
           return { scheduler, executor, capacity: sharedModelCapacity() };
@@ -161,7 +187,7 @@ async function main(): Promise<void> {
       break;
     }
     case 'plan': {
-      const plan = store.createBatch(JSON.parse(await readFile(resolve(positional[0]), 'utf8')));
+      const plan = createTargetedBatch(JSON.parse(await readFile(resolve(positional[0]), 'utf8')), 'lead');
       const p = store.promote('plan', { batchId: plan.batchId }); // only the plan just created: never another objective's tasks
       console.log(`batch ${plan.batchId}: ${plan.tasks.length} task(s); READY: ${p.ready.join(', ') || '-'}; BLOCKED: ${p.blocked.join(', ') || '-'}`);
       table(plan.batchId);
@@ -180,7 +206,7 @@ async function main(): Promise<void> {
       const config = await loadConfig();
       const executor = createMastraExecutor({ server: flag('--server'), taskTimeoutMs: config.taskTimeoutMs + config.maxCapacityWaitMs /* poll backstop = the hard bound: active budget + queueing budget */ });
       const allowProviders = [...allowedProvidersFromEnv(), ...parseAllowList(flag('--allow-provider'))];
-      const scheduler = new Scheduler({ store, executor, workspace: worktrees, config, capacity: sharedModelCapacity(), allowProviders, providerBudgets: providerBudgets(), describeProvider, log: (l) => console.log(`  ${l}`) });
+      const scheduler = new Scheduler({ store, executor, workspace: worktrees, config, capacity: sharedModelCapacity(), allowProviders, providerBudgets: providerBudgets(), describeProvider, selectModel, log: (l) => console.log(`  ${l}`) });
       if (allowProviders.length > 0) console.log(`operator-allowed providers: ${allowProviders.join(', ')} (the Mastra server must carry the same allow-list)`);
       // First signal: graceful (claim nothing new, cancel and confirm every in-flight run). A second signal exits at once and
       // says which runs may still be executing, because nothing was confirmed for them.
@@ -248,7 +274,7 @@ async function main(): Promise<void> {
     }
     case 'resume': {
       const config = await loadConfig();
-      const scheduler = new Scheduler({ store, executor: createMastraExecutor({ server: flag('--server'), taskTimeoutMs: config.taskTimeoutMs + config.maxCapacityWaitMs /* poll backstop = the hard bound: active budget + queueing budget */ }), workspace: worktrees, config, capacity: sharedModelCapacity(), describeProvider, log: (l) => console.log(`  ${l}`) });
+      const scheduler = new Scheduler({ store, executor: createMastraExecutor({ server: flag('--server'), taskTimeoutMs: config.taskTimeoutMs + config.maxCapacityWaitMs /* poll backstop = the hard bound: active budget + queueing budget */ }), workspace: worktrees, config, capacity: sharedModelCapacity(), describeProvider, selectModel, log: (l) => console.log(`  ${l}`) });
       const r = scheduler.recover({ stealLeases: has('--steal') });
       console.log(`requeued: ${r.requeued.join(', ') || '-'}; claim budget exhausted: ${r.exhausted.join(', ') || '-'}`);
       if (has('--run')) console.log(JSON.stringify(await scheduler.run({ batchId: flag('--batch') }), null, 2));
@@ -333,11 +359,31 @@ async function main(): Promise<void> {
     case 'reconcile':
       console.log(JSON.stringify(await reconcileState(store, worktrees, flag('--batch')), null, 2));
       break;
+    case 'agents': {
+      // Spawned agent processes (not logical worker slots, not model permits): see src/runtime/agents.
+      const agents = new AgentStore(store.db);
+      const sub = positional[0];
+      if (sub === 'reconcile') console.log(`marked LOST (process and supervisor gone): ${reconcileAgents(agents).join(', ') || 'none'}`);
+      else if (sub === 'metrics') console.log(JSON.stringify(computeAgentMetrics(store.db, { project: flag('--project'), batchId: flag('--batch') }), null, 2));
+      else if (sub === 'show') {
+        const row = agents.get(positional[1] ?? '');
+        if (!row) throw new Error(`agent execution ${positional[1] ?? '(none)'} not found`);
+        console.log(JSON.stringify({ ...row, events: agents.events(row.executionId) }, null, 2));
+      } else if (sub === 'list' || sub === undefined) {
+        for (const a of agents.list({ project: flag('--project'), batchId: flag('--batch'), taskId: flag('--task') })) {
+          console.log(`${a.status.padEnd(11)} ${(a.activity ?? '-').padEnd(14)} ${a.executionId}  agent=${a.agentId} pid=${a.pid ?? '-'} model=${a.assignedModel ?? 'UNKNOWN'} reported=${a.reportedModel ?? 'UNKNOWN'} worktree=${a.worktree}`);
+        }
+      } else throw new Error('usage: agents [list] [--project P] [--batch B] [--task T] | show <execution-id> | reconcile | metrics [--project P] [--batch B]');
+      break;
+    }
+    case 'project':
+      process.exitCode = await runProjectCommand(rest, { store, cwd: process.cwd(), out: (t) => console.log(t), err: (t) => console.error(t) });
+      break;
     case 'meeting':
       process.exitCode = await runMeetingCommand(rest, { store, meetingsDir: process.env.AGENTIC_MEETINGS_DIR ?? join(workdir, 'meetings') });
       break;
     default:
-      console.error('usage: lead <providers|supervisor|objective|lifecycle|meeting|plan|tasks|run|status|review|integrate|integration|resume|cancel|retry|claude|metrics|reconcile> ...');
+      console.error('usage: lead <agents|project|providers|supervisor|objective|lifecycle|meeting|plan|tasks|run|status|review|integrate|integration|resume|cancel|retry|claude|metrics|reconcile> ...');
       process.exit(2);
   }
 }

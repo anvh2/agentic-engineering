@@ -14,13 +14,13 @@ export function createInProcessExecutor(workflow: ReturnType<typeof createCoding
   const started: string[] = [];
   return {
     started,
-    async run({ task, repository, signal, onRunStart }) {
+    async run({ task, repository, signal, onRunStart, context }) {
       if (!task.spec.request) throw new Error(`task ${task.id} has no delegation request`);
       const runId = `inproc-${task.id}-${randomUUID().slice(0, 8)}`;
       const run = await workflow.createRun({ runId });
       started.push(runId);
       onRunStart({ runId });
-      const pending = run.start({ inputData: { ...task.spec.request, repository } as never });
+      const pending = run.start({ inputData: { ...task.spec.request, repository, ...(context ? { execution: context } : {}) } as never });
       live.set(runId, { cancel: () => run.cancel(), settled: pending.catch(() => undefined) });
       const aborted = new Promise<never>((_, reject) => {
         if (signal.aborted) reject(new Error('polling aborted'));

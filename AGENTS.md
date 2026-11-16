@@ -13,7 +13,9 @@ Load the `mastra` skill BEFORE any Mastra work. Never rely on cached knowledge; 
 
 ## Boundaries
 
-- One supported execution path: `lead CLI → scheduler → executor → Mastra workflow → coding runner → worker → sandboxed verification → review → integration` ([docs/architecture/runtime.md](docs/architecture/runtime.md)). Do not add a parallel path; extend this one.
+- One supported execution path: `lead CLI → scheduler → executor → Mastra workflow → agent process → coding runner → worker → sandboxed verification → review → integration` ([docs/architecture/runtime.md](docs/architecture/runtime.md)). Do not add a parallel path; extend this one.
+- Workers are agent processes the runtime spawns and supervises (`src/runtime/agents`). An IDE or chat session, or an assistant's subagent feature, is never a substitute for a worker and is never reported as one; work done that way is Lead work and must be recorded as such.
+- A target repository is not this repository: worktrees for a target live in `<target>/.worktrees/`, and its identity is recorded per batch and re-checked (`src/runtime/project/target-repository.ts`). Register a target once with `lead project add <id> --repo <path>`.
 - Dependency direction: `src/runtime/**` and `src/workers/**` must not import from `src/integrations/**`; integrations adapt the runtime, never the reverse.
 - Mastra is an integration: its code lives in `src/integrations/mastra/`. Register agents, tools, workflows and scorers in `src/integrations/mastra/index.ts`.
 - This repository contains no product features (video, image generation, shop code). Product work belongs in the product repository; this runtime only operates on target repositories.

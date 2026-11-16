@@ -143,6 +143,13 @@ export async function verifyReview(deps: VerifiedReviewDeps, taskId: string): Pr
   const checks: ReviewCheck[] = [];
   const add = (name: string, ok: boolean, cls: ReviewCheck['class'], detail: string) => checks.push({ name, ok, class: cls, detail });
   const git = (args: string[]) => worktrees.git(batch.repository, args);
+  // The repository the evidence is read from must still be the batch's recorded target; otherwise nothing below is trustworthy.
+  try {
+    const target = worktrees.targetOf(batch);
+    add('target repository identity', true, 'evidence', target ? `${target.repositoryId} at ${target.canonicalRoot}` : 'no recorded target (fixed worktree layout)');
+  } catch (err) {
+    add('target repository identity', false, 'evidence', (err as Error).message);
+  }
 
   const evidence: ReviewEvidence = {
     baseCommit: task.baseCommit,

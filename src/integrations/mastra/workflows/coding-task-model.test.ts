@@ -32,7 +32,9 @@ test('the default coding worker run reports agent, provider and model separately
     const resolver = new ModelResolver(registry, { defaults: { 'coding-worker': ref, specialist: ref } }, { OLLAMA_API_KEY: 'key-for-test' });
 
     // The Mastra instance holds the worker exactly as index.ts registers it, here pointed at the loopback endpoint.
-    const workflow = createCodingTaskWorkflow({ artifactRoot: artifacts, runOptions: { runtimeRetryDelayMs: 0 } });
+    // In-process on purpose: this checks the agent object registered in THIS Mastra instance (bound by a test-only resolver),
+    // which cannot cross into an agent process. The process path's binding is covered by src/runtime/agents/agent-process.test.ts.
+    const workflow = createCodingTaskWorkflow({ artifactRoot: artifacts, runOptions: { runtimeRetryDelayMs: 0 }, execution: 'in-process' });
     const mastra = new Mastra({ agents: { codingWorkerGo: createCodingWorker('go', 'writeFile', resolver) }, workflows: { coding: workflow } });
     const input: CodingTaskWorkflowInput = {
       repository: root,

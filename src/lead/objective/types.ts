@@ -30,6 +30,13 @@ export const engineeringObjectiveSchema = z.object({
   repository: z.string().min(1),
   constraints: z.array(z.string().min(1)).default([]),
   acceptanceCriteria: z.array(z.string().min(1)).default([]),
+  /**
+   * The project this objective belongs to (`lead project add`). Explicit, because a directory name is not an identity: a
+   * repository checked out under another name, or planned from a worktree, would otherwise get the wrong project id.
+   */
+  project: identifier.optional(),
+  /** GitHub issue numbers this objective implements. GitHub stays the source of truth; this is only the link. */
+  issues: z.array(z.number().int().positive()).max(50).default([]),
 });
 export type EngineeringObjective = z.output<typeof engineeringObjectiveSchema>;
 
@@ -93,6 +100,12 @@ export const plannedTaskSchema = z.object({
   /** Required for HUMAN_DECISION tasks: what must be decided. */
   decision: z.object({ question: z.string().min(1), options: z.array(z.string().min(1)).default([]) }).optional(),
   priority: z.number().int().min(0).max(100).optional(),
+  /**
+   * LOCAL_WORKER only: the registered model the Lead wants this task to run on, with its reason in the assessment. A request,
+   * not a grant: the model router checks it like any candidate and refuses the task if it is ineligible (never substitutes).
+   * Omitted: the router picks from the registry.
+   */
+  model: z.object({ providerId: z.string().min(1).max(40), modelId: z.string().min(1).max(200) }).optional(),
   /** LOCAL_WORKER only: the delegation capacity the change is reviewed against. Omitted: the default, shown at validation. */
   capacity: delegationCapacitySchema.optional(),
 });

@@ -102,6 +102,8 @@ export const batchPlanSchema = z.object({
    * index and working tree are never touched). Everything else uncommitted stays invisible to workers.
    */
   snapshotPaths: z.array(z.string()).default([]),
+  /** GitHub issue numbers the batch implements (links only; GitHub is the source of truth). */
+  issues: z.array(z.number().int().positive()).max(50).default([]),
   tasks: z.array(taskSpecSchema).min(1),
 });
 export type BatchPlan = z.output<typeof batchPlanSchema>;
@@ -206,6 +208,7 @@ export type FailureCategory =
   | 'not_eligible'
   | 'provider_not_authorized'
   | 'provider_unavailable'
+  | 'repository_identity_mismatch'
   | 'cancelled';
 
 /** The provider a task asks for ('ollama' unless its request names another). */
