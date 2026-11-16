@@ -8,6 +8,7 @@ import { createControlCenterApp } from './http-app.ts';
 import { agentRoster, type RosterInput } from './agents-adapter.ts';
 import { createCouncilReader } from './council-adapter.ts';
 import { createSuggestionReader } from './suggestions-adapter.ts';
+import { createRuntimeReader } from './runtime-view.ts';
 
 /** Opt-in same-origin serving on the existing Mastra server, never a second listener. */
 export function createControlCenterRoutes(registration?: RosterInput) {
@@ -25,6 +26,8 @@ export function createControlCenterRoutes(registration?: RosterInput) {
     collaboration: createCollaborationReader({ dbPath, schedulerOfRecord: true }),
     // Meeting suggestions live beside the scheduler's tables; read only, and never shown as meetings.
     suggestions: createSuggestionReader({ dbPath }),
+    // The runtime itself: projects, targets, DAGs, spawned agent processes and their live state, from the same database.
+    runtime: createRuntimeReader({ dbPath, studioOrigin }),
     // The council's meetings are Core B meetings in their own database: read with the same verified reader, never merged.
     ...(councilWorkdir ? { council: createCouncilReader({ workdir: resolve(councilWorkdir), studioOrigin }) } : {}),
     ...(registration ? { agents: () => agentRoster(registration) } : {}),

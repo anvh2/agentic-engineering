@@ -4,8 +4,9 @@ import { createControlCenterApp } from './http-app.ts';
 import type { Reader } from './adapter.ts';
 import type { CollaborationReader } from './collaboration-adapter.ts';
 import type { SuggestionReader } from './suggestions-adapter.ts';
+import type { RuntimeReader } from './runtime-view.ts';
 
-export function createGateway(options: { reader: Reader; assetsDir: string; pollMs?: number; collaboration?: CollaborationReader; suggestions?: SuggestionReader }) {
+export function createGateway(options: { reader: Reader; assetsDir: string; pollMs?: number; collaboration?: CollaborationReader; suggestions?: SuggestionReader; runtime?: RuntimeReader }) {
   const app = createControlCenterApp(options);
   const server = createServer(async (req, res) => {
     const port = (server.address() as { port?: number } | null)?.port;

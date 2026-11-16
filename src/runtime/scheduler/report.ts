@@ -146,9 +146,9 @@ export async function reconcileState(store: SchedulerStore, worktrees: WorktreeM
   }
   const known = new Set<string>();
   for (const t of store.listTasks()) if (t.worktreePath) known.add(await realpath(t.worktreePath).catch(() => t.worktreePath!));
-  const repositories = new Set(store.listBatches().filter((b) => !batchId || b.id === batchId).map((b) => b.repository));
-  for (const repository of repositories) {
-    for (const path of await worktrees.listManagedPaths(repository).catch(() => [])) {
+  const byRepository = new Map(store.listBatches().filter((b) => !batchId || b.id === batchId).map((b) => [b.repository, b] as const));
+  for (const [repository, batch] of byRepository) {
+    for (const path of await worktrees.listManagedPaths(repository, batch).catch(() => [])) {
       if (!known.has(path) && !path.endsWith('/_integration')) issues.push({ kind: 'orphan_worktree', detail: `${path} is a worktree with no task row` });
     }
   }

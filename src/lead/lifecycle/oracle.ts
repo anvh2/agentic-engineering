@@ -79,7 +79,7 @@ export async function pinOracle(deps: PinOracleDeps, input: { objectiveId: strin
   if (!isAbsolute(spec.dir)) throw new LifecycleError('invalid', 'the oracle directory must be an absolute path');
   const dir = await realpath(spec.dir).catch(() => undefined);
   if (!dir || !(await stat(dir)).isDirectory()) throw new LifecycleError('invalid', `oracle directory ${spec.dir} does not exist`);
-  const protectedRoots = [batch.repository, worktrees.root, ...(deps.forbiddenRoots ?? [])];
+  const protectedRoots = [batch.repository, worktrees.rootFor(batch), ...(deps.forbiddenRoots ?? [])];
   for (const root of protectedRoots) {
     if (overlaps(dir, await realOrResolved(root))) throw new LifecycleError('invalid', `oracle_not_isolated: ${dir} overlaps ${root}, which workers can reach; keep the oracle outside the repository, the worktrees and the artifact roots`);
   }

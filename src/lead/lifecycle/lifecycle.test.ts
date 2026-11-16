@@ -6,7 +6,7 @@ import { StoreError } from '../../runtime/scheduler/store.ts';
 import { git } from '../../runtime/scheduler/test-helpers.ts';
 import { cancelObjective, REVIEWER, resumeObjective, runObjectiveLifecycle } from './driver.ts';
 import { verifyPinnedOracle } from './oracle.ts';
-import { GOOD, VACUOUS_ORACLE, harness, standardTasks } from './__testing__/fixture.ts';
+import { GOOD, TASK_TESTS, VACUOUS_ORACLE, goTask, harness, standardTasks } from './__testing__/fixture.ts';
 import { listSuggestions } from '../collaboration/suggestions.ts';
 
 const solutions = { pad: [GOOD.pad], title: [GOOD.title], describe: [GOOD.describe] };
@@ -570,5 +570,27 @@ describe('M12 lifecycle: meeting suggestions on technical escalations', () => {
     const [s] = listSuggestions(h.store);
     assert.deepEqual([s.meetingType, s.category, s.refs.taskId, s.status], ['acceptance_failure', 'not_accepted', null, 'pending']);
     assert.match(s.reason, /^objective obj1 is NOT_ACCEPTED by its pinned oracle: /);
+  });
+});
+
+describe('resilience: a dead end does not abandon independent work', () => {
+  it('a task that can never complete stops the objective only after the independent chain finished and was integrated', async () => {
+    // pad dies in round 1 (wrong code, no correction budget); describe (here: Summary) depends only on title, so it becomes READY only after
+    // title is integrated at the end of round 1 and runs in round 2. Before this fix the lifecycle escalated after round 1.
+    const summaryTest = { path: 'summary_oracle_test.go', content: 'package fmtkit\n\nimport "testing"\n\nfunc TestSummary(t *testing.T) {\n\tif Summary("a b") != "A B" {\n\t\tt.Fatal("summary")\n\t}\n}\n' };
+    const h = harness({
+      solutions: { pad: [GOOD.padWrong], title: [GOOD.title], describe: ['package fmtkit\n\n// Describe renders a name and a count as "<padded title>|<count>".\nfunc Describe(name string, n int) string {\n\treturn "" // TODO\n}\n\n// Summary is the title-cased text.\nfunc Summary(s string) string { return Title(s) }\n'] },
+      tasks: [goTask('pad', { file: 'pad.go', test: TASK_TESTS.pad }), goTask('title', { file: 'title.go', test: TASK_TESTS.title }), goTask('describe', { file: 'describe.go', test: summaryTest, dependsOn: ['title'] })],
+      maxReviewCorrections: 0,
+    });
+    await h.pin();
+    const out = await runObjectiveLifecycle(h.deps, 'obj1');
+    assert.equal(out.verdict, 'ESCALATED');
+    assert.equal(out.reason, 'task_dead_end');
+    const d = h.store.requireTask('describe');
+    assert.equal(d.state, 'DONE', `the independent dependent ran and was integrated: ${d.state} ${d.failureCategory} ${d.stateReason}`);
+    assert.equal(h.store.requireTask('title').state, 'DONE');
+    assert.match(out.stops.join('\n'), /partial integration: describe, title are integrated/);
+    assert.ok(h.lifecycle.events('obj1').some((e) => /continuing 1 independent task\(s\): describe/.test(e.reason ?? '')), 'the decision to continue is recorded');
   });
 });

@@ -70,14 +70,15 @@ function specFor(objectiveId: string, task: PlannedTask): TaskSpecInput {
 }
 
 /** Throws PlanNotExecutableError unless the validation says the plan may become a batch. */
-export function toBatchPlan(objective: Pick<EngineeringObjective, 'id' | 'title'>, plan: EngineeringPlan, validation: PlanValidation): BatchPlan {
+export function toBatchPlan(objective: Pick<EngineeringObjective, 'id' | 'title'> & Partial<Pick<EngineeringObjective, 'project' | 'issues'>>, plan: EngineeringPlan, validation: PlanValidation): BatchPlan {
   if (!validation.ok) throw new PlanNotExecutableError(`plan is invalid: ${validation.errors.map((e) => e.message).join('; ')}`);
   if (!validation.executable) {
     throw new PlanNotExecutableError(`plan needs a human decision before it can execute: ${validation.pendingDecisions.map((d) => `${d.taskId}: ${d.question}`).join('; ')}`);
   }
   const batch = batchPlanSchema.parse({
     batchId: objective.id,
-    project: basename(plan.repository),
+    project: objective.project ?? basename(plan.repository),
+    issues: objective.issues ?? [],
     repository: plan.repository,
     description: `${objective.title}\n\n${plan.summary}\n\n(objective ${objective.id}, planned on commit ${plan.baseCommit.slice(0, 10)} by ${plan.producedBy})`,
     baseRef: plan.baseCommit === 'unborn' ? undefined : plan.baseCommit,

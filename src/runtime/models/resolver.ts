@@ -96,6 +96,20 @@ export class ModelResolver {
     this.env = env;
   }
 
+  /**
+   * The same registry and defaults with `agentId` assigned to `ref`: how a routed execution binds the model the router chose.
+   * It grants nothing: resolve() still refuses an unregistered, unauthorized, unavailable or incapable model, and never
+   * substitutes another.
+   */
+  withAssignment(agentId: string, ref: ModelRef): ModelResolver {
+    return new ModelResolver(this.registry, { defaults: this.defaults, assignments: { ...this.assignments, [agentId]: ref } }, this.env);
+  }
+
+  /** The registry this resolver checks against (read-only use: routing reads candidates from it). */
+  get models(): ModelRegistry {
+    return this.registry;
+  }
+
   resolve(request: AgentModelRequest): ResolvedModel {
     const { agentId, role } = request;
     const assigned = Object.hasOwn(this.assignments, agentId) ? this.assignments[agentId] : undefined;

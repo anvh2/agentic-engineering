@@ -47,6 +47,20 @@ export interface ModelEntry extends ModelRef {
   roles: readonly AgentRole[];
   /** When present, only these agent ids may run on the model, in addition to the role check. */
   agents?: readonly string[];
+  /** Routing inputs the operator declares (never measured here). All optional; a missing one is UNKNOWN to the router. */
+  routing?: ModelRoutingProfile;
+}
+
+/** What the per-task model router may weigh. Declared by the operator from benchmark runs, not guessed. */
+export interface ModelRoutingProfile {
+  /** Languages this model is cleared for as a coding worker; absent = not restricted. */
+  languages?: readonly ('go' | 'js')[];
+  /** Reasoning strength the operator assigns; matched against task complexity. */
+  tier?: 'small' | 'medium' | 'large';
+  /** Resident memory the model needs, in GB (local models); compared with the local memory budget. */
+  memoryGb?: number;
+  /** Benchmark evidence per language: pass rate over `runs` runs, and where it came from. */
+  evidence?: readonly { language: 'go' | 'js'; passRate: number; runs: number; source: string }[];
 }
 
 export class ModelConfigError extends Error {

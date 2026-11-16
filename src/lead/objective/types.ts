@@ -30,6 +30,13 @@ export const engineeringObjectiveSchema = z.object({
   repository: z.string().min(1),
   constraints: z.array(z.string().min(1)).default([]),
   acceptanceCriteria: z.array(z.string().min(1)).default([]),
+  /**
+   * The project this objective belongs to (`lead project add`). Explicit, because a directory name is not an identity: a
+   * repository checked out under another name, or planned from a worktree, would otherwise get the wrong project id.
+   */
+  project: identifier.optional(),
+  /** GitHub issue numbers this objective implements. GitHub stays the source of truth; this is only the link. */
+  issues: z.array(z.number().int().positive()).max(50).default([]),
 });
 export type EngineeringObjective = z.output<typeof engineeringObjectiveSchema>;
 

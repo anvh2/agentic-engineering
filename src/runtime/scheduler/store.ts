@@ -17,6 +17,7 @@ import {
   type TaskState,
 } from './types.ts';
 import { DEFAULT_PROVIDER_ID } from '../execution/worker-provider.ts';
+import { parseTargetRepository, type TargetRepository } from '../project/target-repository.ts';
 
 /**
  * SQLite-backed backlog. Every state change goes through `transition()` (one IMMEDIATE transaction: read row,
@@ -96,6 +97,33 @@ export interface BatchRow {
   linkPaths: string[];
   snapshotPaths: string[];
   createdAt: number;
+  /**
+   * The target repository identity recorded when the batch was created (batch_targets). Null for a batch created before
+   * targets were recorded, or by a caller that did not resolve one; such a batch is resolved on use, never trusted blindly.
+   */
+  target?: TargetRepository | null;
+}
+
+/** A registered project: a stable project id bound to exactly one target repository (append-only). */
+export interface ProjectRow {
+  projectId: string;
+  target: TargetRepository;
+  /** GitHub `owner/name` the project's issues are synchronized from; null when none. */
+  githubRepo: string | null;
+  createdAt: number;
+}
+
+/** A GitHub issue as last synchronized (a read-only cache: GitHub stays the source of truth). */
+export interface ProjectIssueRow {
+  projectId: string;
+  number: number;
+  title: string;
+  state: string;
+  url: string;
+  labels: string[];
+  milestone: string | null;
+  updatedAt: string | null;
+  syncedAt: number;
 }
 
 export interface EventRow {
@@ -231,9 +259,35 @@ CREATE INDEX IF NOT EXISTS provider_routing_task ON provider_routing(task_id);
 CREATE INDEX IF NOT EXISTS provider_routing_spend ON provider_routing(provider, charged);
 CREATE TRIGGER IF NOT EXISTS provider_routing_no_update BEFORE UPDATE ON provider_routing BEGIN SELECT RAISE(ABORT, 'provider_routing is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS provider_routing_no_delete BEFORE DELETE ON provider_routing BEGIN SELECT RAISE(ABORT, 'provider_routing is append-only'); END;
+-- Target repositories (additive): the identity of the repository a batch operates on, fixed when the batch is created, and the
+-- projects bound to one repository. Both are append-only: a repository that changes identity is a new project, never an edit.
+CREATE TABLE IF NOT EXISTS projects (
+  project_id TEXT PRIMARY KEY, repository_id TEXT NOT NULL, canonical_root TEXT NOT NULL, git_common_dir TEXT NOT NULL,
+  github_repo TEXT, identity TEXT NOT NULL, created_at INTEGER NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS projects_no_update BEFORE UPDATE ON projects BEGIN SELECT RAISE(ABORT, 'projects is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS projects_no_delete BEFORE DELETE ON projects BEGIN SELECT RAISE(ABORT, 'projects is append-only'); END;
+CREATE TABLE IF NOT EXISTS batch_targets (
+  batch_id TEXT PRIMARY KEY REFERENCES batches(id), project TEXT NOT NULL, repository_id TEXT NOT NULL,
+  canonical_root TEXT NOT NULL, git_common_dir TEXT NOT NULL, worktree_root TEXT NOT NULL, identity TEXT NOT NULL, recorded_at INTEGER NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS batch_targets_no_update BEFORE UPDATE ON batch_targets BEGIN SELECT RAISE(ABORT, 'batch_targets is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS batch_targets_no_delete BEFORE DELETE ON batch_targets BEGIN SELECT RAISE(ABORT, 'batch_targets is append-only'); END;
+-- GitHub issues as last synchronized: a cache for display and linking, replaced per issue on every sync. GitHub stays the
+-- source of truth; nothing here is ever written back.
+CREATE TABLE IF NOT EXISTS batch_issues (
+  batch_id TEXT NOT NULL REFERENCES batches(id), number INTEGER NOT NULL, PRIMARY KEY (batch_id, number)
+);
+CREATE TABLE IF NOT EXISTS project_issues (
+  project_id TEXT NOT NULL REFERENCES projects(project_id), number INTEGER NOT NULL, title TEXT NOT NULL, state TEXT NOT NULL,
+  url TEXT NOT NULL, labels TEXT NOT NULL DEFAULT '[]', milestone TEXT, updated_at TEXT, synced_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, number)
+);
 `;
 
 const json = (v: unknown) => JSON.stringify(v);
+/** A batch with its recorded target identity, if any. */
+const BATCH_SELECT = 'SELECT b.*, t.identity AS target_identity FROM batches b LEFT JOIN batch_targets t ON t.batch_id = b.id';
 
 /**
  * Parses a JSON column. Malformed data raises StoreError('corrupt') naming the row and column: list reads skip
@@ -315,6 +369,7 @@ function rowToBatch(r: Record<string, any>): BatchRow {
     linkPaths: parseJson('batch', r.id, 'link_paths', r.link_paths),
     snapshotPaths: parseJson('batch', r.id, 'snapshot_paths', r.snapshot_paths),
     createdAt: r.created_at,
+    target: r.target_identity ? parseTargetRepository(parseJson('batch', r.id, 'target identity', r.target_identity)) : null,
   };
 }
 
@@ -418,18 +473,18 @@ export class SchedulerStore {
       }
     };
     check('tasks', rowToTask, 'SELECT * FROM tasks ORDER BY id');
-    check('batches', rowToBatch, 'SELECT * FROM batches ORDER BY id');
+    check('batches', rowToBatch, `${BATCH_SELECT} ORDER BY b.id`);
     check('reviews', rowToReview, 'SELECT * FROM reviews ORDER BY id');
     return out;
   }
 
   getBatch(id: string): BatchRow | undefined {
-    const r = this.db.prepare('SELECT * FROM batches WHERE id = ?').get(id);
+    const r = this.db.prepare(`${BATCH_SELECT} WHERE b.id = ?`).get(id);
     return r ? rowToBatch(r) : undefined;
   }
 
   listBatches(): BatchRow[] {
-    return this.db.prepare('SELECT * FROM batches ORDER BY created_at ASC').all().flatMap((r) => this.parseOrSkip(rowToBatch, r));
+    return this.db.prepare(`${BATCH_SELECT} ORDER BY b.created_at ASC`).all().flatMap((r) => this.parseOrSkip(rowToBatch, r));
   }
 
   events(taskId?: string): EventRow[] {
@@ -519,7 +574,7 @@ export class SchedulerStore {
   // ---- planning ----------------------------------------------------------------------------------------------
 
   /** Creates a batch and its tasks in BACKLOG. Plans are append-only: an existing batch/task id is an error. */
-  createBatch(input: BatchPlanInput, actor = 'lead'): BatchPlan {
+  createBatch(input: BatchPlanInput, actor = 'lead', options: { target?: TargetRepository } = {}): BatchPlan {
     const plan = batchPlanSchema.parse(input);
     const ids = new Set<string>();
     for (const t of plan.tasks) {
@@ -542,8 +597,82 @@ export class SchedulerStore {
         .prepare('INSERT INTO batches (id, project, repository, description, base_ref, integration_commands, link_paths, snapshot_paths, created_at) VALUES (?,?,?,?,?,?,?,?,?)')
         .run(plan.batchId, plan.project, plan.repository, plan.description, plan.baseRef ?? null, json(plan.integrationCommands), json(plan.linkPaths), json(plan.snapshotPaths), now);
       for (const t of plan.tasks) this.insertTask(plan.batchId, plan.project, plan.repository, t, null, now, actor);
+      if (options.target) this.insertBatchTarget(plan.batchId, plan.project, options.target, now);
+      for (const n of plan.issues) this.db.prepare('INSERT INTO batch_issues (batch_id, number) VALUES (?,?)').run(plan.batchId, n);
     });
     return plan;
+  }
+
+  /**
+   * Records the batch's target identity. A registered project binds its id to exactly one repository: a batch for that project
+   * on any other repository is refused (`repository_identity_mismatch`), so two projects never share worktrees or state.
+   */
+  private insertBatchTarget(batchId: string, project: string, target: TargetRepository, now: number): void {
+    const registered = this.getProject(project);
+    if (registered && registered.target.repositoryId !== target.repositoryId) {
+      throw new StoreError('invalid', `repository_identity_mismatch: project ${project} is bound to ${registered.target.repositoryId} (${registered.target.canonicalRoot}), not ${target.repositoryId} (${target.canonicalRoot})`);
+    }
+    this.db.prepare('INSERT INTO batch_targets (batch_id, project, repository_id, canonical_root, git_common_dir, worktree_root, identity, recorded_at) VALUES (?,?,?,?,?,?,?,?)')
+      .run(batchId, project, target.repositoryId, target.canonicalRoot, target.gitCommonDir, target.worktreeRoot, json(target), now);
+  }
+
+  // ---- projects --------------------------------------------------------------------------------------------------
+
+  /** Registers a project bound to one target repository. Idempotent for the same binding; a different binding is refused. */
+  registerProject(input: { projectId: string; target: TargetRepository; githubRepo?: string | null }): ProjectRow {
+    if (!/^[A-Za-z0-9._-]{1,100}$/.test(input.projectId)) throw new StoreError('invalid', `project id must be [A-Za-z0-9._-], got ${input.projectId}`);
+    if (input.githubRepo && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(input.githubRepo)) throw new StoreError('invalid', `github repo must be owner/name, got ${input.githubRepo}`);
+    return this.tx(() => {
+      const existing = this.getProject(input.projectId);
+      if (existing) {
+        if (existing.target.repositoryId !== input.target.repositoryId) throw new StoreError('invalid', `repository_identity_mismatch: project ${input.projectId} is already bound to ${existing.target.repositoryId} (${existing.target.canonicalRoot})`);
+        if ((input.githubRepo ?? null) !== null && input.githubRepo !== existing.githubRepo) throw new StoreError('invalid', `project ${input.projectId} is already linked to GitHub ${existing.githubRepo ?? '(none)'}`);
+        return existing;
+      }
+      const other = this.db.prepare('SELECT project_id FROM projects WHERE repository_id = ?').get(input.target.repositoryId) as { project_id: string } | undefined;
+      if (other) throw new StoreError('invalid', `repository ${input.target.canonicalRoot} is already registered as project ${other.project_id}`);
+      this.db.prepare('INSERT INTO projects (project_id, repository_id, canonical_root, git_common_dir, github_repo, identity, created_at) VALUES (?,?,?,?,?,?,?)')
+        .run(input.projectId, input.target.repositoryId, input.target.canonicalRoot, input.target.gitCommonDir, input.githubRepo ?? null, json(input.target), this.now());
+      return this.getProject(input.projectId)!;
+    });
+  }
+
+  getProject(projectId: string): ProjectRow | undefined {
+    const r = this.db.prepare('SELECT * FROM projects WHERE project_id = ?').get(projectId) as Record<string, any> | undefined;
+    return r ? { projectId: r.project_id, target: parseTargetRepository(parseJson('project', r.project_id, 'identity', r.identity)), githubRepo: r.github_repo, createdAt: r.created_at } : undefined;
+  }
+
+  listProjects(): ProjectRow[] {
+    return (this.db.prepare('SELECT project_id FROM projects ORDER BY project_id').all() as { project_id: string }[]).flatMap((r) => {
+      try {
+        return [this.getProject(r.project_id)!];
+      } catch {
+        return [];
+      }
+    });
+  }
+
+  /** Replaces the cached copy of each given issue (GitHub is the source of truth; issues not in `issues` are left as last seen). */
+  syncProjectIssues(projectId: string, issues: readonly Omit<ProjectIssueRow, 'projectId' | 'syncedAt'>[]): number {
+    if (!this.getProject(projectId)) throw new StoreError('not_found', `project ${projectId} is not registered`);
+    const now = this.now();
+    return this.tx(() => {
+      const stmt = this.db.prepare('INSERT OR REPLACE INTO project_issues (project_id, number, title, state, url, labels, milestone, updated_at, synced_at) VALUES (?,?,?,?,?,?,?,?,?)');
+      for (const i of issues) stmt.run(projectId, i.number, i.title, i.state, i.url, json(i.labels), i.milestone, i.updatedAt, now);
+      return issues.length;
+    });
+  }
+
+  /** GitHub issue numbers a batch was created for. */
+  batchIssues(batchId: string): number[] {
+    return (this.db.prepare('SELECT number FROM batch_issues WHERE batch_id = ? ORDER BY number').all(batchId) as { number: number }[]).map((r) => r.number);
+  }
+
+  projectIssues(projectId: string): ProjectIssueRow[] {
+    return (this.db.prepare('SELECT * FROM project_issues WHERE project_id = ? ORDER BY number').all(projectId) as Record<string, any>[]).map((r) => ({
+      projectId: r.project_id, number: r.number, title: r.title, state: r.state, url: r.url, labels: parseJson('project_issues', r.number, 'labels', r.labels),
+      milestone: r.milestone, updatedAt: r.updated_at, syncedAt: r.synced_at,
+    }));
   }
 
   private insertTask(batchId: string, project: string, repository: string, spec: TaskSpec, correctionOf: string | null, now: number, actor: string, corrections = 0): void {

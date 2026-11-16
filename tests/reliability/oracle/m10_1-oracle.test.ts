@@ -989,7 +989,11 @@ describe('O-PR objective-scoped promotion', () => {
     const before = snapshot(real, 'X');
     real.close();
     const planFile = join(dir, 'plan.json');
-    writeFileSync(planFile, JSON.stringify({ batchId: 'Y', project: 'p', repository: '/tmp/none', tasks: [task('y-a')] }));
+    // `lead plan` resolves and records the target repository, so the plan must name a real one (a missing path fails closed).
+    const repo = join(dir, 'repo');
+    mkdirSync(repo);
+    for (const args of [['init', '-q', '-b', 'main'], ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init']]) spawnSync('git', args, { cwd: repo });
+    writeFileSync(planFile, JSON.stringify({ batchId: 'Y', project: 'p', repository: repo, tasks: [task('y-a')] }));
     const r = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', join(ROOT, 'scripts', 'lead.ts'), 'plan', planFile], { env: { ...process.env, AGENTIC_SCHED_DB: dbFile, AGENTIC_SCHED_ROOT: dir }, encoding: 'utf8', timeout: 60_000 });
     assert.equal(r.status, 0, r.stderr);
     const check = new SchedulerStore(dbFile);

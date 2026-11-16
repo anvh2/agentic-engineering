@@ -1,0 +1,61 @@
+import assert from 'node:assert/strict';
+import { hostname } from 'node:os';
+import { join } from 'node:path';
+import { test } from 'node:test';
+import { AgentStore } from '../../runtime/agents/agent-store.ts';
+import { resolveTargetRepository } from '../../runtime/project/target-repository.ts';
+import { makeRepo, plan, tempDir, workerTask } from '../../runtime/scheduler/test-helpers.ts';
+import { SchedulerStore } from '../../runtime/scheduler/store.ts';
+import { createControlCenterApp } from './http-app.ts';
+import { createRuntimeReader, liveStateOf, STALE_HEARTBEAT_MS } from './runtime-view.ts';
+
+const row = (over: Record<string, unknown>) => ({ status: 'RUNNING', activity: null, activity_detail: null, heartbeat_at: 1_000, pid: process.pid, host: hostname(), ...over });
+
+test('live state comes only from recorded evidence; stale or vanished processes are UNKNOWN, never working', () => {
+  const now = 2_000;
+  assert.equal(liveStateOf(row({ activity: 'WAITING_PERMIT' }) as never, now).state, 'WAITING_FOR_MODEL_PERMIT');
+  assert.equal(liveStateOf(row({ activity: 'INFERENCE' }) as never, now).state, 'MODEL_INFERENCE');
+  assert.equal(liveStateOf(row({ activity: 'TOOL' }) as never, now).state, 'TOOL_EXECUTION');
+  assert.equal(liveStateOf(row({ activity: 'VERIFYING' }) as never, now).state, 'VERIFICATION');
+  assert.equal(liveStateOf(row({ activity: 'STARTING' }) as never, now).state, 'PROCESS_ALIVE');
+  assert.equal(liveStateOf(row({ status: 'COMPLETED' }) as never, now).state, 'COMPLETED');
+  assert.equal(liveStateOf(row({ status: 'CANCELLED' }) as never, now).state, 'CANCELLED');
+  const stale = liveStateOf(row({ activity: 'INFERENCE' }) as never, 1_000 + STALE_HEARTBEAT_MS + 1);
+  assert.equal(stale.state, 'UNKNOWN');
+  assert.match(stale.detail!, /no heartbeat/);
+  const gone = liveStateOf(row({ activity: 'INFERENCE', pid: 999_999 }) as never, now);
+  assert.equal(gone.state, 'UNKNOWN');
+  assert.match(gone.detail!, /not found on this host/);
+});
+
+test('the runtime view shows project, target, issues, DAG blockers, spawned agents and metrics over HTTP, scoped by project', async () => {
+  const dbPath = join(tempDir('runtime-view-'), 'scheduler.db');
+  const store = new SchedulerStore(dbPath);
+  const repo = makeRepo();
+  const target = resolveTargetRepository(repo);
+  store.registerProject({ projectId: 'cloudfarm', target, githubRepo: 'o/cloudfarm' });
+  store.syncProjectIssues('cloudfarm', [{ number: 7, title: 'Add helper', state: 'OPEN', url: 'https://github.com/o/cloudfarm/issues/7', labels: ['backend'], milestone: null, updatedAt: null }]);
+  store.createBatch(plan(repo, [workerTask('a'), workerTask('b', { dependsOn: ['a'] })], { project: 'cloudfarm', issues: [7] }), 'lead', { target });
+  store.createBatch(plan(makeRepo(), [workerTask('other')], { batchId: 'B2', project: 'elsewhere' }));
+  const agents = new AgentStore(store.db);
+  agents.create({ executionId: 'agx-a-1', agentId: 'coding-worker.a', role: 'coding-worker', project: 'cloudfarm', batchId: 'B1', taskId: 'a', claimEpoch: 1, runId: 'run-1', provider: 'ollama', assignedModel: 'ollama/qwen2.5-coder:3b', worktree: join(target.worktreeRoot, 'B1', 'a'), repositoryId: target.repositoryId, logPath: '/x/agent.log', artifactDir: '/x' });
+  agents.update('agx-a-1', { status: 'RUNNING', pid: process.pid, heartbeatAt: Date.now(), activity: 'INFERENCE' });
+  const app = createControlCenterApp({ reader: { snapshot: () => ({}) as never, eventsAfter: () => ({}) as never } as never, assetsDir: tempDir(), runtime: createRuntimeReader({ dbPath }) });
+  const res = app.fetch(new Request('http://127.0.0.1/api/v1/runtime?project=cloudfarm'));
+  assert.equal(res.status, 200);
+  const view = await res.json();
+  assert.equal(view.schema, 'agentic.runtime-view/1');
+  assert.equal(view.source, 'connected', JSON.stringify(view.limitations));
+  assert.deepEqual(view.projects.map((p: { projectId: string }) => p.projectId), ['cloudfarm']);
+  assert.equal(view.projects[0].worktreeRoot, target.worktreeRoot);
+  assert.deepEqual(view.objectives.map((o: { id: string }) => o.id), ['B1'], 'another project is never mixed in');
+  assert.deepEqual(view.objectives[0].issues, [7]);
+  assert.deepEqual(view.issues[0].linkedObjectives, ['B1']);
+  assert.deepEqual(view.objectives[0].tasks.find((t: { id: string }) => t.id === 'b').blockedBy, ['a']);
+  assert.equal(view.agents.length, 1);
+  assert.equal(view.agents[0].liveState, 'MODEL_INFERENCE');
+  assert.equal(view.agents[0].reportedModel, null, 'not reported yet: shown as UNKNOWN by the UI, never copied from the assignment');
+  assert.equal(view.lead.supervisedProcess, false);
+  assert.equal(view.metrics.agentsSpawned, 1);
+  store.close();
+});

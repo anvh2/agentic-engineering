@@ -520,6 +520,8 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
           const spent = records.reduce((a, r) => a + r.capacityWaitMs, 0);
           const remaining = Math.max(1, waitBudgetMs - spent);
           await faultPoint('runner.before-permit', { signal: options.signal });
+          // Waiting for a model permit is not inference: observable on its own (model_started marks the permit being held).
+          trace.emit('permit_wait_started', { attempt: attemptNo, runtimeTry, resource: descriptor?.capacity?.resource ?? 'ollama' });
           permit = await (options.capacity ?? capacityFor(descriptor?.capacity)).acquire(permitHolder({ label: modelLabel, taskId: task.taskId, runId: options.runId }), options.signal, { tag: task.taskId, maxWaitMs: remaining });
           waitOutcome = 'acquired';
         } catch (err) {

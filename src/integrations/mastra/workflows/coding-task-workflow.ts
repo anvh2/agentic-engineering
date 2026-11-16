@@ -18,6 +18,8 @@ import { runtimeMetrics } from '../../../observability/metrics.ts';
 import { createTraceSink } from '../../../runtime/execution/coding-task-trace.ts';
 import { knowledgeDbPath, loadActiveCatalog } from '../../../runtime/knowledge/engineering-control.ts';
 import { bindingMetadata, bindingOf, ollamaSettings } from '../../../runtime/models/index.ts';
+import type { AgentStore } from '../../../runtime/agents/agent-store.ts';
+import { runAgentProcessStep } from './agent-process-step.ts';
 
 /**
  * coding-task-workflow: the Engineering Lead's door to the local coding worker, and the orchestration /
@@ -33,8 +35,20 @@ import { bindingMetadata, bindingOf, ollamaSettings } from '../../../runtime/mod
  * Mastra step retries are deliberately not configured, so the runner stays the single retry authority.
  */
 
+const modelRefSchema = z.object({ providerId: z.string().min(1), modelId: z.string().min(1) });
+
 export const codingTaskInputSchema = delegationRequestSchema.extend({
   repository: z.string().describe('Absolute path of the git repository the worker may modify.'),
+  /** Execution context from the scheduler: project, batch, claim, routed model and the target identity the worktree belongs to. */
+  execution: z
+    .object({
+      project: z.string().nullable().optional(),
+      batchId: z.string().nullable().optional(),
+      claimEpoch: z.number().int().nullable().optional(),
+      model: modelRefSchema.nullable().optional(),
+      target: z.object({ repositoryId: z.string(), gitCommonDir: z.string(), worktreeRoot: z.string() }).nullable().optional(),
+    })
+    .optional(),
 });
 export type CodingTaskWorkflowInput = z.input<typeof codingTaskInputSchema>;
 
@@ -76,6 +90,10 @@ export const codingTaskResultSchema = z.object({
   provider: z.string().optional(),
   /** Agent, provider and model the default worker was bound to (separate ids; no credential). Absent when a named provider ran the task. */
   model: z.object({ agentId: z.string(), role: z.enum(['coding-worker', 'specialist']), providerId: z.string(), modelId: z.string() }).optional(),
+  /** The agent process that ran the task (process execution): its identity, pid, exit and the model the provider reported (null = UNKNOWN). */
+  agent: z
+    .object({ executionId: z.string(), agentId: z.string(), pid: z.number().nullable(), status: z.string(), exitCode: z.number().nullable(), logPath: z.string(), reportedModel: z.string().nullable(), assignedModel: z.string().nullable() })
+    .optional(),
   /** PASS | ESCALATED_TO_CLAUDE | RUNTIME_FAILURE | KEPT_BY_CLAUDE. Decided by the runtime verifier, never by the worker. */
   status: z.enum(['PASS', 'ESCALATED_TO_CLAUDE', 'RUNTIME_FAILURE', 'KEPT_BY_CLAUDE']),
   phase: phaseSchema,
@@ -122,7 +140,24 @@ export interface CodingTaskWorkflowDeps {
    * next run and a damaged store cannot affect tasks that pin nothing.
    */
   knowledgeCatalog?: EngineeringKnowledgeCatalog | (() => EngineeringKnowledgeCatalog | undefined);
+  /**
+   * Where the worker runs. 'process' (production default): an independent agent process spawned and supervised by the runtime
+   * (src/runtime/agents). 'in-process': inside this server; used when a test injects a worker or provider registry, which
+   * cannot cross a process boundary.
+   */
+  execution?: 'process' | 'in-process';
+  /** Agent lifecycle store (default: the scheduler database this server resolves). */
+  agentStore?: AgentStore;
+  /** Agent entry file override (tests). */
+  agentEntry?: string;
+  /** Wall-clock bound for one agent process (default 60 min); the scheduler's own budgets normally cancel the run sooner. */
+  agentTimeoutMs?: number;
 }
+
+const ALLOWED_TOOLS = {
+  go: ['listFiles', 'readFile', 'searchFiles', 'writeFile', 'runGoFmt', 'runGoTest', 'gitDiff', 'gitStatus'],
+  js: ['listFiles', 'readFile', 'searchFiles', 'writeFile', 'runPrettier', 'runJestTest', 'gitDiff', 'gitStatus'],
+} as const;
 
 const NEXT_ACTION: Record<EngineeringResult['status'], string> = {
   PASS: 'Review the verified diff (uncommitted in the repository), then commit it or send it back.',
@@ -290,6 +325,43 @@ export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
       const request = getInitData<CodingTaskWorkflowInput>();
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       const artifactDir = join(artifactRoot, `${inputData.taskId}-${stamp}`);
+
+      const mode = deps.execution ?? (deps.resolveWorker || deps.providers ? 'in-process' : 'process');
+      if (mode === 'process') {
+        let current = state;
+        let chain: Promise<unknown> = Promise.resolve();
+        const { execution, repository: _repository, ...delegation } = request;
+        const language = languageOf(request.contract.allowedFiles) === 'js' ? 'js' : 'go';
+        const outcome = await runAgentProcessStep({
+          taskId: inputData.taskId,
+          repository: inputData.repository,
+          provider: requestedProvider,
+          request: delegation as Record<string, unknown>,
+          execution,
+          artifactDir,
+          runId,
+          abortSignal,
+          modelTimeoutMs: deps.runOptions?.modelTimeoutMs ?? 900_000,
+          tracingContext: tracingContext as never,
+          store: deps.agentStore,
+          entry: deps.agentEntry,
+          timeoutMs: deps.agentTimeoutMs,
+          allowedTools: requestedProvider === DEFAULT_PROVIDER_ID ? [...ALLOWED_TOOLS[language]] : [`${requestedProvider} CLI (own sandbox, workspace-write)`],
+          onTrace: (event) => {
+            const update = phaseOf(event);
+            if (update) chain = chain.then(async () => (current = await publish({ setState, writer }, inputData.taskId, update, current)));
+          },
+        });
+        await chain;
+        const assigned = execution?.model ?? null;
+        return {
+          ...summarize(outcome.result),
+          provider: requestedProvider,
+          // The binding's agentId is the agent DEFINITION (coding-worker-go/js); the process identity is `agent.agentId`.
+          ...(requestedProvider === DEFAULT_PROVIDER_ID ? { model: { agentId: workerAgentIdFor(languageOf(request.contract.allowedFiles)) === 'codingWorkerJs' ? 'coding-worker-js' : 'coding-worker-go', role: 'coding-worker' as const, providerId: assigned?.providerId ?? 'ollama', modelId: assigned?.modelId ?? ollamaSettings().modelId } } : {}),
+          agent: outcome.agent,
+        };
+      }
       // Worker follows the language of the allowed files (the gate already guaranteed they are all one language).
       const agentId = workerAgentIdFor(languageOf(request.contract.allowedFiles));
       const fallbackAgent = agentId === 'codingWorkerJs' ? codingWorkerJs : codingWorkerGo;

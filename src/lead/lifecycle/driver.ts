@@ -215,6 +215,14 @@ async function driveObjective(deps: LifecycleDeps, objectiveId: string, options:
     // 4. where are we?
     const required = requiredTasks(store, batchId);
     const dead = required.filter((t) => DEAD_END_STATES.has(t.state));
+    // A dead end does not abandon independent work: while another required task can still make progress (it is not DONE, not
+    // a dead end, and not waiting on a dead end), the rounds continue. The objective cannot be accepted with a dead task, so
+    // it escalates once nothing else can move, with every independent result already integrated as evidence.
+    const progressing = required.filter((t) => t.state !== 'DONE' && !DEAD_END_STATES.has(t.state) && store.dependencyStatus(t).status !== 'failed');
+    if (dead.length > 0 && progressing.length > 0 && signature() !== before) {
+      lifecycle.audit(objectiveId, DRIVER, 'execution', `round ${rounds}: ${dead.map((t) => `${t.id} (${t.state})`).join(', ')} cannot complete; continuing ${progressing.length} independent task(s): ${progressing.map((t) => t.id).join(', ')}`, { dead: dead.map((t) => t.id), progressing: progressing.map((t) => t.id) });
+      continue;
+    }
     if (dead.length > 0) {
       const root = dead.filter((t) => t.failureCategory !== 'dependency_failed');
       const stops = (root.length > 0 ? root : dead).map((t) => `${t.id} is ${t.state}${t.failureCategory ? ` [${t.failureCategory}]` : ''}: ${t.stateReason ?? 'no reason recorded'}`);

@@ -25,6 +25,7 @@ import { ATTENTION, callTokens, claimElapsed, claimElapsedOrAbsence, currentTask
 const show = (v: number | string) => (typeof v === 'number' ? v.toLocaleString() : v);
 import { CollaborationView } from './collaboration.tsx';
 import { SuggestedMeetings } from './suggestions.tsx';
+import { RuntimePanel } from './runtime.tsx';
 import { AgentsView } from './agents.tsx';
 import './style.css';
 import { EMPTY_TEXT, emptyReason, filterCalls, filteredUsage, filterRuns, parseView, scopeQuery, serializeView, WINDOWS, type ViewState } from './view-state.ts';
@@ -848,6 +849,7 @@ function App() {
             </>}
             {page === 'Runs' && <p className="notice">Project labels come from scheduler batches. Milestone filtering and external Claude Code sessions are unavailable: no durable metadata contract is exposed. A scheduler batch, task, workflow run, model call and Council meeting are distinct identities.</p>}
             {page === 'Overview' && <p><a href="/agents" target={embedded ? '_top' : '_blank'} rel="noreferrer">Open Mastra Agents ↗</a></p>}
+            {page === 'Overview' && !view.unattributed && <RuntimePanel apiBase={apiBase} view={view} />}
             {snapshot && (
               <>
                 {page === 'Overview' && (

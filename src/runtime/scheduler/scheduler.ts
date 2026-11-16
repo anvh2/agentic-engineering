@@ -1,10 +1,12 @@
 import { StoreError, type Fence, type SchedulerStore, type TaskRow } from './store.ts';
 import { languageOfSpec, providerOfSpec, resolveConfig, type FailureCategory, type SchedulerConfig } from './types.ts';
 import { WorkspaceError, type Workspace } from '../worktree/worktree.ts';
+import { TargetRepositoryError } from '../project/target-repository.ts';
 import { ExecutionClock } from './execution-clock.ts';
 import { DEFAULT_PROVIDER_ID, type ProviderDescriptor } from '../execution/worker-provider.ts';
 import { decideRoute, type ProviderBudgetEntry, type RoutingCode, type RoutingDecision } from '../execution/provider-routing.ts';
 import { cancelTaskRun, type CancelReport, type CancelRunResult } from './cancel.ts';
+import type { ModelRoutingDecision } from '../models/routing.ts';
 
 /**
  * Worker-pool scheduler. It ASSIGNS work and RECORDS outcomes; it contains no coding, retry or verification logic:
@@ -28,6 +30,18 @@ export interface ExecutorOutcome {
   diff?: string;
   /** Per-attempt worker invocation telemetry the runner recorded (one per attempt that got a model response). */
   modelCalls?: ExecutorModelCall[];
+  /** The agent process that executed the run (identity, pid, exit, assigned and reported model). Absent for in-process runs. */
+  agent?: Record<string, unknown>;
+}
+
+/** What the scheduler tells the executor about the execution (recorded on the agent process). */
+export interface ExecutionContext {
+  project: string;
+  batchId: string;
+  claimEpoch: number;
+  /** The model routing selected for this claim; null when the provider picks its own model. */
+  model: { providerId: string; modelId: string } | null;
+  target: { repositoryId: string; gitCommonDir: string; worktreeRoot: string } | null;
 }
 
 /**
@@ -88,6 +102,7 @@ export interface ExecutorInput {
   /** Called as soon as the workflow run exists, so a crash can be reconciled against it. */
   onRunStart(info: { runId: string; studioUrl?: string }): void;
   log(line: string): void;
+  context?: ExecutionContext;
 }
 
 export interface Executor {
@@ -170,6 +185,12 @@ export interface SchedulerDeps {
   describeProvider?: (id: string) => ProviderDescriptor | undefined;
   /** Called when a task's executor starts (tests/measurement). */
   onExecutorStart?: (task: TaskRow) => void;
+  /**
+   * Per-task model routing for the default local provider (models/routing.ts), decided at claim time after provider routing.
+   * A refusal fails the task; the decision (selected or refused, with every candidate's reasons) is `artifacts.modelRouting`.
+   * Absent: the worker's configured model runs, as before.
+   */
+  selectModel?: (task: TaskRow) => Promise<ModelRoutingDecision>;
 }
 
 export class Scheduler {
@@ -185,6 +206,7 @@ export class Scheduler {
   private allowProviders: readonly string[];
   private providerBudgets: readonly ProviderBudgetEntry[];
   private describeProvider: (id: string) => ProviderDescriptor | undefined;
+  private selectModel?: SchedulerDeps['selectModel'];
   private stillActive: CancelRunResult[] = [];
   /** Tasks this scheduler is executing right now, with their run id once known (what a forced exit must report). */
   private live = new Map<string, { taskId: string; epoch: number; runId?: string }>();
@@ -201,6 +223,7 @@ export class Scheduler {
     this.allowProviders = deps.allowProviders ?? [];
     this.providerBudgets = deps.providerBudgets ?? [];
     this.describeProvider = deps.describeProvider ?? ((id) => (id === DEFAULT_PROVIDER_ID ? LOCAL_DEFAULT_DESCRIPTOR : undefined));
+    this.selectModel = deps.selectModel;
   }
 
   /**
@@ -412,6 +435,21 @@ export class Scheduler {
       if (routing.outcome === 'refused') return fail('RUNTIME_FAILURE', ROUTING_FAILURE[routing.code as keyof typeof ROUTING_FAILURE], routing.reason);
       if (routing.provider !== DEFAULT_PROVIDER_ID) this.log(`${claimed.id}: runs on provider "${routing.provider}" (${routing.reason})`);
 
+      // Model routing (default local provider only: a CLI provider picks its own model, reported as UNKNOWN unless it says).
+      let model: ExecutionContext['model'] = null;
+      if (this.selectModel && routing.provider === DEFAULT_PROVIDER_ID) {
+        let decision: ModelRoutingDecision;
+        try {
+          decision = await this.selectModel(claimed);
+          store.setArtifacts(claimed.id, { modelRouting: decision });
+        } catch (err) {
+          return fail('RUNTIME_FAILURE', 'executor_error', `model routing failed: ${(err as Error).message}`);
+        }
+        if (decision.outcome === 'refused' || !decision.selected) return fail('RUNTIME_FAILURE', 'model_routing_refused', decision.reason);
+        model = decision.selected;
+        this.log(`${claimed.id}: routed to model ${model.providerId}/${model.modelId} (${decision.reason})`);
+      }
+
       // A previous claim may have started (and even finished) a Mastra run before it was lost. Re-attach to its
       // worktree WITHOUT resetting it and try to adopt that run's outcome; only if there is nothing to adopt is the
       // worktree reset and the task run fresh.
@@ -422,6 +460,8 @@ export class Scheduler {
           return await this.workspace.prepare(claimed, batch, { preserve });
         } catch (err) {
           if (err instanceof WorkspaceError && err.code === 'source_tree_dirty') return fail('BLOCKED', 'source_tree_dirty', err.message);
+          // The target is not the repository the batch was created for: no worker may touch it. A human decides (ESCALATED).
+          if (err instanceof TargetRepositoryError) return fail('ESCALATED', 'repository_identity_mismatch', err.message);
           return fail('RUNTIME_FAILURE', 'executor_error', `workspace preparation failed: ${(err as Error).message}`);
         }
       };
@@ -445,6 +485,13 @@ export class Scheduler {
       // executor handed an already-aborted signal would never see an 'abort' event and would wait forever.
       ctl.signal.throwIfAborted();
       if (!outcome) {
+        // Last check before a worker is handed the worktree: same target repository, and the worktree belongs to it.
+        try {
+          this.workspace.verifyOwnership?.(store.requireTask(task.id), batch);
+        } catch (err) {
+          if (err instanceof TargetRepositoryError) return fail('ESCALATED', 'repository_identity_mismatch', err.message);
+          throw err;
+        }
         store.transition(task.id, 'CODING', { actor: fence.owner, reason: 'executor started', expectFrom: 'CLAIMED', fence });
         this.onExecutorStart?.(task);
         const running = store.requireTask(task.id);
@@ -453,6 +500,13 @@ export class Scheduler {
           repository: ws.path,
           signal: ctl.signal,
           log: this.log,
+          context: {
+            project: batch.project,
+            batchId: batch.id,
+            claimEpoch: fence.epoch,
+            model,
+            target: batch.target ? { repositoryId: batch.target.repositoryId, gitCommonDir: batch.target.gitCommonDir, worktreeRoot: batch.target.worktreeRoot } : null,
+          },
           onRunStart: ({ runId }) => {
             if (!store.recordRun(task.id, fence, runId)) {
               unrecordedRunId = runId;
@@ -519,7 +573,7 @@ export class Scheduler {
       codingMs: store.now() - startedAt,
     };
     const modelCalls = mergeModelCalls(current.artifacts.modelCalls, outcome.runId ?? current.runId, fence.owner, outcome.modelCalls);
-    const artifacts = { ...(outcome.artifactDir ? { artifactDir: outcome.artifactDir } : {}), ...(outcome.studioUrl ? { studioUrl: outcome.studioUrl } : {}), ...(capacityWaitMs !== undefined ? { capacityWaitMs } : {}), ...(modelCalls.length ? { modelCalls } : {}) };
+    const artifacts = { ...(outcome.agent ? { agent: outcome.agent } : {}), ...(outcome.artifactDir ? { artifactDir: outcome.artifactDir } : {}), ...(outcome.studioUrl ? { studioUrl: outcome.studioUrl } : {}), ...(capacityWaitMs !== undefined ? { capacityWaitMs } : {}), ...(modelCalls.length ? { modelCalls } : {}) };
 
     if (outcome.status === 'PASS') {
       store.transition(taskId, 'VERIFYING', { actor: fence.owner, reason: 'runtime PASS; running post-run change checks', expectFrom: 'CODING', fence, patch: { ...patchBase, artifacts } });

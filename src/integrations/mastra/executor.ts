@@ -22,6 +22,7 @@ export function toOutcome(run: WorkflowRunResult): ExecutorOutcome {
     artifactDir: r.artifactDir,
     verifier: r.verifier ? { command: r.verifier.command, exitCode: r.verifier.exitCode } : null,
     diff: r.diff,
+    ...(r.agent && typeof r.agent === 'object' ? { agent: r.agent } : {}),
     // Server JSON: shape is not trusted here; the scheduler's mergeModelCalls validates every field before persisting.
     modelCalls: Array.isArray(r.attempts)
       ? r.attempts.flatMap((a: { attempt?: unknown; telemetry?: Record<string, unknown> } | null) =>
@@ -33,9 +34,10 @@ export function toOutcome(run: WorkflowRunResult): ExecutorOutcome {
 
 export function createMastraExecutor(options: { server?: string; pollMs?: number; taskTimeoutMs?: number; cancelGraceMs?: number } = {}): Executor {
   return {
-    async run({ task, repository, signal, onRunStart, log }) {
+    async run({ task, repository, signal, onRunStart, log, context }) {
       if (!task.spec.request) throw new Error(`task ${task.id} has no delegation request`);
       const run = await runCodingTaskWorkflow(task.spec.request, repository, {
+        execution: context as Record<string, unknown> | undefined,
         server: options.server,
         pollMs: options.pollMs,
         timeoutMs: options.taskTimeoutMs,
