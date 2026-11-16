@@ -7,6 +7,7 @@ lead CLI (scripts/lead.ts)
   → Scheduler            src/runtime/scheduler
   → Executor             src/integrations/mastra/executor.ts
   → Mastra workflow      src/integrations/mastra/workflows/coding-task-workflow.ts
+  → Agent process        src/runtime/agents (supervisor) + src/workers/agent/main.ts (one OS process per execution)
   → Coding runner        src/runtime/execution/coding-task-runner.ts
   → Worker               src/workers
   → Sandboxed verifier   src/runtime/sandbox
@@ -32,7 +33,7 @@ State: SQLite at `.workdir/scheduler/scheduler.db` (tasks, audit events, reviews
 - **Atomic claim**: one IMMEDIATE transaction; proven with four OS processes racing for 8 tasks, six racing for one, and `maxActive` held across processes.
 - **Lease + fencing**: every claim bumps `claim_epoch`; worker writes carry (owner, epoch), so a zombie worker, a duplicate completion or a late result after cancel cannot write.
 - **Recovery**: expired leases requeue (bounded by `maxClaims`). A re-claim re-attaches to the worktree without resetting it and tries to adopt the previous run's outcome; only if there is none is the worktree reset (after proving it is a managed worktree).
-- **Isolation**: each task runs in `.workdir/worktrees/<batch>/<task>` on branch `lead-task/<batch>/<task>`. The user's checkout, index and branches are never touched. Files owned by an un-integrated task cannot be claimed by another.
+- **Isolation**: each task runs in `<target>/.worktrees/<batch>/<task>` on branch `lead-task/<batch>/<task>`, inside the TARGET repository, never the framework checkout (see [Target repositories](#target-repositories)). The user's checkout, index and branches are never touched. Files owned by an un-integrated task cannot be claimed by another.
 - **Stale-base guard**: a task whose source files differ from the batch base (`refs/lead/base/<batch>`) is BLOCKED (`source_tree_dirty`). `snapshotPaths` captures chosen uncommitted files into the base via a temporary index.
 - **Sandbox**: all model-generated code runs under macOS `sandbox-exec` with a `deny default` profile: reads only an allow-list (system pieces a toolchain starts with, the executable's own toolchain and the Go module cache, the task root, a private temp dir, and paths a trusted caller adds with `readAllow`; never derived from the worktree), writes only inside the task root and the temp dir, no network (loopback included), no Mach services but user-info lookup (no pasteboard, Keychain, preferences), a built environment (`HOME` is the temp dir; no user name, no secrets). Credentials, the home directory, other tasks' worktrees and artifacts and the oracle are unreadable. If no sandbox can be proven (including that a read outside the allow-list is refused), nothing runs (fail closed; no opt-out). Verifier output that becomes a worker's next prompt is scrubbed of host identity (`worker-feedback.ts`).
   - *Known limitation, JS only*: a task whose dependencies are linked into the worktree from outside it (`linkPaths`, e.g. `node_modules`) fails closed in the verifier, because the sandbox never derives read permission from the worktree (a worker controls its symlinks). The operator supplies the real directory with `AGENTIC_SANDBOX_READ_ALLOW` (path-delimiter separated, absolute; resolved through symlinks; the home directory and system roots are refused). Go tasks are unaffected: the toolchain, GOROOT and the module cache are found by the runtime, not the worktree.
@@ -186,9 +187,70 @@ A merge that conflicts, or a merge whose post-merge verification fails, is never
 
 All labels are enum-clamped; no task, run or worker id is ever a label.
 
+## Target repositories
+
+The framework repository (where this runtime is installed, found by `findProjectRoot()`) and the TARGET repository a batch
+operates on are separate. `src/runtime/project/target-repository.ts` resolves a target from any of its worktrees to its
+canonical root (the main worktree), its git common dir, a repository id (`repo-` + sha256 of root commit and common dir) and
+its sanitized origin; it records whether the target is the framework itself (self-hosting is allowed and labelled).
+
+- `lead plan` and `lead objective --submit` resolve the target and record it in `batch_targets` in the same transaction that
+  creates the batch. A path that is not a repository fails closed. A registered project (`lead project add <id> --repo <path>`)
+  binds its id to exactly one repository: a batch for that project on another repository is refused. The project id is the
+  objective's explicit `project`, never derived from a directory name.
+- `WorktreeManager.targetOwned()` (production) places worktrees in the recorded target's `<canonical root>/.worktrees` and
+  adds `/.worktrees/` to its `info/exclude` (local, never committed). The fixed-root layout remains for tests and previews.
+- The identity is re-checked before preparing a worktree, immediately before a worker is handed the worktree
+  (`Workspace.verifyOwnership`: the worktree must belong to the recorded git common dir), in the verified review (an
+  `evidence` check: a mismatch ESCALATEs) and before integration. A mismatch is `repository_identity_mismatch`: the task is
+  ESCALATED for a human; nothing is moved or deleted.
+
+## Agent processes, logical workers and model permits
+
+Three separate things, each recorded separately:
+
+| | What it is | Where it is recorded |
+| --- | --- | --- |
+| Logical worker slot | permission to run one task's lifecycle (`worker-<pid>-wN`) | the task lease (`tasks.lease_owner`, `claim_epoch`) |
+| Agent process | one OS process the runtime spawned for one execution | `agent_executions`, `agent_events` |
+| Model permit | one machine-wide inference slot | the capacity database |
+
+The `run-coding-worker` step spawns the worker as an independent process (`spawnAgent`, `src/runtime/agents/supervisor.ts`;
+entry `src/workers/agent/main.ts`). Each execution has a stable agent id (`coding-worker.<task>`), a unique execution id, its
+own spec file (contract, bounded context, allowed tools, provider and model, worktree, target identity), log, trace and
+result. The process leads its own process group: timeout and cancellation stop the whole group (SIGTERM, then SIGKILL), and
+only groups whose command line carries the execution id are ever signalled. The entry refuses to run without a supervisor
+(IPC channel); if the supervisor disconnects it aborts, so no unsupervised worker keeps editing a worktree. Before a new
+execution of a task starts, any older execution still alive is fenced (SUPERSEDED recorded first) and stopped; rows whose
+process and supervisor are gone are reconciled as LOST (`lead agents reconcile`). An agent that exits without a result is a
+`RUNTIME_FAILURE`, never a verdict.
+
+Live activity comes from the agent's own events: `permit_wait_started` (waiting for a model permit), `model_started` /
+`model_finished` (inference), live tool start/finish (each tool is wrapped inside the agent process), `verification_*`.
+The model the provider reported in its response is recorded apart from the assigned one; a CLI provider that does not say
+is UNKNOWN. Tests that inject an in-process worker run with `execution: 'in-process'`; production never does.
+
+## Model routing per task
+
+`src/runtime/models/routing.ts` chooses, at claim time and for the default local provider, which registered model runs a
+task (`Scheduler` dep `selectModel`; `lead` wires it). Candidates come from the same model registry the resolver uses.
+Hard checks: the resolver accepts the model for the agent with tool calling; a non-local-free model must already be
+assigned to that agent by the operator; a local model must be installed now (live `/api/tags`) and fit the local memory
+budget (`AGENTIC_LOCAL_MODEL_MEMORY_GB`, default 45% of RAM); declared language clearance and context window. Eligible
+models are scored on declared benchmark evidence for the language, tier against complexity, and footprint. A plan may
+request a model per task (`model` on a planned task): it is then the only candidate, and an ineligible request is refused,
+never substituted. The full decision (every candidate with its refusals and factors) is `artifacts.modelRouting`
+(`agentic.model-routing/1`); the agent process binds the chosen model through `ModelResolver.withAssignment`.
+
+## Lifecycle resilience
+
+A required task that can no longer complete does not abandon independent work: while another required task can still make
+progress (not DONE, not a dead end, not waiting on a dead end), the lifecycle keeps running rounds and records that decision;
+it escalates (`task_dead_end`) once nothing else can move, with every independent result already integrated.
+
 ## What Studio shows and does not
 
-Studio shows the three-step workflow graph per run and one trace per run (workflow → step → agent → model → tool call). Intra-step phases are emitted as `coding-phase` events and not persisted mid-step; the runtime's own checks (hash mutation checks, gofmt, `go test`) are not spans. The complete record is the artifact directory above.
+Studio shows the three-step workflow graph per run and one trace per run. In process execution the step's trace carries an `agent process <agentId>` span with child spans for model permit wait, model inference, each tool call and runtime verification, mirrored from the agent's live events; the agent's own detailed trace is its `trace.jsonl`. The Organization page (`/organization-app/`, `GET /control-center/v1/runtime`, `agentic.runtime-view/1`) shows projects and targets, synchronized GitHub issues, task DAGs with blockers, routed models and integration, the Engineering Lead (not a supervised process), every spawned agent process with its live state (UNKNOWN when its heartbeat is stale or its process is gone), recent agent events and agent metrics. Intra-step phases are emitted as `coding-phase` events and not persisted mid-step; the runtime's own checks (hash mutation checks, gofmt, `go test`) are not spans. The complete record is the artifact directory above.
 
 ## Persistence
 
@@ -198,7 +260,9 @@ Studio shows the three-step workflow graph per run and one trace per run (workfl
 | Engineering collaboration | same file as the scheduler (beside its tables, created if absent; `src/runtime/collaboration/store.ts`) | `collab_events`: one append-only event stream per discussion thread (threads, messages, meeting sessions, turns, outcomes; the meeting record is stored in the terminal session event). UPDATE/DELETE refused by triggers; hash-chained per thread (`prev_hash`, `hash`), so a rewrite fails the thread closed on replay; `idempotency_key` UNIQUE; global `seq` is the live-feed cursor. Schemas `agentic.collaboration/1`, `agentic.meeting-record/1`. Grants no authority and writes no scheduler table. See docs/reports/m9-collaboration-core.md |
 | Model capacity | `~/.agentic-engineering/model-capacity.db` (`AGENTIC_MODEL_LOCK_DB`, `AGENTIC_MODEL_CONCURRENCY`) | `capacity` (permit count per resource), `leases` (holder pid, expiry; renewed while a call runs), `waiters` (the FIFO queue: ticket, holder, tag, pid, expiry; added additively, no migration). `holder` is `<model>:<taskId>:pid<pid>` plus, since M10.1, `:run=<encodeURIComponent(runId)>`: the run that owns the permit. No schema change; a holder without the suffix (older process, direct runner use) has unknown ownership and blocks every run's cancel confirmation |
 | Run artifacts | `.workdir/lead-delegations/<task>-<ts>/` (`AGENTIC_ARTIFACT_ROOT`) | trace, attempts, contract, final diff, result |
-| Worktrees | `.workdir/worktrees/<batch>/<task>`, `_integration` | git worktrees |
+| Worktrees | `<target canonical root>/.worktrees/<batch>/<task>`, `_integration` (excluded locally through the target's `info/exclude`) | git worktrees of the target repository |
+| Targets and projects | scheduler database | `projects` (project id bound to one repository identity), `batch_targets` (identity recorded when a batch is created), `batch_issues` (GitHub issue links), `project_issues` (read-only cache of `gh issue list`); all additive, identity tables append-only |
+| Agent processes | scheduler database + `<artifact dir>/agent-spec.json`, `agent.log`, `agent-result.json`, `trace.jsonl` | `agent_executions` (one row per spawned process: identity, role, project, task, claim epoch, run, provider, assigned and reported model, worktree, pid, status, live activity, heartbeat, exit, permit wait, inference, tool calls, tokens), `agent_events` (append-only) |
 | Session projects | `.workdir/projects/<name>/` | `project.json` (`agentic.project/1`), `STATE.md`, `checkpoints/*.json` (`agentic.checkpoint/1`) |
 | Mastra storage | libSQL + DuckDB under `.mastra/` (framework-owned) | run snapshots, traces |
 

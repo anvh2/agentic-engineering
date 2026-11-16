@@ -60,6 +60,7 @@ function specFor(objectiveId: string, task: PlannedTask): TaskSpecInput {
           hiddenFiles: task.hiddenFiles,
         },
         assessment: task.assessment,
+        ...(task.model ? { model: task.model } : {}),
       },
       ...(task.capacity ? { capacity: task.capacity } : {}),
     };

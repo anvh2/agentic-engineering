@@ -100,6 +100,12 @@ export const plannedTaskSchema = z.object({
   /** Required for HUMAN_DECISION tasks: what must be decided. */
   decision: z.object({ question: z.string().min(1), options: z.array(z.string().min(1)).default([]) }).optional(),
   priority: z.number().int().min(0).max(100).optional(),
+  /**
+   * LOCAL_WORKER only: the registered model the Lead wants this task to run on, with its reason in the assessment. A request,
+   * not a grant: the model router checks it like any candidate and refuses the task if it is ineligible (never substitutes).
+   * Omitted: the router picks from the registry.
+   */
+  model: z.object({ providerId: z.string().min(1).max(40), modelId: z.string().min(1).max(200) }).optional(),
   /** LOCAL_WORKER only: the delegation capacity the change is reviewed against. Omitted: the default, shown at validation. */
   capacity: delegationCapacitySchema.optional(),
 });

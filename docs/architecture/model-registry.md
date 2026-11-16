@@ -90,6 +90,10 @@ To move one specialist to another compatible model, add the model and one `assig
 - Do not log `ResolvedModel.model`; it holds the credential. Log `binding`.
 - A council or any new workflow should call specialists through `specialistReviewWorkflow`, or call `resolveSpecialistModel` itself and keep the binding in its record.
 
+## Per-task routing
+
+Coding workers are routed per task from this registry by `src/runtime/models/routing.ts` (see docs/architecture/runtime.md#model-routing-per-task). A model entry may declare an optional `routing` profile (`languages`, `tier`, `memoryGb`, `evidence: [{language, passRate, runs, source}]`); it is operator-declared input, never measured by the router, and a missing field is UNKNOWN. Routing never grants a paid model (it must already be assigned to the agent) and never substitutes one.
+
 ## Limits
 
 - **Availability is configured, not probed.** `probeOllama` and `engineering status --probe-ollama` still do the live Ollama check. The resolver does not contact any endpoint.
