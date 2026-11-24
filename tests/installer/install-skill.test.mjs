@@ -15,7 +15,7 @@ const run = (target, ...args) => spawnSync(process.execPath, [installer, '--targ
 test('installs for Claude and Codex and is idempotent', () => {
   const target = temp();
   try {
-    writeFileSync(join(target, 'package.json'), '{"name":"fixture"}');
+    mkdirSync(join(target, '.git'));
     const first = run(target);
     assert.equal(first.status, 0, first.stderr);
     const claude = join(target, '.claude/skills/autonomous-engineering/SKILL.md');
