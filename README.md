@@ -42,6 +42,16 @@ npm run dev     # Mastra development server / Studio (typically localhost:4111)
 
 Starting the development server does **not** start an autonomous engineering mission. Follow the [OSS local quickstart](docs/operations/oss-quickstart.md) before submitting a bounded task plan, and use a disposable target for first experiments.
 
+### Install the agent skill into a target repository
+
+After cloning this runtime and installing its dependencies, install the agent-facing workflow skill into an existing Git repository:
+
+```sh
+npm run install:skill -- --target /absolute/path/to/target-repository
+```
+
+By default this installs the same `autonomous-engineering` skill for Claude Code (`.claude/skills/`) and Codex (`.agents/skills/`). Select one with `--agents claude` or `--agents codex`. The installer is local-only, idempotent, refuses symlinked destinations, and never overwrites an existing skill with different content. It does not install the runtime into the target, configure providers, start a mission, or grant execution authority. See [the skill source](skills/autonomous-engineering/SKILL.md).
+
 **Organization UI:** The customized `/organization` sidebar requires the separately built version-pinned Studio fork; it is **not** bundled automatically by `npm run dev`. See [Studio build and launch](docs/operations/m8.4-studio-organization.md). Its local Gateway is not suitable for exposure on a public interface.
 
 ## CLI and checks
