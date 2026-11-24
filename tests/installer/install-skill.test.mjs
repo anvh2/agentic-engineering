@@ -33,7 +33,7 @@ test('installs for Claude and Codex and is idempotent', () => {
 test('does not overwrite a different existing skill', () => {
   const target = temp();
   try {
-    writeFileSync(join(target, 'package.json'), '{"name":"fixture"}');
+    mkdirSync(join(target, '.git'));
     const directory = join(target, '.agents/skills/autonomous-engineering');
     mkdirSync(directory, { recursive: true });
     writeFileSync(join(directory, 'SKILL.md'), 'user content');
@@ -50,7 +50,7 @@ test('refuses symlinked skill directories', () => {
   const target = temp();
   const outside = temp();
   try {
-    writeFileSync(join(target, 'package.json'), '{"name":"fixture"}');
+    mkdirSync(join(target, '.git'));
     symlinkSync(outside, join(target, '.agents'));
     const result = run(target, '--agents', 'codex');
     assert.notEqual(result.status, 0);
