@@ -90,7 +90,11 @@ if (options.help) {
   if (!isAbsolute(target) || !existsSync(target) || !lstatSync(target).isDirectory() || lstatSync(target).isSymbolicLink()) {
     throw new Error(`Target must be an existing real directory: ${target}`);
   }
-  const packagePath = join(target, 'package.json');
-  if (!existsSync(packagePath)) throw new Error(`Target does not look like a repository root (package.json missing): ${target}`);
+  const gitPath = join(target, '.git');
+  if (!existsSync(gitPath)) throw new Error(`Target must be the root of an existing Git repository: ${target}`);
+  const gitStat = lstatSync(gitPath);
+  if (gitStat.isSymbolicLink() || (!gitStat.isDirectory() && !gitStat.isFile())) {
+    throw new Error(`Refusing invalid Git metadata path: ${gitPath}`);
+  }
   for (const agent of options.agents) install(target, agent);
 }
