@@ -8,7 +8,7 @@
     "build": "mastra build --dir src/integrations/mastra",
     "start": "mastra start",
     "typecheck": "tsc --noEmit -p .",
-    "test": "node --disable-warning=ExperimentalWarning --test 'src/**/*.test.ts' 'tests/**/*.test.ts'",
+    "test": "node --disable-warning=ExperimentalWarning --test 'src/**/*.test.ts' 'tests/**/*.test.ts' tests/installer/install-skill.test.mjs",
     "test:smoke-e2e": "node --disable-warning=ExperimentalWarning --test 'tests/smoke-e2e/*.test.ts'",
     "lead": "node --disable-warning=ExperimentalWarning --env-file=.env scripts/lead.ts",
     "session": "node src/lead/session/cli.ts",
