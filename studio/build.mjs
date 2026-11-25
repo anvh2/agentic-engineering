@@ -8,7 +8,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const pin = JSON.parse(await readFile(new URL('./upstream.json', import.meta.url), 'utf8'));
 const work = resolve(root, '.workdir/studio-source');
 const source = resolve(work, `mastra-${pin.commit}`);
-const patch = resolve(root, 'studio-fork/organization.patch');
+const patch = resolve(root, 'studio/organization.patch');
 const bin = resolve(root, '.workdir/studio-build-bin');
 const cache = resolve(root, '.workdir/studio-npm-cache');
 const exists = p => access(p).then(() => true, () => false);
@@ -32,7 +32,7 @@ if (!await exists(resolve(source, 'package.json'))) {
 if (!await exists(resolve(source, '.git'))) run('git', ['init', '-q']);
 // organization.patch is the feature; upstream-build-fix.patch is a type-only fix (identical JS) that the
 // pinned commit needs to pass its own declaration-emit gate with the lockfile's recharts 3.8.1.
-const patches = [patch, resolve(root, 'studio-fork/upstream-build-fix.patch')];
+const patches = [patch, resolve(root, 'studio/upstream-build-fix.patch')];
 for (const file of patches) {
   const check = spawnSync('git', ['apply', '--check', file], { cwd: source, stdio: 'ignore' });
   if (check.status === 0) run('git', ['apply', file]);
