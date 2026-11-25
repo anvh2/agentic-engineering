@@ -4,7 +4,7 @@ import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 
-// Runs against an ACTUAL Studio runtime (studio-fork/start.mjs or the owner's 4111 server), never a fixture: the agents are the
+// Runs against an ACTUAL Studio runtime (studio/start.mjs or the owner's 4111 server), never a fixture: the agents are the
 // server's registration and the meetings are its real council records. Reads only; every non-GET request is aborted.
 const origin = process.env.STUDIO_TEST_ORIGIN ?? 'http://127.0.0.1:4111';
 if (!['localhost', '127.0.0.1'].includes(new URL(origin).hostname)) throw new Error('Local Studio required');
