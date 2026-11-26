@@ -15,18 +15,19 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     const el=event.target.closest<HTMLElement>("button,[data-objective],[data-project],[data-session]");
     if(!el)return;
     const data=el.dataset, objective=getObjective(detail), project=getProject(detail);
+    if(data.chatHarness){detail=data.chatHarness;render();return;}
     if(data.harness){detail=detail===data.harness?"":data.harness;render();return;}
     if(data.runPrompt||data.stopPrompt||data.terminal){
       const name=(data.runPrompt||data.stopPrompt||data.terminal) as Agent;
       const c=consoles[name];c.dir=value("console-dir");if(!c.running)c.prompt=value("console-prompt");
       const pending=data.runPrompt?runPrompt(name):data.stopPrompt?stopPrompt(name):openTerminal(name);
-      render();void pending.catch(e=>{c.error=String(e)}).finally(()=>{if(page==="Team"&&detail===name&&tab!=="Roles"&&!modal)render()});return;
+      render();void pending.catch(e=>{c.error=String(e)}).finally(()=>{if(page==="Chat"&&(detail||"Codex")===name&&!modal)render()});return;
     }
     if("rescan" in data || data.checkAgent){
       const pending=data.checkAgent ? scanAgent(data.checkAgent as Agent,value("agent-path-"+data.checkAgent)) : scanAgents();
       render(); void pending.then(()=>{if(page==="Team" && tab!=="Roles" && !modal)render();else if(page==="Overview"&&!modal)render();});return;
     }
-    if(data.page){page=data.page;detail="";tab="";}
+    if(data.page){page=data.page;detail=page==="Chat"?"Codex":"";tab="";}
     else if(data.objective){page="Objectives";detail=data.objective;tab="";}
     else if(data.project){page="Projects";detail=data.project;tab="";}
     else if(data.session){page="Sessions";detail=data.session;tab="";}
@@ -58,6 +59,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     else return;
     persist();render();
   });
+  root.addEventListener("input",(event)=>{if(page!=="Chat"||!(event.target instanceof HTMLInputElement||event.target instanceof HTMLTextAreaElement))return;const c=consoles[detail==="Claude"?"Claude":"Codex"];if(c.running)return;if(event.target.id==="console-dir")c.dir=event.target.value;if(event.target.id==="console-prompt")c.prompt=event.target.value;});
   root.addEventListener("change",(event)=>{
     const el=event.target as HTMLInputElement,data=el.dataset,objective=getObjective(detail);
     if(el.id==="project-filter"){projectFilter=el.value;detail="";tab="";}
