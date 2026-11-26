@@ -25,7 +25,7 @@ func (s *Service) SendMessage(ctx context.Context, p Principal, in SendMessageIn
 	if in.To == p.Handle {
 		return Message{}, invalid("cannot send a message to yourself")
 	}
-	m, created, err := s.insertMessage(ctx, p.ObjectiveID, p.Handle, p.TurnID, in)
+	m, created, err := s.insertMessage(ctx, p.ObjectiveID, p.Handle, &p, in)
 	if err == nil && created {
 		s.notifyMessage(p.ObjectiveID)
 	}
@@ -41,7 +41,7 @@ func (s *Service) PostHumanMessage(ctx context.Context, objectiveID, to, body, i
 	if idempotencyKey == "" {
 		idempotencyKey = newID("hum")
 	}
-	m, created, err := s.insertMessage(ctx, objectiveID, HandleHuman, "", SendMessageInput{To: to, Body: body, IdempotencyKey: idempotencyKey})
+	m, created, err := s.insertMessage(ctx, objectiveID, HandleHuman, nil, SendMessageInput{To: to, Body: body, IdempotencyKey: idempotencyKey})
 	if err == nil && created {
 		s.notifyMessage(objectiveID)
 	}
@@ -49,7 +49,7 @@ func (s *Service) PostHumanMessage(ctx context.Context, objectiveID, to, body, i
 }
 
 func (s *Service) postSystemMessage(ctx context.Context, objectiveID, to, body, key string) error {
-	_, _, err := s.insertMessage(ctx, objectiveID, HandleSystem, "", SendMessageInput{To: to, Body: body, IdempotencyKey: key})
+	_, _, err := s.insertMessage(ctx, objectiveID, HandleSystem, nil, SendMessageInput{To: to, Body: body, IdempotencyKey: key})
 	return err
 }
 
@@ -66,11 +66,16 @@ func validateBody(v string, max int, what string) error {
 	return nil
 }
 
-func (s *Service) insertMessage(ctx context.Context, objectiveID, from, fromTurn string, in SendMessageInput) (Message, bool, error) {
+func (s *Service) insertMessage(ctx context.Context, objectiveID, from string, author *Principal, in SendMessageInput) (Message, bool, error) {
 	digest := sha256Hex(in.To + "\x00" + in.Body)
 	var out Message
 	created := false
 	err := s.tx(ctx, func(tx *sql.Tx) error {
+		if author != nil {
+			if err := requireLiveTurn(ctx, tx, *author); err != nil {
+				return err
+			}
+		}
 		if in.To != "" && in.To != HandleHuman {
 			var one int
 			err := tx.QueryRowContext(ctx, `SELECT 1 FROM participants WHERE objective_id = ? AND handle = ?`, objectiveID, in.To).Scan(&one)
@@ -97,8 +102,8 @@ func (s *Service) insertMessage(ctx context.Context, objectiveID, from, fromTurn
 		now := s.ts()
 		out = Message{ID: newID("msg"), To: in.To, Body: in.Body, CreatedAt: parseTS(now)}
 		var turn any
-		if fromTurn != "" {
-			turn = fromTurn
+		if author != nil {
+			turn = author.TurnID
 		}
 		res, err := tx.ExecContext(ctx, `INSERT INTO messages(id, objective_id, from_handle, from_turn_id, to_handle, body, body_sha256, idempotency_key, created_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, out.ID, objectiveID, from, turn, in.To, in.Body, digest, in.IdempotencyKey, now)
@@ -129,6 +134,9 @@ func (s *Service) ReadMessages(ctx context.Context, p Principal, after int64, li
 	}
 	page := MessagePage{Messages: []Message{}}
 	err := s.tx(ctx, func(tx *sql.Tx) error {
+		if err := requireLiveTurn(ctx, tx, p); err != nil {
+			return err
+		}
 		if after == AfterUnread {
 			if err := tx.QueryRowContext(ctx, `SELECT read_seq FROM participants WHERE id = ?`, p.ParticipantID).Scan(&after); err != nil {
 				return err

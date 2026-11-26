@@ -21,9 +21,10 @@ const (
 )
 
 // MCPServerName is the name the app's MCP server is registered under in each
-// launched session. Tool names become mcp__ae__<tool> (Claude) and ae/<tool>
-// (Codex).
-const MCPServerName = "ae"
+// launched session, added beside the user's own servers (never replacing
+// them). It is long enough not to collide with a user-defined server. Tool
+// names become mcp__agentic_engineering__<tool> in Claude.
+const MCPServerName = "agentic_engineering"
 
 // TokenEnv is the only channel for the per-turn bearer token. It never appears
 // in argv, configuration files or persisted events.
@@ -90,15 +91,23 @@ type TurnResult struct {
 	NativeSessionID string  `json:"native_session_id"`
 	FinalText       string  `json:"final_text"`
 	Usage           []Usage `json:"usage"`
-	ToolFailures    int     `json:"tool_failures"`
-	NativeError     string  `json:"native_error,omitempty"`
-	ExitCode        int     `json:"exit_code"`
-	Interrupted     bool    `json:"interrupted"`
+	// ToolFailures counts failed calls to the app's own MCP tools only (the
+	// signal for a refused pre-approval, evidence E5). Failing native tools,
+	// such as a red test run, are ordinary events and never fail a turn.
+	ToolFailures int    `json:"tool_failures"`
+	NativeError  string `json:"native_error,omitempty"`
+	ExitCode     int    `json:"exit_code"`
+	Interrupted  bool   `json:"interrupted"`
 }
 
 // Adapter runs one turn. emit receives every native event in source order,
 // synchronously. Cancelling ctx interrupts the turn and returns with
 // Interrupted set.
+//
+// Run returns a non-nil error only when there is no usable result: the
+// process could not start, or its stream was unusable (unparseable, or no
+// native session id). Interruption, a non-zero exit and a native error are
+// reported in TurnResult; core classifies the turn from them.
 type Adapter interface {
 	Kind() Kind
 	Run(ctx context.Context, spec TurnSpec, emit func(Event)) (TurnResult, error)

@@ -50,12 +50,12 @@ type ObjectiveInput struct {
 	AcceptanceCriteria string
 	Participants       []ParticipantInput
 	Tasks              []TaskInput
-	WakeBudget         int // automatic wakes allowed before escalating; 0 uses DefaultWakeBudget
+	// WakeBudget is how many automatic wakes (a message waking an idle agent)
+	// the Director authorizes for this objective. Zero disables automatic
+	// wakes: agents then run only when the Director starts a turn. The budget
+	// is what stops two agents from looping on each other unattended.
+	WakeBudget int
 }
-
-// DefaultWakeBudget bounds automatic wakes per objective so two agents cannot
-// loop on each other unattended.
-const DefaultWakeBudget = 24
 
 // ObjectiveRecord is the trusted view returned on creation.
 type ObjectiveRecord struct {
@@ -73,8 +73,8 @@ func (s *Service) CreateObjective(ctx context.Context, in ObjectiveInput) (Objec
 		return ObjectiveRecord{}, invalid("at least one participant is required")
 	}
 	budget := in.WakeBudget
-	if budget <= 0 {
-		budget = DefaultWakeBudget
+	if budget < 0 {
+		return ObjectiveRecord{}, invalid("wake budget must not be negative")
 	}
 	rec := ObjectiveRecord{ID: newID("obj"), Participants: map[string]string{}}
 	now := s.ts()

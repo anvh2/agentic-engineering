@@ -123,6 +123,21 @@ func (s *Service) BeginTurn(ctx context.Context, participantID string, trigger T
 	return l, nil
 }
 
+// requireLiveTurn re-validates, inside the caller's write transaction, that
+// the principal's turn is still running. Authentication happens at HTTP
+// admission; a turn finished or interrupted between admission and commit must
+// not be able to write.
+func requireLiveTurn(ctx context.Context, tx *sql.Tx, p Principal) error {
+	var one int
+	err := tx.QueryRowContext(ctx, `SELECT 1 FROM turns t JOIN sessions se ON se.id = t.session_id JOIN objectives o ON o.id = ?
+		WHERE t.id = ? AND t.session_id = ? AND t.state = 'running' AND se.state = 'active' AND o.status = 'active'
+		AND EXISTS (SELECT 1 FROM turn_tokens k WHERE k.turn_id = t.id AND k.revoked_at IS NULL)`, p.ObjectiveID, p.TurnID, p.SessionID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrUnauthenticated
+	}
+	return err
+}
+
 // RecordNativeSessionID stores a native id learned mid-turn (Codex reports
 // its thread id at thread.started) so a crash before FinishTurn keeps it.
 func (s *Service) RecordNativeSessionID(ctx context.Context, turnID, nativeID string) error {

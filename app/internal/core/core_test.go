@@ -416,3 +416,30 @@ func TestReopenPreservesOrderingAndCursor(t *testing.T) {
 		t.Fatalf("sequence went backwards: %d <= %d", c.Seq, page.Messages[0].Seq)
 	}
 }
+
+// A principal authenticated at HTTP admission must not be able to write once
+// its turn has ended (finished, cancelled or interrupted by restart).
+func TestMutationsRevalidateTheLiveTurn(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	p, l := f.principal(f.codex)
+	task := f.obj.Tasks[0]
+	if err := f.svc.FinishTurn(ctx, l.TurnID, TurnOutcome{Result: agent.TurnResult{Interrupted: true}}); err != nil {
+		t.Fatal(err)
+	}
+	checks := map[string]error{}
+	_, checks["send"] = f.svc.SendMessage(ctx, p, SendMessageInput{To: "claude-reviewer", Body: "late", IdempotencyKey: "late"})
+	_, checks["read"] = f.svc.ReadMessages(ctx, p, AfterUnread, 10)
+	_, checks["claim"] = f.svc.ClaimTask(ctx, p, task.ID, task.Revision)
+	_, checks["update"] = f.svc.UpdateTask(ctx, p, UpdateTaskInput{TaskID: task.ID, ExpectedRevision: 1, Status: TaskBlocked})
+	for name, err := range checks {
+		if !errors.Is(err, ErrUnauthenticated) {
+			t.Errorf("%s after turn end: want ErrUnauthenticated, got %v", name, err)
+		}
+	}
+	var n int
+	f.svc.db.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&n)
+	if n != 0 {
+		t.Fatal("stale write persisted")
+	}
+}

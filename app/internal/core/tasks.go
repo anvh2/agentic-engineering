@@ -68,6 +68,9 @@ func (s *Service) writeTask(ctx context.Context, tx *sql.Tx, t *Task) error {
 func (s *Service) ClaimTask(ctx context.Context, p Principal, taskID string, expectedRevision int64) (Task, error) {
 	var t Task
 	err := s.tx(ctx, func(tx *sql.Tx) error {
+		if err := requireLiveTurn(ctx, tx, p); err != nil {
+			return err
+		}
 		var err error
 		if t, err = getTaskForUpdate(ctx, tx, p.ObjectiveID, taskID); err != nil {
 			return err
@@ -101,6 +104,9 @@ func (s *Service) UpdateTask(ctx context.Context, p Principal, in UpdateTaskInpu
 	}
 	var t Task
 	err := s.tx(ctx, func(tx *sql.Tx) error {
+		if err := requireLiveTurn(ctx, tx, p); err != nil {
+			return err
+		}
 		var err error
 		if t, err = getTaskForUpdate(ctx, tx, p.ObjectiveID, in.TaskID); err != nil {
 			return err
