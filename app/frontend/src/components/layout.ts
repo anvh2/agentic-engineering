@@ -3,10 +3,30 @@ import type { ViewContext } from "../view-context";
 import { escapeHTML } from "./primitives";
 import { renderPage } from "../pages";
 import { renderDialog } from "./dialog";
-  const pages=["Overview","Projects","Objectives","Collaboration","Chat","Sessions","Decisions","Engineering DNA","Team","Usage & Cost","Settings"];
-  const icons=["▦","▱","◎","▤","◉","⌘","▧","◇","♧","▥","⚙"];
-export function renderLayout(root: HTMLElement, ctx: ViewContext) {
-  const {nav,projectOptions}=ctx;
-  const {page,projectFilter,modal}=nav;
-    root.innerHTML=`<div class="layout"><aside><div class="brand"><span class="logo">ae</span><b>Agentic<br>Engineering</b></div><select id="project-filter">${projectOptions(projectFilter,true)}</select>${pages.map((name,index)=>`${index===0||index===7?`<div class="nav-title">${index===0?"WORKSPACE":"ENGINEERING"}</div>`:""}<button class="nav ${name===page?"active":""}" data-page="${escapeHTML(name)}"><span class="nav-icon">${icons[index]}</span>${escapeHTML(name==="Objectives"?"Work":name)}</button>`).join("")}<div class="sidebar-foot">HARNESSES · NATIVE CLI<br>Claude: ${escapeHTML(agentStatus("Claude").state)}<br>Codex: ${escapeHTML(agentStatus("Codex").state)}</div></aside><main>${renderPage(ctx)}<footer>Agentic Engineering v2 · Demo objective data · Native harness diagnostics and test console</footer></main></div>${modal?renderDialog(ctx):""}`;
-  }
+const groups = [
+ {name:"Work", pages:["Overview","Objectives","Projects","Decisions"]},
+ {name:"Team", pages:["Team","Engineering DNA","Sessions","Usage & Cost"]},
+ {name:"Chat", pages:["Chat","Collaboration"]},
+ {name:"Settings",pages:["Settings"]}
+];
+const paths:Record<string,string> = {
+ Work:'<rect x="3" y="5" width="18" height="15" rx="2"/><path d="M8 5V3h8v2M3 11h18"/>',
+ Team:'<circle cx="9" cy="8" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2M16 5a3 3 0 0 1 0 6m3 9v-2a5 5 0 0 0-3-5"/>',
+ Chat:'<path d="M21 11a8 8 0 0 1-8 8H8l-5 3 1-6a8 8 0 0 1 7-13h2a8 8 0 0 1 8 8Z"/>',
+ Settings:'<circle cx="12" cy="12" r="3"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4M5 5l3 3m8 8 3 3M5 19l3-3m8-8 3-3"/>',
+ Overview:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+ Objectives:'<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>',
+ Projects:'<path d="M3 5h7l2 3h9v12H3Z"/>',
+ Decisions:'<path d="M12 3v18M5 7h14M5 7l-3 7h6Zm14 0-3 7h6Z"/>',
+ Sessions:'<path d="m4 6 6 6-6 6m10 0h6"/>',
+ "Engineering DNA":'<path d="M5 3c0 9 14 9 14 18M19 3c0 9-14 9-14 18M7 6h10M7 18h10"/>',
+ "Usage & Cost":'<path d="M4 20V4m0 16h16M8 16v-4m5 4V7m5 9V4"/>',
+ Collaboration:'<path d="M3 7h14l-4-4m8 14H7l4 4M17 7l-4 4M7 17l4-4"/>'
+};
+function icon(name:string){return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+(paths[name]||paths.Chat)+'</svg>'}
+export function renderLayout(root:HTMLElement,ctx:ViewContext){
+ const {nav,projectOptions}=ctx;
+ const group=groups.find(g=>g.pages.includes(nav.page))||groups[0];
+ const link=(name:string)=>'<button class="nav '+(name===nav.page?'active':'')+'" data-page="'+escapeHTML(name)+'"><span class="nav-icon">'+icon(name)+'</span>'+escapeHTML(name==="Objectives"?"All objectives":name)+'</button>';
+ root.innerHTML='<div class="layout desktop-shell"><nav class="app-rail" aria-label="Primary navigation"><div class="rail-logo">ae</div>'+groups.map(g=>'<button class="rail-item '+(g===group?'active':'')+'" data-page="'+(g.name==="Work"?"Objectives":g.pages[0])+'" aria-label="'+g.name+'">'+icon(g.name)+'<span>'+g.name+'</span></button>').join('')+'</nav><aside class="section-sidebar"><div class="brand"><b>Agentic Engineering</b></div><select id="project-filter" aria-label="Project filter">'+projectOptions(nav.projectFilter,true)+'</select><div class="nav-title">'+group.name+'</div>'+group.pages.map(link).join('')+'<div class="sidebar-foot"><small>Native harnesses</small>'+["Claude","Codex"].map(n=>'<div class="harness-indicator"><i class="'+(agentStatus(n as "Claude"|"Codex").state==="Connected"?"online":"")+'"></i>'+n+'<span>'+escapeHTML(agentStatus(n as "Claude"|"Codex").state)+'</span></div>').join('')+'</div></aside><main><div class="app-breadcrumb">'+escapeHTML(group.name)+'<span>/</span>'+escapeHTML(nav.page==="Objectives"?"All objectives":nav.page)+'<span class="preview-label">Preview data</span></div><div class="page-content">'+renderPage(ctx)+'</div><footer>Agentic Engineering v2 · Demo objective data · Native harness diagnostics</footer></main></div>'+(nav.modal?renderDialog(ctx):'');
+}
