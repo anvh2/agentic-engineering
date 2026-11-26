@@ -12,7 +12,8 @@ import { scrubForWorker } from './worker-feedback.ts';
 import { denyAllApprovals, type ApprovalVerifier } from './design-approval.ts';
 import { buildEngineeringContext, type EngineeringContext } from './engineering-context.ts';
 import { EngineeringKnowledgeCatalog } from '../knowledge/engineering-knowledge.ts';
-import { detectLanguage } from './language-adapters.ts';
+import { detectLanguage, typeScriptDelegationEnabled } from './language-adapters.ts';
+import { validateTypeScriptVerification } from './typescript-verifier.ts';
 import { CapacityWaitTimeout, capacityFor, modelWaitBudgetMs, permitHolder, type CapacityLease, type ModelCapacity } from '../capacity/model-capacity.ts';
 import { createRepairLoopTracker } from './repair-loop-tracker.ts';
 import { runtimeMetrics, type RuntimeMetrics } from '../../observability/metrics.ts';
@@ -372,6 +373,11 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
   }
   // Pinned ONCE per run: every attempt (and retry) is given this exact snapshot, and its fingerprint is the evidence.
   const language = detectLanguage(task.allowedFiles.map((file) => extname(file)));
+  if (language === 'ts') {
+    if (!typeScriptDelegationEnabled()) throw new Error('TypeScript delegation is disabled; the worker was not invoked');
+    const verifierReasons = await validateTypeScriptVerification(task.verificationCommands, task, repoRoot);
+    if (verifierReasons.length) throw new Error(`typescript-strict-v1 refused the task: ${verifierReasons.join('; ')}`);
+  }
   if (task.knowledge && !language) throw new Error('knowledge: implementation language is unknown or mixed');
   if (task.knowledge && !options.knowledgeCatalog) throw new Error('knowledge: no trusted runtime catalog configured');
   const knowledge = task.knowledge ? options.knowledgeCatalog!.resolve({ language: language!, ids: task.knowledge.ids }) : undefined;
@@ -387,7 +393,7 @@ export async function runCodingTask(taskInput: CodingTask, options: RunCodingTas
     workdir: repoRoot,
     allowedFiles: task.allowedFiles,
     contextFiles: task.contextFiles,
-    taskType: task.allowedFiles.every((f) => f.endsWith('.go')) ? ('go' as const) : ('js' as const),
+    taskType: language === 'go' ? 'go' as const : language === 'ts' ? 'ts' as const : 'js' as const,
     timeoutMs,
   } satisfies ProviderRequest;
   const waitBudgetMs = options.capacityWaitBudgetMs ?? modelWaitBudgetMs();

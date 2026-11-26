@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { findProjectRoot } from '../../../core/paths.ts';
 import { createStep, createWorkflow } from '@mastra/core/workflows';
 import { z } from 'zod';
-import { codingWorkerGo, codingWorkerJs } from '../../../workers/coding-worker.ts';
+import { codingWorkerGo, codingWorkerJs, codingWorkerTs } from '../../../workers/coding-worker.ts';
 import { createOllamaProvider } from '../../../workers/providers/ollama.ts';
 import { defaultProviderRegistry } from '../../../workers/providers/default.ts';
 import { UnknownProviderError, type ProviderRegistry } from '../../../workers/providers/registry.ts';
@@ -292,7 +292,7 @@ export function createCodingTaskWorkflow(deps: CodingTaskWorkflowDeps = {}) {
       const artifactDir = join(artifactRoot, `${inputData.taskId}-${stamp}`);
       // Worker follows the language of the allowed files (the gate already guaranteed they are all one language).
       const agentId = workerAgentIdFor(languageOf(request.contract.allowedFiles));
-      const fallbackAgent = agentId === 'codingWorkerJs' ? codingWorkerJs : codingWorkerGo;
+      const fallbackAgent = agentId === 'codingWorkerJs' ? codingWorkerJs : agentId === 'codingWorkerTs' ? codingWorkerTs : codingWorkerGo;
       const defaultAgent = providerWorker || deps.resolveWorker ? undefined : ((mastra?.getAgent(agentId) as typeof fallbackAgent | undefined) ?? fallbackAgent);
       const binding = bindingOf(defaultAgent);
       const worker = providerWorker ?? (deps.resolveWorker

@@ -3,22 +3,23 @@
  *
  * The Engineering Lead's HLD/LLD, DAG, review, sandbox, retry budget and pinned
  * acceptance remain common. Registering an extension NEVER authorizes delegation:
- * the adapter must be enabled only after its verifier and benchmark are approved.
+ * experimental adapters remain behind their own fail-closed runtime gate until verifier and benchmark approval.
  */
 export interface LanguageDelegationPolicy {
   maxAllowedFiles: number;
   allowedExtensions: string[];
   allowedVerificationBinaries: string[];
   maxAttempts: number;
+  verifierProfile?: 'typescript-strict-v1';
 }
 
 export interface LanguageAdapter {
   id: 'go' | 'js' | 'ts';
   extensions: readonly string[];
-  /** Only enabled adapters can be delegated to local workers. */
+  /** Registry capability. A separate feature flag may further gate an enabled adapter. */
   enabled: boolean;
   /** Mastra worker registration key. Undefined means there is no worker yet. */
-  workerAgentId?: 'codingWorkerGo' | 'codingWorkerJs';
+  workerAgentId?: 'codingWorkerGo' | 'codingWorkerJs' | 'codingWorkerTs';
   /** Human-readable convention reference, loaded as task context by the Lead. */
   conventionPath: string;
   /** Concise worker-facing rules (also versioned and fingerprinted in task context). */
@@ -41,15 +42,20 @@ export const LANGUAGE_ADAPTERS = {
     policy: { maxAllowedFiles: 1, allowedExtensions: ['.js', '.mjs', '.cjs'], allowedVerificationBinaries: ['npx'], maxAttempts: 3 },
   },
   ts: {
-    id: 'ts', extensions: ['.ts', '.mts', '.cts'], enabled: false,
+    id: 'ts', extensions: ['.ts'], enabled: true, workerAgentId: 'codingWorkerTs',
     conventionPath: 'docs/engineering/languages/typescript.md',
-    conventions: ['Preserve approved HLD/LLD and acceptance invariants.', 'Preserve tsconfig, strict typing and ESM conventions; validate untrusted data at runtime.', 'Do not add dependencies; TypeScript delegation is disabled until its verifier is approved.'],
-    policy: { maxAllowedFiles: 1, allowedExtensions: ['.ts', '.mts', '.cts'], allowedVerificationBinaries: [], maxAttempts: 3 },
+    conventions: ['Preserve approved HLD/LLD and acceptance invariants.', 'Preserve package tsconfig, strict typing and module conventions; validate untrusted data at runtime.', 'Do not add dependencies or edit tests, manifests, lockfiles or tsconfig files.', 'The runtime runs the pinned local TypeScript compiler and immutable Node test files; do not run shell commands.'],
+    policy: { maxAllowedFiles: 4, allowedExtensions: ['.ts'], allowedVerificationBinaries: ['node'], maxAttempts: 3, verifierProfile: 'typescript-strict-v1' },
   },
 } as const satisfies Record<string, LanguageAdapter>;
 
-export type EnabledLanguage = 'go' | 'js';
+export type EnabledLanguage = 'go' | 'js' | 'ts';
 export type RegisteredLanguage = keyof typeof LANGUAGE_ADAPTERS;
+
+/** Runtime kill switch. Only the literal value "true" opens TS routing; unset, malformed and alternate truthy values fail closed. */
+export function typeScriptDelegationEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.AGENTIC_TS_DELEGATION === 'true';
+}
 
 export function detectLanguage(extensions: readonly string[]): RegisteredLanguage | undefined {
   if (extensions.length === 0) return undefined;
@@ -59,7 +65,9 @@ export function detectLanguage(extensions: readonly string[]): RegisteredLanguag
   return matches.length === 1 ? matches[0].id : undefined;
 }
 
-export function delegatableLanguage(extensions: readonly string[]): EnabledLanguage | undefined {
+export function delegatableLanguage(extensions: readonly string[], env: NodeJS.ProcessEnv = process.env): EnabledLanguage | undefined {
   const language = detectLanguage(extensions);
-  return language && LANGUAGE_ADAPTERS[language].enabled ? language as EnabledLanguage : undefined;
+  if (!language || !LANGUAGE_ADAPTERS[language].enabled) return undefined;
+  if (language === 'ts' && !typeScriptDelegationEnabled(env)) return undefined;
+  return language as EnabledLanguage;
 }

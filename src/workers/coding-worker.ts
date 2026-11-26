@@ -21,7 +21,7 @@ export function resolveEditMode(env: NodeJS.ProcessEnv = process.env): EditMode 
   throw new Error(`CODING_WORKER_EDIT_MODE must be "writeFile" or "applyPatch", got "${value}"`);
 }
 
-export type Ecosystem = 'go' | 'js';
+export type Ecosystem = 'go' | 'js' | 'ts';
 
 // Mastra defaults generate()/stream() to maxSteps: 5. Repository exploration
 // plus a patch/format/test/repair cycle (list, read, patch, format, test,
@@ -42,6 +42,8 @@ const defaultOptions = { maxSteps: 40 } as const;
  */
 export function createCodingWorker(ecosystem: Ecosystem, editMode: EditMode = resolveEditMode(), resolver: ModelResolver = modelResolverFromEnv()): Agent {
   const isGo = ecosystem === 'go';
+  const isJs = ecosystem === 'js';
+  const languageName = isGo ? 'Go' : isJs ? 'JavaScript' : 'TypeScript';
   // The worker is a role; which model runs it is runtime configuration. Resolution fails closed: an unavailable or incapable
   // model throws here instead of the worker quietly running on something else.
   const resolved = resolver.resolve({ agentId: `coding-worker-${ecosystem}`, role: 'coding-worker', requires: { toolCalling: true } });
@@ -49,17 +51,21 @@ export function createCodingWorker(ecosystem: Ecosystem, editMode: EditMode = re
 
   const toolsDescription = isGo
     ? 'runGoFmt - format one file. runGoTest - `go test` for a package.'
-    : 'runPrettier - format one file you just created/rewrote (this repository is not fully prettier-clean, so avoid running it on files you only partially edited). runJestTest - `jest` scoped to a test file or directory.';
+    : isJs
+      ? 'runPrettier - format one file you just created/rewrote (this repository is not fully prettier-clean, so avoid running it on files you only partially edited). runJestTest - `jest` scoped to a test file or directory.'
+      : 'No command execution tools. The runtime runs typescript-strict-v1 after your edits: pinned local tsc --noEmit and immutable Node .test.ts files.';
 
   const verifyStep = isGo
     ? 'runGoFmt the changed file, then runGoTest the affected package (or "./...").'
-    : 'runPrettier the changed file (only if you created/fully rewrote it), then runJestTest scoped to the test file or directory you touched.';
+    : isJs
+      ? 'runPrettier the changed file (only if you created/fully rewrote it), then runJestTest scoped to the test file or directory you touched.'
+      : 'Do not run commands. Leave formatting and verification to the runtime verifier.';
 
   const agent = new Agent({
     id: resolved.binding.agentId,
-    name: `Coding Worker (${ecosystem === 'go' ? 'Go' : 'JavaScript'})`,
-    description: `A worker that inspects, patches, formats, and tests a delegated ${isGo ? 'Go' : 'JavaScript/Node'} repository using its configured model, with narrowly scoped write and verification tools.`,
-    instructions: `You are a repository coding worker for the assigned ${isGo ? 'Go' : 'JavaScript/Node'} repository. No arbitrary shell access.
+    name: `Coding Worker (${languageName})`,
+    description: `A worker that inspects and edits a delegated ${languageName} repository using its configured model, with narrowly scoped write tools.`,
+    instructions: `You are a repository coding worker for the assigned ${languageName} repository. No arbitrary shell access.
 
 Tools: listFiles, readFile, searchFiles (regex or plain text, scans everything), gitStatus, gitDiff - all read-only. ${useWriteFile ? 'writeFile - replace one file with its complete new contents (or create it).' : 'applyPatch - unified diff to one file, or create a new file.'} ${toolsDescription}
 
@@ -77,9 +83,13 @@ Never claim a command ran or a change is tested unless a tool call in this conve
       ? useWriteFile
         ? { listFiles, readFile, searchFiles, writeFile, runGoFmt, runGoTest, gitDiff, gitStatus }
         : { listFiles, readFile, searchFiles, applyPatch, runGoFmt, runGoTest, gitDiff, gitStatus }
-      : useWriteFile
-        ? { listFiles, readFile, searchFiles, writeFile, runPrettier, runJestTest, gitDiff, gitStatus }
-        : { listFiles, readFile, searchFiles, applyPatch, runPrettier, runJestTest, gitDiff, gitStatus },
+      : isJs
+        ? useWriteFile
+          ? { listFiles, readFile, searchFiles, writeFile, runPrettier, runJestTest, gitDiff, gitStatus }
+          : { listFiles, readFile, searchFiles, applyPatch, runPrettier, runJestTest, gitDiff, gitStatus }
+        : useWriteFile
+          ? { listFiles, readFile, searchFiles, writeFile, gitDiff, gitStatus }
+          : { listFiles, readFile, searchFiles, applyPatch, gitDiff, gitStatus },
     defaultOptions,
   });
   return bindAgent(agent, resolved.binding);
@@ -88,6 +98,7 @@ Never claim a command ran or a change is tested unless a tool call in this conve
 const resolver = modelResolverFromEnv();
 export const codingWorkerGo = createCodingWorker('go', undefined, resolver);
 export const codingWorkerJs = createCodingWorker('js', undefined, resolver);
+export const codingWorkerTs = createCodingWorker('ts', undefined, resolver);
 
 /** Kept for existing callers (scripts, tests) that reference the original single-worker export - equivalent to codingWorkerGo. */
 export const codingWorker = codingWorkerGo;
