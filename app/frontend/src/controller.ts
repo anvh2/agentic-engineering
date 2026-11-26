@@ -1,3 +1,4 @@
+import { consoles, runPrompt, stopPrompt, openTerminal } from "./services/harness-console";
 import { scanAgent, scanAgents } from "./services/agent-connection";
 import type { Agent } from "./types";
 import type { ViewContext } from "./view-context";
@@ -14,6 +15,13 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     const el=event.target.closest<HTMLElement>("button,[data-objective],[data-project],[data-session]");
     if(!el)return;
     const data=el.dataset, objective=getObjective(detail), project=getProject(detail);
+    if(data.harness){detail=detail===data.harness?"":data.harness;render();return;}
+    if(data.runPrompt||data.stopPrompt||data.terminal){
+      const name=(data.runPrompt||data.stopPrompt||data.terminal) as Agent;
+      const c=consoles[name];c.dir=value("console-dir");if(!c.running)c.prompt=value("console-prompt");
+      const pending=data.runPrompt?runPrompt(name):data.stopPrompt?stopPrompt(name):openTerminal(name);
+      render();void pending.catch(e=>{c.error=String(e)}).finally(()=>{if(page==="Team"&&detail===name&&tab!=="Roles"&&!modal)render()});return;
+    }
     if("rescan" in data || data.checkAgent){
       const pending=data.checkAgent ? scanAgent(data.checkAgent as Agent,value("agent-path-"+data.checkAgent)) : scanAgents();
       render(); void pending.then(()=>{if(page==="Team" && tab!=="Roles" && !modal)render();else if(page==="Overview"&&!modal)render();});return;
@@ -23,7 +31,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     else if(data.project){page="Projects";detail=data.project;tab="";}
     else if(data.session){page="Sessions";detail=data.session;tab="";}
     else if("back" in data){detail="";tab="";}
-    else if(data.tab)tab=data.tab;
+    else if(data.tab){tab=data.tab;detail="";}
     else if(data.open)modal=data.open;
     else if("cancel" in data)modal="";
     else if("create" in data){
