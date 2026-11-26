@@ -15,6 +15,7 @@ var assets embed.FS
 func main() {
   if err := wails.Run(&options.App{
     Title: "Agentic Engineering",
+    Bind: []interface{}{&AgentConnection{}},
     Width: 1200, Height: 850, MinWidth: 760, MinHeight: 540,
     AssetServer: &assetserver.Options{Assets: assets},
     BackgroundColour: &options.RGBA{R:23,G:24,B:26,A:255},

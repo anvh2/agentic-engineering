@@ -1,3 +1,4 @@
+import { scanAgent, scanAgents } from "./services/agent-connection";
 import type { Agent } from "./types";
 import type { ViewContext } from "./view-context";
 import { demoStore } from "./services/demo-store";
@@ -13,6 +14,10 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     const el=event.target.closest<HTMLElement>("button,[data-objective],[data-project],[data-session]");
     if(!el)return;
     const data=el.dataset, objective=getObjective(detail), project=getProject(detail);
+    if("rescan" in data || data.checkAgent){
+      const pending=data.checkAgent ? scanAgent(data.checkAgent as Agent,value("agent-path-"+data.checkAgent)) : scanAgents();
+      render(); void pending.then(()=>{if(page==="Team" && tab!=="Roles" && !modal)render();else if(page==="Overview"&&!modal)render();});return;
+    }
     if(data.page){page=data.page;detail="";tab="";}
     else if(data.objective){page="Objectives";detail=data.objective;tab="";}
     else if(data.project){page="Projects";detail=data.project;tab="";}
@@ -58,4 +63,5 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
   });
 
   render();
+  void scanAgents().then(()=>{if((page==="Overview"||page==="Team"&&tab!=="Roles")&&!modal)render();});
 }
