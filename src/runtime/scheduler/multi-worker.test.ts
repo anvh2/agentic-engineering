@@ -528,4 +528,10 @@ describe('M7 config: AGENTIC_WORKER_CONCURRENCY', () => {
   it('the worker limit is independent of the model limit: no scheduler setting exists for model concurrency', () => {
     assert.equal('maxConcurrentOllamaRequests' in resolveConfig(), false);
   });
+
+  it('keeps TypeScript out of scheduler claims unless its feature flag is exactly true', () => {
+    assert.deepEqual(resolveConfig({ workerLanguages: ['go', 'js', 'ts'] }, {}).workerLanguages, ['go', 'js']);
+    assert.deepEqual(resolveConfig({ workerLanguages: ['go', 'js', 'ts'] }, { AGENTIC_TS_DELEGATION: '1' } as NodeJS.ProcessEnv).workerLanguages, ['go', 'js']);
+    assert.deepEqual(resolveConfig({}, { AGENTIC_TS_DELEGATION: 'true' } as NodeJS.ProcessEnv).workerLanguages, ['go', 'js', 'ts']);
+  });
 });

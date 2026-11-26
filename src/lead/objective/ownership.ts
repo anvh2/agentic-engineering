@@ -1,6 +1,7 @@
 import { lstat } from 'node:fs/promises';
 import { basename, dirname, extname, join } from 'node:path';
-import { TEST_FILE, languageOf, policyFor, validateJsVerification } from '../../runtime/execution/delegation.ts';
+import { TEST_FILE, languageOf, policyFor, validateJsVerification, validateTypeScriptVerification } from '../../runtime/execution/delegation.ts';
+import { detectLanguage, typeScriptDelegationEnabled } from '../../runtime/execution/language-adapters.ts';
 import type { PlannedTask } from './types.ts';
 
 /**
@@ -48,9 +49,11 @@ export async function workerIneligibility(task: PlannedTask, ctx: OwnershipConte
 
   // bounded mutation scope
   const language = languageOf(task.allowedFiles);
+  const detected = detectLanguage(task.allowedFiles.map((file) => extname(file)));
   const policy = policyFor(language);
   if (task.allowedFiles.length === 0) add('scope', 'no allowedFiles: the mutation scope is unbounded');
-  else if (!language) add('scope', 'allowed files must all be .go, or all be .js/.mjs/.cjs (mixed or other file types are not delegated)');
+  else if (!language) add('scope', 'allowed files must all be .go, all be .js/.mjs/.cjs, or all be .ts (mixed or other file types are not delegated)');
+  if (detected === 'ts' && !typeScriptDelegationEnabled()) add('scope', 'TypeScript delegation is disabled; set AGENTIC_TS_DELEGATION=true only after benchmark and security approval');
   if (task.allowedFiles.length > policy.maxAllowedFiles) add('scope', `${task.allowedFiles.length} allowed files exceeds the limit of ${policy.maxAllowedFiles}`);
 
   const ancestorDirs = new Set([...ctx.ancestorFiles].flatMap(parentDirs));
@@ -82,6 +85,10 @@ export async function workerIneligibility(task: PlannedTask, ctx: OwnershipConte
       // a test file an earlier task creates is acceptable here; the runtime re-checks against the real worktree at claim time
       for (const message of await validateJsVerification(command, { taskId: task.id, objective: task.title, allowedFiles: task.allowedFiles, contextFiles: [], acceptanceCriteria: [], verificationCommands: [command], constraints: [], hiddenFiles: oracle }, ctx.repoRoot)) add('verification', message);
     }
+  }
+  if (language === 'ts') {
+    const contract = { taskId: task.id, objective: task.title, allowedFiles: task.allowedFiles, contextFiles: task.contextFiles, acceptanceCriteria: task.acceptanceCriteria, verificationCommands: task.verificationCommands, constraints: task.constraints, hiddenFiles: task.hiddenFiles };
+    for (const message of await validateTypeScriptVerification(task.verificationCommands, contract, ctx.repoRoot)) add('verification', message);
   }
   return reasons;
 }

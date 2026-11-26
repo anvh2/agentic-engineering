@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { LANGUAGE_ADAPTERS, detectLanguage, delegatableLanguage } from './language-adapters.ts';
+import { LANGUAGE_ADAPTERS, detectLanguage, delegatableLanguage, typeScriptDelegationEnabled } from './language-adapters.ts';
 import { languageOf, policyFor, workerAgentIdFor, DEFAULT_POLICY, JS_POLICY } from './delegation.ts';
 
 describe('language adapter registry: fail closed and backwards compatible', () => {
@@ -15,13 +15,24 @@ describe('language adapter registry: fail closed and backwards compatible', () =
     assert.deepEqual(policyFor('js'), JS_POLICY);
   });
 
-  it('registers TS conventions without authorizing TS code execution or delegation', () => {
+  it('registers a TS worker but fails closed unless the explicit feature flag is exactly true', () => {
     assert.equal(detectLanguage(['.ts']), 'ts');
-    assert.equal(detectLanguage(['.mts']), 'ts');
-    assert.equal(LANGUAGE_ADAPTERS.ts.enabled, false);
-    assert.deepEqual(LANGUAGE_ADAPTERS.ts.policy.allowedVerificationBinaries, []);
+    assert.equal(detectLanguage(['.tsx']), undefined);
+    assert.equal(detectLanguage(['.mts']), undefined);
+    assert.equal(LANGUAGE_ADAPTERS.ts.enabled, true);
+    assert.equal(LANGUAGE_ADAPTERS.ts.workerAgentId, 'codingWorkerTs');
+    assert.deepEqual(LANGUAGE_ADAPTERS.ts.policy.allowedVerificationBinaries, ['node']);
+    assert.equal(LANGUAGE_ADAPTERS.ts.policy.maxAllowedFiles, 4);
+    assert.equal(typeScriptDelegationEnabled({} as NodeJS.ProcessEnv), false);
+    assert.equal(typeScriptDelegationEnabled({ AGENTIC_TS_DELEGATION: '1' } as NodeJS.ProcessEnv), false);
+    assert.equal(typeScriptDelegationEnabled({ AGENTIC_TS_DELEGATION: 'TRUE' } as NodeJS.ProcessEnv), false);
+    assert.equal(typeScriptDelegationEnabled({ AGENTIC_TS_DELEGATION: 'true' } as NodeJS.ProcessEnv), true);
     assert.equal(delegatableLanguage(['.ts']), undefined);
     assert.equal(languageOf(['src/module.ts']), undefined);
+    assert.equal(languageOf(['src/module.tsx']), undefined);
+    const enabledEnv = { AGENTIC_TS_DELEGATION: 'true' } as NodeJS.ProcessEnv;
+    assert.equal(delegatableLanguage(['.ts'], enabledEnv), 'ts');
+    assert.equal(languageOf(['src/module.ts'], enabledEnv), 'ts');
   });
 
   it('keeps language conventions separated from the shared engineering execution contract', () => {
@@ -44,12 +55,13 @@ describe('language adapter registry: fail closed and backwards compatible', () =
     assert.equal(new Set(claimedExtensions).size, claimedExtensions.length, 'different adapters cannot claim the same extension');
   });
 
-  it('recognizes supported single-language variants but never authorizes disabled TypeScript', () => {
+  it('recognizes supported language variants and keeps unsupported TypeScript extensions closed', () => {
     assert.equal(detectLanguage(['.js', '.mjs', '.cjs']), 'js');
     assert.equal(delegatableLanguage(['.js', '.mjs', '.cjs']), 'js');
-    assert.equal(detectLanguage(['.ts', '.mts', '.cts']), 'ts');
-    assert.equal(detectLanguage(['.cts']), 'ts');
-    assert.equal(delegatableLanguage(['.ts', '.mts', '.cts']), undefined);
+    assert.equal(detectLanguage(['.ts']), 'ts');
+    assert.equal(detectLanguage(['.mts']), undefined);
+    assert.equal(detectLanguage(['.cts']), undefined);
+    assert.equal(delegatableLanguage(['.ts']), undefined);
     assert.equal(languageOf(['src/a.mts']), undefined);
     assert.equal(languageOf(['src/a.cts']), undefined);
     assert.equal(languageOf([]), undefined);

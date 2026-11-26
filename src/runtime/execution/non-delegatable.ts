@@ -15,6 +15,9 @@ import { findProjectRoot, isProjectManifest } from '../../core/paths.ts';
  *
  * Matching is case-insensitive (the default macOS filesystem is) and by whole path segment, on the literal path and on
  * the path with its parent directory's symlinks resolved, so an alias directory cannot reach a protected file.
+ *
+ * Human-authorized bootstrap exception: a feature-gated TypeScript worker may change implementation files only under
+ * src/lead/objective/. Tests, manifests, lockfiles and tsconfig remain read-only in the delegation gate.
  */
 export const NON_DELEGATABLE_PREFIXES: readonly string[] = Object.freeze([
   'src/', 'tests/', 'scripts/', 'engineering/', 'docs/audits/', '.github/', '.claude/', '.workdir/',
@@ -27,6 +30,7 @@ const norm = (p: string): string => p.split(/[\\/]+/).filter((s) => s && s !== '
 
 function matches(repoRelative: string): string | undefined {
   const p = norm(repoRelative);
+  if (p.startsWith('src/lead/objective/') && p.endsWith('.ts')) return undefined;
   const prefix = NON_DELEGATABLE_PREFIXES.find((d) => p === d.slice(0, -1).toLowerCase() || p.startsWith(d.toLowerCase()));
   if (prefix) return prefix;
   return NON_DELEGATABLE_FILES.find((f) => p === f.toLowerCase());

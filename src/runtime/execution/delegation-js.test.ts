@@ -65,9 +65,9 @@ describe('JS/TS delegation gate (deterministic, no model)', () => {
     ['a verification test that does not exist', withVerify('npx', '--no-install', 'jest', 'src/util/tests/unit/nope.test.js'), /does not exist/],
     ['a test file as the allowed file', withContract({ allowedFiles: ['src/util/tests/unit/double.test.js'] }), /test files/],
     ['more than one allowed file', withContract({ allowedFiles: ['src/util/double.js', 'src/util/other.js'] }), /exceeds the limit/],
-    ['a TypeScript file (not enabled)', withContract({ allowedFiles: ['src/util/double.ts'] }), /\.go, or all be \.js/],
-    ['a JSX file (not enabled)', withContract({ allowedFiles: ['src/util/Double.jsx'] }), /\.go, or all be \.js/],
-    ['mixed Go and JS allowed files', withContract({ allowedFiles: ['src/util/double.js', 'x.go'] }), /\.go, or all be \.js/],
+    ['a TypeScript file while the feature flag is off', withContract({ allowedFiles: ['src/util/double.ts'] }), /AGENTIC_TS_DELEGATION/],
+    ['a JSX file (not enabled)', withContract({ allowedFiles: ['src/util/Double.jsx'] }), /\.go, all be \.js/],
+    ['mixed Go and JS allowed files', withContract({ allowedFiles: ['src/util/double.js', 'x.go'] }), /\.go, all be \.js/],
   ] as const) {
     it(`keeps the task with Claude: ${name}`, async () => {
       const route = await routeTask(request as DelegationRequest, root);
@@ -113,6 +113,7 @@ describe('JS/TS delegation gate (deterministic, no model)', () => {
     assert.equal(languageOf(['a.js']), 'js');
     assert.equal(languageOf(['a.mjs']), 'js');
     assert.equal(languageOf(['a.ts']), undefined);
+    assert.equal(languageOf(['a.tsx']), undefined);
     assert.equal(languageOf(['a.go', 'b.js']), undefined);
     assert.equal(workerAgentIdFor('js'), 'codingWorkerJs');
     assert.equal(workerAgentIdFor('go'), 'codingWorkerGo');

@@ -1,6 +1,6 @@
 import { lstat, open } from 'node:fs/promises';
 import { join } from 'node:path';
-import { DEFAULT_POLICY, JS_POLICY } from '../../runtime/execution/delegation.ts';
+import { DEFAULT_POLICY, JS_POLICY, TS_POLICY } from '../../runtime/execution/delegation.ts';
 import { DEFAULT_CONFIG } from '../../runtime/scheduler/types.ts';
 import type { EngineeringObjective, ResearchContext } from './types.ts';
 import type { PlanIssue } from './validate.ts';
@@ -44,10 +44,13 @@ function policyText(): string {
     'LOCAL_WORKER tasks must be small, bounded and mechanically verifiable. Hard rules (a plan that breaks them is rejected):',
     worker('Go', DEFAULT_POLICY),
     worker('JavaScript', JS_POLICY),
-    '  - JavaScript verification is exactly: ["npx","--no-install","jest","--runInBand","<test file>"]; Go verification is ["go","test","-count=1","<package>"]',
+    worker('TypeScript (only when AGENTIC_TS_DELEGATION=true)', TS_POLICY),
+    '  - Go verification is ["go","test","-count=1","<package>"]; JavaScript verification is ["npx","--no-install","jest","--runInBand","<test file>"]; TypeScript verification is ["node","./node_modules/typescript/bin/tsc","--noEmit","--strict","--project","<package>/tsconfig.json"] followed by ["node","--experimental-strip-types","--test","<immutable .test.ts file>"]',
+    '  - TypeScript is disabled by default and must remain with CLAUDE_LEAD unless AGENTIC_TS_DELEGATION is exactly "true"; only the default local Qwen provider is cleared for TS.',
     '  - assessment must be complexity "small", risk "low", ambiguity "none"; acceptanceCriteria and constraints non-empty; constraints must say tests are immutable',
-    '  - a worker may NEVER edit a test file; put its oracle in hiddenFiles (path -> content) and verify with it',
-    'Use CLAUDE_LEAD for architecture, cross-file or ambiguous work, files workers cannot edit (TypeScript, JSX, Markdown, configuration), and anything security-sensitive.',
+    '  - a worker may NEVER edit tests. Go/JavaScript may use hiddenFiles as their oracle; TypeScript must use tracked, clean immutable .test.ts files inside its package boundary.',
+    '  - package.json, lockfiles, tsconfig, verifier profiles and security policy files are always read-only; TypeScript tasks may change at most four .ts implementation files in one package.',
+    'Use CLAUDE_LEAD for architecture, cross-package or ambiguous work, files workers cannot edit (JSX, Markdown, configuration), and anything security-sensitive.',
     'Use HUMAN_DECISION (with decision.question and options) for unclear product requirements, destructive migrations or security decisions. Never delegate those.',
     'Verification commands anywhere in the plan: argv arrays, never a shell, no network tools, no git writes, "npx" only as "npx --no-install".',
     `Dependencies: dependsOn lists plan task ids; the graph must be acyclic with at least one root. A task runs only after every dependency is integrated. Tasks that do not depend on each other run in parallel, so independent tasks must not own the same file. Batch integrationCommands run after EACH task integrates, so only use checks that hold at every intermediate state (for Go prefer "go vet ./...", not "go test ./..."). At most ${DEFAULT_CONFIG.maxTasksPerBatch} worker tasks per batch.`,

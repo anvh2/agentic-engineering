@@ -29,7 +29,7 @@ const LANGUAGE_BY_EXT: Record<string, string> = {
   '.py': 'python', '.rs': 'rust', '.java': 'java', '.rb': 'ruby', '.php': 'php', '.cs': 'csharp', '.sql': 'sql', '.scss': 'scss', '.css': 'css', '.html': 'html',
 };
 const SOURCE_EXT = new Set(Object.keys(LANGUAGE_BY_EXT));
-const WORKER_EXT = new Set(['.go', '.js', '.mjs', '.cjs']);
+const WORKER_EXT = new Set(['.go', '.js', '.mjs', '.cjs', '.ts']);
 const MANIFEST_NAMES = new Set(['package.json', 'go.mod', 'pyproject.toml', 'Cargo.toml', 'tsconfig.json', 'Makefile', 'Dockerfile', 'README.md']);
 const CONFIG_PATTERN = /(^|\/)(jest\.config\.[cm]?[jt]s|\.eslintrc[^/]*|eslint\.config\.[cm]?[jt]s|\.prettierrc[^/]*|\.babelrc[^/]*|babel\.config\.[cm]?[jt]s|\.golangci\.[a-z]+|\.editorconfig)$/;
 const SECURITY_PATH = /(^|[/._-])(auth|login|logout|password|passwd|token|secret|credential|session|oauth|jwt|payment|billing|checkout|crypto|permission|acl|role|csrf|cors)([/._-]|$)/i;
