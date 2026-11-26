@@ -19,7 +19,7 @@ Nothing below claims V2 works end to end. **No native agent has yet collaborated
 | Item | Value |
 | --- | --- |
 | PR | #76 `feat/v2-desktop-app` (draft). The integration of this checkpoint is pushed there as a merge commit. |
-| PR #76 head before integration | `75a45de` (UI refactor plus native CLI discovery; its own 3 commits since `26365c0` are preserved) |
+| PR #76 head before integration | `75a45de` (UI refactor plus native CLI discovery). Then `7dae341` (Codex stderr auth detection, harness test console, native chat page), pushed during integration and merged in `28bf6dd`. All PR commits are preserved. |
 | Consolidated V2 backend branch | `v2/m1-integration` = `claude/v2-core` (fast-forwarded) at `549a4c3` |
 | Claude commits | `52cddde` storage, core, evidence and review; `f1481ed` launcher, live-turn fencing, fixture |
 | Codex commit | `6cc2ec8`: an import of Codex's **uncommitted** worktree, byte-verified against its handoff manifest (16 files, archive sha256 `c7f0b45e…2c7f59`). Codex's worktree was not modified and still holds its uncommitted files. |
