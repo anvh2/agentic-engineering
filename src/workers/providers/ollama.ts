@@ -15,7 +15,7 @@ export function ollamaDescriptor(env: NodeJS.ProcessEnv = process.env): Provider
   return {
     identity: { id: 'ollama', kind: 'local', model: ollamaSettings(env).modelId },
     capabilities: {
-      taskTypes: ['go', 'js'] satisfies TaskType[],
+      taskTypes: ['go', 'js', 'ts'] satisfies TaskType[],
       editsFiles: 'via-runtime-tools',
       fileScope: 'tool-enforced', // repository tools refuse protected paths; the runner re-checks the filesystem regardless
       cancellation: 'abort-signal',

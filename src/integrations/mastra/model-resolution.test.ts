@@ -4,7 +4,7 @@ import { findProjectRoot } from '../../core/paths.ts';
 import { loadPackRegistry } from '../../runtime/knowledge/packs/loader.ts';
 import { renderAgentInstructions } from '../../runtime/knowledge/packs/agents.ts';
 import { AGENT_ROLES, ModelRegistry, ModelResolutionError, ModelResolver, bindingOf, type ModelEntry, type ModelRef } from '../../runtime/models/index.ts';
-import { codingWorkerGo, codingWorkerJs, createCodingWorker } from '../../workers/coding-worker.ts';
+import { codingWorkerGo, codingWorkerJs, codingWorkerTs, createCodingWorker } from '../../workers/coding-worker.ts';
 import { createOllamaProvider } from '../../workers/providers/ollama.ts';
 import { createMastraSpecialist, registerSpecialists, resolveSpecialistModel, specialistRegistryKey } from './specialist-agents.ts';
 import { fakeModelServer } from './__testing__/fake-model-server.ts';
@@ -28,8 +28,13 @@ function resolverFor(url: string, assignments: Record<string, ModelRef> = {}, ex
 test('the shipped coding workers and a default specialist are bound to the local Ollama/Qwen default with separate agent ids', async () => {
   assert.deepEqual(bindingOf(codingWorkerGo), { agentId: 'coding-worker-go', role: 'coding-worker', providerId: 'ollama', modelId: process.env.OLLAMA_MODEL ?? 'qwen3:8b' });
   assert.deepEqual(bindingOf(codingWorkerJs), { agentId: 'coding-worker-js', role: 'coding-worker', providerId: 'ollama', modelId: process.env.OLLAMA_MODEL ?? 'qwen3:8b' });
+  assert.deepEqual(bindingOf(codingWorkerTs), { agentId: 'coding-worker-ts', role: 'coding-worker', providerId: 'ollama', modelId: process.env.OLLAMA_MODEL ?? 'qwen3:8b' });
   assert.equal(codingWorkerGo.id, 'coding-worker-go');
   assert.equal(codingWorkerJs.id, 'coding-worker-js');
+  assert.equal(codingWorkerTs.id, 'coding-worker-ts');
+  const tsTools = await codingWorkerTs.listTools();
+  assert.ok('writeFile' in tsTools, 'the TS worker keeps its bounded repository edit tool');
+  assert.ok(!('runPrettier' in tsTools) && !('runJestTest' in tsTools) && !('runGoTest' in tsTools), 'the TS worker has no command-execution tool');
   const model = (await codingWorkerGo.getModel()) as { modelId: string; provider: string };
   assert.equal(model.provider, 'ollama');
   assert.equal(model.modelId, process.env.OLLAMA_MODEL ?? 'qwen3:8b');

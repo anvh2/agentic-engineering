@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { DEFAULT_MODEL_WAIT_BUDGET_MS, modelWaitBudgetMs } from '../capacity/model-capacity.ts';
 import { delegationRequestSchema, languageOf, type Language } from '../execution/delegation.ts';
+import { typeScriptDelegationEnabled } from '../execution/language-adapters.ts';
 import { delegationCapacitySchema } from '../execution/delegation-capacity.ts';
 import { DEFAULT_PROVIDER_ID } from '../execution/worker-provider.ts';
 
@@ -135,7 +136,7 @@ export interface SchedulerConfig {
   workerLanguages: Language[];
 }
 
-/** Upper bound on logical workers for this hardware profile (verification runs `go test` / jest in parallel). */
+/** Upper bound on logical workers for this hardware profile (verification runs bounded Go/JS/TS checks in parallel). */
 export const MAX_WORKER_CONCURRENCY = 3;
 
 export const DEFAULT_CONFIG: SchedulerConfig = {
@@ -149,8 +150,10 @@ export const DEFAULT_CONFIG: SchedulerConfig = {
   workerLanguages: ['go', 'js'],
 };
 
-export function resolveConfig(overrides: Partial<SchedulerConfig> = {}): SchedulerConfig {
+export function resolveConfig(overrides: Partial<SchedulerConfig> = {}, env: NodeJS.ProcessEnv = process.env): SchedulerConfig {
   const config = { ...DEFAULT_CONFIG, ...Object.fromEntries(Object.entries(overrides).filter(([, v]) => v !== undefined)) } as SchedulerConfig;
+  config.workerLanguages = [...new Set(config.workerLanguages.filter((language) => language !== 'ts' || typeScriptDelegationEnabled(env)))];
+  if (typeScriptDelegationEnabled(env) && !config.workerLanguages.includes('ts')) config.workerLanguages.push('ts');
   const positive = ['maxConcurrentWorkers', 'workerLeaseTimeoutMs', 'taskTimeoutMs', 'maxCapacityWaitMs', 'maxTasksPerBatch', 'pollMs'] as const;
   for (const key of positive) {
     if (!Number.isInteger(config[key]) || config[key] < 1) throw new Error(`config ${key} must be a positive integer`);

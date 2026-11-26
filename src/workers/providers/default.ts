@@ -1,5 +1,5 @@
 import { workerAgentIdFor } from '../../runtime/execution/delegation.ts';
-import { codingWorkerGo, codingWorkerJs } from '../coding-worker.ts';
+import { codingWorkerGo, codingWorkerJs, codingWorkerTs } from '../coding-worker.ts';
 import { codexEntry } from './codex.ts';
 import { geminiEntry } from './gemini.ts';
 import { createOllamaProvider, ollamaDescriptor, probeOllama } from './ollama.ts';
@@ -16,7 +16,7 @@ export function defaultProviderRegistry(): ProviderRegistry {
     probe: () => probeOllama(),
     create: ({ taskType, mastra, tracingContext }) => {
       const agentId = workerAgentIdFor(taskType);
-      const fallback = agentId === 'codingWorkerJs' ? codingWorkerJs : codingWorkerGo;
+      const fallback = agentId === 'codingWorkerJs' ? codingWorkerJs : agentId === 'codingWorkerTs' ? codingWorkerTs : codingWorkerGo;
       return createOllamaProvider((mastra?.getAgent(agentId) as typeof fallback | undefined) ?? fallback, tracingContext ? { tracingContext } : {});
     },
   });

@@ -11,7 +11,8 @@ import {
 import { createControlCenterRoutes } from '../control-center/mastra-routes.ts';
 import { createMetricsRoute } from './metrics-route';
 import { createEngineeringStatusRoute } from './engineering-status-route.ts';
-import { codingWorkerGo, codingWorkerJs } from '../../workers/coding-worker';
+import { codingWorkerGo, codingWorkerJs, codingWorkerTs } from '../../workers/coding-worker';
+import { typeScriptDelegationEnabled } from '../../runtime/execution/language-adapters.ts';
 import { registerSpecialists } from './specialist-agents.ts';
 import { specialistReviewWorkflow } from './workflows/specialist-review-workflow.ts';
 import { codingTaskWorkflow } from './workflows/coding-task-workflow';
@@ -31,8 +32,8 @@ export const mastra = new Mastra({
   bundler: {
     externals: ['@duckdb/node-bindings'],
   },
-  server: { apiRoutes: [createMetricsRoute(), createEngineeringStatusRoute(), createCouncilStatusRoute(specialists), ...createControlCenterRoutes({ specialists, codingWorkers: { codingWorkerGo, codingWorkerJs }, councilAgents: council.agents })] },
-  agents: { codingWorkerGo, codingWorkerJs, ...specialists.agents, ...council.agents },
+  server: { apiRoutes: [createMetricsRoute(), createEngineeringStatusRoute(), createCouncilStatusRoute(specialists), ...createControlCenterRoutes({ specialists, codingWorkers: { codingWorkerGo, codingWorkerJs, ...(typeScriptDelegationEnabled() ? { codingWorkerTs } : {}) }, councilAgents: council.agents })] },
+  agents: { codingWorkerGo, codingWorkerJs, ...(typeScriptDelegationEnabled() ? { codingWorkerTs } : {}), ...specialists.agents, ...council.agents },
   workflows: { codingTaskWorkflow, specialistReviewWorkflow, engineeringCouncilWorkflow: council.workflow },
   storage: new MastraCompositeStore({
     id: 'composite-storage',

@@ -16,8 +16,9 @@ import { persistRun } from './coding-task-artifacts.ts';
 import { createTraceSink, redact, type TraceSink } from './coding-task-trace.ts';
 import { denyAllApprovals, type ApprovalVerifier } from './design-approval.ts';
 import { knowledgeLanguageForFiles, type EngineeringKnowledgeCatalog } from '../knowledge/engineering-knowledge.ts';
-import { LANGUAGE_ADAPTERS, delegatableLanguage } from './language-adapters.ts';
+import { LANGUAGE_ADAPTERS, delegatableLanguage, detectLanguage, typeScriptDelegationEnabled } from './language-adapters.ts';
 import { nonDelegatableReasons } from './non-delegatable.ts';
+import { packageBoundary, symlinkPathReason, validateTypeScriptVerification } from './typescript-verifier.ts';
 
 /**
  * Engineering Lead -> local coding worker delegation.
@@ -68,18 +69,19 @@ const frozenPolicy = (p: DelegationPolicy): DelegationPolicy =>
   Object.freeze({ ...p, allowedExtensions: Object.freeze([...p.allowedExtensions]) as string[], allowedVerificationBinaries: Object.freeze([...p.allowedVerificationBinaries]) as string[] });
 
 export const DEFAULT_POLICY: DelegationPolicy = frozenPolicy(LANGUAGE_ADAPTERS.go.policy);
-export const TEST_FILE = /(_test\.go$|\.test\.[cm]?[jt]sx?$|\.spec\.[cm]?[jt]sx?$|(^|\/)(tests?|__tests__)\/)/;
-export type Language = 'go' | 'js';
+export const TEST_FILE = /(_test\.(?:go|[cm]?tsx?)$|\.test\.[cm]?[jt]sx?$|\.spec\.[cm]?[jt]sx?$|(^|\/)(tests?|__tests__)\/)/;
+export type Language = 'go' | 'js' | 'ts';
 
-/** JS keeps the same bounded Jest policy; TypeScript remains disabled until it has a verified adapter. */
+/** Go/JS keep their current policies; TypeScript stays off until its benchmark and security release gates pass. */
 export const JS_POLICY: DelegationPolicy = frozenPolicy(LANGUAGE_ADAPTERS.js.policy);
+export const TS_POLICY: DelegationPolicy = frozenPolicy(LANGUAGE_ADAPTERS.ts.policy);
 
-export function languageOf(files: string[]): Language | undefined {
-  return delegatableLanguage(files.map((file) => extname(file)));
+export function languageOf(files: string[], env: NodeJS.ProcessEnv = process.env): Language | undefined {
+  return delegatableLanguage(files.map((file) => extname(file)), env);
 }
 
 export function policyFor(language: Language | undefined): DelegationPolicy {
-  return language === 'js' ? JS_POLICY : DEFAULT_POLICY;
+  return language === 'js' ? JS_POLICY : language === 'ts' ? TS_POLICY : DEFAULT_POLICY;
 }
 
 /**
@@ -100,8 +102,8 @@ export function effectivePolicy(language: Language | undefined, requested?: Dele
   });
 }
 
-export function workerAgentIdFor(language: Language | undefined): 'codingWorkerGo' | 'codingWorkerJs' {
-  return language === 'js' ? LANGUAGE_ADAPTERS.js.workerAgentId : LANGUAGE_ADAPTERS.go.workerAgentId;
+export function workerAgentIdFor(language: Language | undefined): 'codingWorkerGo' | 'codingWorkerJs' | 'codingWorkerTs' {
+  return language === 'js' ? LANGUAGE_ADAPTERS.js.workerAgentId : language === 'ts' ? LANGUAGE_ADAPTERS.ts.workerAgentId : LANGUAGE_ADAPTERS.go.workerAgentId;
 }
 
 export const JS_VERIFY_FLAGS = new Set(['--runInBand', '--ci']);
@@ -140,6 +142,8 @@ export async function validateJsVerification(command: string[], contract: Coding
   return reasons;
 }
 
+export { packageBoundary, symlinkPathReason, validateTypeScriptVerification } from './typescript-verifier.ts';
+
 /**
  * The static checks on a worker's mutation scope: extension within the language ceiling, never a test file (the oracle), never a
  * symlink, an existing parent, and, in this runtime's own repository, never a non-delegatable path. Run by routeTask and again
@@ -147,20 +151,42 @@ export async function validateJsVerification(command: string[], contract: Coding
  */
 async function fileScopeReasons(allowedFiles: readonly string[], repoRoot: string, policy: DelegationPolicy): Promise<string[]> {
   const reasons: string[] = [];
+  const packageBoundaries = new Set<string>();
   for (const file of allowedFiles) {
+    if (policy.allowedExtensions.includes('.ts') && extname(file).toLowerCase() !== '.ts') {
+      reasons.push(`${file}: TypeScript tasks may modify .ts files only (.tsx is not enabled)`);
+    }
     if (!policy.allowedExtensions.includes(extname(file))) reasons.push(`${file}: extension not in ${policy.allowedExtensions.join(', ')}`);
     if (TEST_FILE.test(file)) reasons.push(`${file}: test files are the oracle and can never be worker-editable`);
+    if (isReadOnlyProjectFile(file)) reasons.push(`${file}: package manifests, lockfiles, tsconfig and test files are read-only`);
+    const symlinkReason = await symlinkPathReason(repoRoot, file);
+    if (symlinkReason) reasons.push(symlinkReason);
     const info = await lstat(join(repoRoot, file)).catch(() => undefined);
     if (info?.isSymbolicLink()) reasons.push(`${file}: symlinks are not allowed`);
     if (!info) {
       const parent = await lstat(join(repoRoot, dirname(file))).catch(() => undefined);
       if (!parent?.isDirectory()) reasons.push(`${file}: does not exist and its directory does not exist`);
     }
+    if (policy.allowedExtensions.includes('.ts')) {
+      const boundary = await packageBoundary(repoRoot, file);
+      if (boundary.reason) reasons.push(boundary.reason);
+      packageBoundaries.add(boundary.path);
+    }
+  }
+  if (policy.allowedExtensions.includes('.ts') && (packageBoundaries.size !== 1 || packageBoundaries.has(''))) {
+    reasons.push('TypeScript implementation files must belong to one package boundary');
   }
   // Self-development: in this runtime's own repository the gates, the worker, the oracles and the manifests are never a
   // worker's mutation scope, whatever language adapter is enabled.
   reasons.push(...(await nonDelegatableReasons(repoRoot, allowedFiles)));
   return reasons;
+}
+
+function isReadOnlyProjectFile(file: string): boolean {
+  const base = file.split(/[\\/]/).at(-1)?.toLowerCase() ?? '';
+  return base === 'package.json' || /(?:^|[-.])lock(?:\.|$)/.test(base) ||
+    /^(?:npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?)$/.test(base) ||
+    /^tsconfig(?:\.[^/]+)?\.json$/.test(base) || /(?:^|\/)\.[^/]*\.test\.ts$/.test(file) || TEST_FILE.test(file);
 }
 
 export type Route = { route: 'qwen' } | { route: 'claude'; reasons: string[] };
@@ -179,13 +205,15 @@ export async function routeTask(
   const { contract, assessment } = parsed.data;
   const reasons: string[] = [];
   const language = languageOf(contract.allowedFiles);
+  const detected = detectLanguage(contract.allowedFiles.map((file) => extname(file)));
   // An injected policy may reduce permissions for a test or trusted caller, but is intersected with the
   // language's registry ceiling: it can never enable an unbenchmarked language, widen a verifier allow-list or
   // select a weaker argv validator.
   const policy = effectivePolicy(language, explicitPolicy);
   if (contract.allowedFiles.length > 0 && !language) {
-    reasons.push('allowed files must all be .go, or all be .js/.mjs/.cjs (mixed or other file types are not delegated)');
+    reasons.push('allowed files must all be .go, all be .js/.mjs/.cjs, or all be .ts (mixed or other file types are not delegated)');
   }
+  if (detected === 'ts' && !typeScriptDelegationEnabled()) reasons.push('TypeScript delegation is disabled; set AGENTIC_TS_DELEGATION=true only after benchmark and security approval');
 
   // Pinned curated knowledge must resolve, in the runtime's own catalog, to exactly the digest the Lead pinned. Otherwise the
   // task stays with Claude with a reason, instead of failing late inside the runner after a worker slot was spent.
@@ -228,6 +256,7 @@ export async function routeTask(
     if (!policy.allowedVerificationBinaries.includes(command[0])) reasons.push(`verification binary "${command[0]}" is not allow-listed`);
     else if (language === 'js') reasons.push(...(await validateJsVerification(command, contract, repoRoot)));
   }
+  if (language === 'ts') reasons.push(...(await validateTypeScriptVerification(contract.verificationCommands, contract, repoRoot)));
 
   // Model-written code is only ever executed inside the OS sandbox; without it nothing is delegated (fail closed).
   const sandbox = await sandboxStatus();
@@ -330,6 +359,11 @@ export async function executeDelegation(requestInput: DelegationRequest, options
   // Only maxAttempts is read from the policy below, but it is clamped to the language ceiling like every other permission.
   const policy = effectivePolicy(languageOf(request.contract.allowedFiles), options.policy);
   const scope = await fileScopeReasons(request.contract.allowedFiles, repoRoot, policy);
+  const detected = detectLanguage(request.contract.allowedFiles.map((file) => extname(file)));
+  if (detected === 'ts' && !typeScriptDelegationEnabled()) scope.push('TypeScript delegation is disabled; set AGENTIC_TS_DELEGATION=true only after benchmark and security approval');
+  if (languageOf(request.contract.allowedFiles) === 'ts') {
+    scope.push(...(await validateTypeScriptVerification(request.contract.verificationCommands, request.contract, repoRoot)));
+  }
   if (scope.length) return { taskId: request.contract.taskId, status: 'KEPT_BY_CLAUDE', reasons: scope, diff: '', restored: false };
   const taskId = request.contract.taskId;
   const trace =

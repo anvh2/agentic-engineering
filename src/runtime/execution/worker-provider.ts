@@ -16,7 +16,7 @@
 export const UNKNOWN = 'UNKNOWN' as const;
 export type Measured<T> = T | typeof UNKNOWN;
 
-export type TaskType = 'go' | 'js';
+export type TaskType = 'go' | 'js' | 'ts';
 
 export interface ProviderIdentity {
   /** Stable registry id: 'ollama' | 'codex' | 'gemini'. */

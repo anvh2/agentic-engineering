@@ -66,6 +66,20 @@ describe('self-development: the runtime never delegates its own gates', () => {
     assert.deepEqual(await routeTask(request('tools/calc/calc.go', 'tools/calc'), root), { route: 'qwen' });
   });
 
+  it('the human-authorized TS bootstrap exception is confined to objective implementation files', async () => {
+    await mkdir(join(root, 'src/lead/objective'), { recursive: true });
+    assert.deepEqual(await nonDelegatableReasons(root, ['src/lead/objective/plan.ts']), []);
+    for (const file of [
+      'src/lead/lifecycle/driver.ts',
+      'src/lead/objective/view.tsx',
+      'src/runtime/execution/non-delegatable.ts',
+      'src/runtime/execution/delegation.ts',
+      'src/runtime/sandbox/sandbox.ts',
+    ]) {
+      assert.match((await nonDelegatableReasons(root, [file])).join(), /non-delegatable/ , file);
+    }
+  });
+
   it('case and segment tricks and a symlinked alias directory cannot reach a protected path', async () => {
     assert.match((await nonDelegatableReasons(root, ['SRC/Runtime/sandbox/calc.go'])).join(), /non-delegatable/);
     assert.match((await nonDelegatableReasons(root, ['./src//runtime/sandbox/calc.go'])).join(), /non-delegatable/);
