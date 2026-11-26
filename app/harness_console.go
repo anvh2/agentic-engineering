@@ -1,6 +1,7 @@
 package main
 
 import (
+ "bytes"
  "context"
  "errors"
  "os"
@@ -36,9 +37,11 @@ func (h *HarnessConsole) RunPrompt(name,path,dir,prompt string) ConsoleResult {
  cmd:=exec.CommandContext(ctx,path,args...)
  cmd.Dir=dir;cmd.Stdin=strings.NewReader(prompt)
  cmd.Env=append(os.Environ(),"PATH="+filepath.Dir(path)+":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:"+os.Getenv("PATH"))
- out,err:=cmd.Output()
- result:=ConsoleResult{Output:string(out)}
- if ctx.Err()!=nil{result.Error="Prompt cancelled or timed out"}else if err!=nil{result.Error="Native CLI failed. Use interactive Terminal for diagnostics and approvals."}
+ var stdout,stderr bytes.Buffer
+ cmd.Stdout=&stdout;cmd.Stderr=&stderr
+ err=cmd.Run()
+ result:=ConsoleResult{Output:stdout.String()}
+ if ctx.Err()!=nil{result.Error="Prompt cancelled or timed out"}else if err!=nil{result.Error="Native CLI failed. Use interactive Terminal for diagnostics and approvals."; if diagnostic:=strings.TrimSpace(stderr.String());diagnostic!=""{if len(diagnostic)>2000{diagnostic=diagnostic[:2000]};result.Error+="\n"+diagnostic}}
  return result
 }
 func(h *HarnessConsole) StopPrompt(name string){h.mu.Lock();defer h.mu.Unlock();if cancel:=h.active[name];cancel!=nil{cancel()}}

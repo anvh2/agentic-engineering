@@ -20,6 +20,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     if(data.runPrompt||data.stopPrompt||data.terminal){
       const name=(data.runPrompt||data.stopPrompt||data.terminal) as Agent;
       const c=consoles[name];c.dir=value("console-dir");if(!c.running)c.prompt=value("console-prompt");
+      if((data.runPrompt||data.terminal)&&!c.dir){window.alert("Choose a working directory first.");return;}
       const pending=data.runPrompt?runPrompt(name):data.stopPrompt?stopPrompt(name):openTerminal(name);
       render();void pending.catch(e=>{c.error=String(e)}).finally(()=>{if(page==="Chat"&&(detail||"Codex")===name&&!modal)render()});return;
     }
@@ -73,5 +74,5 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
   });
 
   render();
-  void scanAgents().then(()=>{if((page==="Overview"||page==="Team"&&tab!=="Roles")&&!modal)render();});
+  void scanAgents().then(()=>{if((page==="Overview"||page==="Chat"||page==="Team"&&tab!=="Roles")&&!modal)render();});
 }
