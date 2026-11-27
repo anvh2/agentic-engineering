@@ -37,17 +37,20 @@ func (h *HarnessConsole) RunPrompt(name,path,dir,prompt string) ConsoleResult {
  if h.active[name]!=nil{h.mu.Unlock();cancel();return ConsoleResult{Error:"Harness already running"}}
  h.active[name]=cancel;h.mu.Unlock()
  defer func(){cancel();h.mu.Lock();delete(h.active,name);h.mu.Unlock()}()
- if strings.TrimSpace(dir)==""{var err error;dir,err=os.UserHomeDir();if err!=nil{return ConsoleResult{Error:err.Error()}}}
+ standalone:=strings.TrimSpace(dir)==""
+ if standalone{var err error;dir,err=os.MkdirTemp("","ae-chat-");if err!=nil{return ConsoleResult{Error:err.Error()}};defer os.RemoveAll(dir)}
  path,dir,err:=consoleTarget(name,path,dir);if err!=nil{return ConsoleResult{Error:err.Error()}}
- args:=[]string{"-p","--tools","Read,Grep,Glob"}
- if name=="Codex"{args=[]string{"exec","--sandbox","read-only","-"}}
+ args:=[]string{"-p","--tools","Read,Grep,Glob","--output-format","stream-json","--verbose","--include-partial-messages"}
+ if name=="Codex"{args=[]string{"exec","--sandbox","read-only","--json"};if standalone{args=append(args,"--skip-git-repo-check")};args=append(args,"-")}
  cmd:=exec.CommandContext(ctx,path,args...)
  cmd.Dir=dir;cmd.Stdin=strings.NewReader(prompt)
  cmd.Env=append(os.Environ(),"PATH="+filepath.Dir(path)+":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:"+os.Getenv("PATH"))
- var stdout,stderr bytes.Buffer
- cmd.Stdout=&stdout;cmd.Stderr=&stderr
+ var stderr bytes.Buffer
+ stream:=&chatStream{name:name,emit:func(kind,body string){if h.ctx!=nil{runtime.EventsEmit(h.ctx,"native-chat",map[string]string{"name":name,"kind":kind,"body":body})}}}
+ cmd.Stdout=stream;cmd.Stderr=&stderr
  err=cmd.Run()
- result:=ConsoleResult{Output:stdout.String()}
+ stream.flush()
+ result:=ConsoleResult{Output:stream.answer.String()}
  if ctx.Err()!=nil{result.Error="Prompt cancelled or timed out"}else if err!=nil{result.Error="Native CLI failed. Use interactive Terminal for diagnostics and approvals."; if diagnostic:=strings.TrimSpace(stderr.String());diagnostic!=""{if len(diagnostic)>2000{diagnostic=diagnostic[:2000]};result.Error+="\n"+diagnostic}}
  return result
 }
