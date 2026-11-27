@@ -26,14 +26,14 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     if(!el)return;
     const data=el.dataset, objective=getObjective(detail), project=getProject(detail);
     if(data.issueChat){page="Chat";detail=data.issueChat;render();return;}
-    if("issueSend" in data){const ic=issueChat(detail),body=value("issue-chat-prompt");const issue=issues().find(x=>x.id===ic?.issueId&&x.project===projectFilter);if(ic&&issue&&body)launch(issue,ic.agent,body);return;}
+    if("issueSend" in data){const ic=issueChat(detail),body=value("issue-chat-prompt");const issue=issues().find(x=>x.id===ic?.issueId&&x.project===projectFilter);if(ic&&issue&&body){const targets=explicitTargets(body);launch(issue,targets[0]||ic.agent,body);}return;}
     if("issueStop" in data){const ic=issueChat(detail);if(ic)void stopIssue(ic);return;}
     if("boardPrefix" in data){const p=getProject(projectFilter);if(p){const v=window.prompt("Issue prefix (new issues only)",projectPrefix(p.id,p.name));if(v!==null){try{setProjectPrefix(p.id,v);render()}catch(e){window.alert(String(e))}}}return;}
     if(data.boardView){page="Objectives";tab=data.boardView;detail="";render();return;}
     if("boardNew" in data){detail="new-issue:"+(statuses.find(s=>s===data.boardNew)||"Todo");render();return;}
     if(data.boardId){detail=data.boardId;render();return;}
     if("boardClose" in data){detail="";render();return;}
-    if("boardComment" in data){const issue=issues().find(x=>x.id===detail&&x.project===projectFilter),body=value("issue-comment").trim();if(issue&&body){saveIssue({...issue,comments:[...(issue.comments||[]),{body,at:new Date().toISOString()}]});render();if(body.replace(/@[\w-]+/g,"").trim())for(const agent of new Set(explicitTargets(body)))launch(issue,agent,body)}return;}
+    if("boardComment" in data){const issue=issues().find(x=>x.id===detail&&x.project===projectFilter),body=value("issue-comment").trim();if(issue&&body){saveIssue({...issue,comments:[...(issue.comments||[]),{body,at:new Date().toISOString()}]});render();if(body.replace(/@[\w-]+/g,"").trim())void (async()=>{for(const agent of new Set(explicitTargets(body)))await executeIssue(issue,agent,body,state,updateIssue)})()}return;}
     if("boardSave" in data){const title=value("issue-title"),status=statuses.find(s=>s===value("issue-status"));if(!title||!status||!getProject(projectFilter))return;const existing=issues().find(x=>x.id===detail&&x.project===projectFilter);try{saveIssue({id:existing?.id||crypto.randomUUID(),issueKey:existing?.issueKey||nextIssueKey(projectFilter,getProject(projectFilter)!.name),project:projectFilter,createdAt:existing?.createdAt||new Date().toISOString(),comments:existing?.comments||[],title,description:value("issue-description"),criteria:value("issue-criteria"),status,assignee:value("issue-assignee"),repository:value("issue-repo"),priority:priorities.find(p=>p===value("issue-priority"))||"No priority"});detail="";render()}catch(e){window.alert(String(e))}return;}
     if("groupStart" in data||"groupSend" in data){void groupSend("groupStart" in data?"Hello Claude and Codex! Please introduce yourselves and greet each other.":value("group-prompt"),()=>{if(page==="Collaboration")render()},boardContext(projectFilter));return;}
     if("groupStop" in data){void stopGroup();return;}
