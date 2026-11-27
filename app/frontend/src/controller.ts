@@ -1,3 +1,4 @@
+import {updateChatStream} from "./components/chat-view";
 import {executeIssue,explicitTargets,issueChat,stopIssue} from "./services/issue-chat";
 import { saveIssue,statuses,priorities,issues,boardContext,nextIssueKey,projectPrefix,setProjectPrefix } from "./services/work-board";
 import { mountMentions } from "./components/mentions";
@@ -14,7 +15,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
   let {page,projectFilter,detail,tab,modal,roleSelected,docSelected,discussion,usageAgent}=nav;
   const persist=()=>{try{demoStore.save(state)}catch{window.alert("Could not save demo data.");}};
   const render=()=>{Object.assign(nav,{page,projectFilter,detail,tab,modal,roleSelected,docSelected,discussion,usageAgent});renderLayout(root,ctx);docSelected=nav.docSelected;};
-  subscribeChat(name=>{const ic=issueChat(detail);if(page==="Chat"&&ic?.running&&ic.agent===name){const t=root.querySelector("#issue-live"),a=root.querySelector("#issue-live-activity");if(t)t.textContent=consoles[name].output;if(a)a.textContent=consoles[name].activity;return;}if(page==="Collaboration"&&group.active.includes(name)){const t=root.querySelector("#group-live-"+name),a=root.querySelector("#group-activity-"+name);if(t)t.textContent=consoles[name].output;if(a)a.textContent=consoles[name].activity;return;}if(page!=="Chat"||(detail||"Codex")!==name)return;const t=root.querySelector("#live-chat-text"),a=root.querySelector("#live-chat-activity");if(t)t.textContent=consoles[name].output;if(a)a.textContent=consoles[name].activity;});
+  subscribeChat(name=>{if(page==="Chat"||page==="Collaboration")updateChatStream(root,name,consoles[name].output,consoles[name].activity)});
   const updateIssue=()=>{if(page==="Chat"||page==="Objectives")render()};
   const launch=(issue:import("./services/work-board").Issue,agent:Agent,request:string)=>{void executeIssue(issue,agent,request,state,updateIssue)};
   const startAssigned=(issue:import("./services/work-board").Issue)=>{if(issue.assignee==="Claude"||issue.assignee==="Codex")launch(issue,issue.assignee,"Implement this issue and report evidence.")};

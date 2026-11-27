@@ -1,7 +1,8 @@
+import {freshConversation} from "./chat-conversation";
 import { mentionedParticipants } from "./participants";
 import type { Agent } from "../types";
 import { consoles,runPrompt,stopPrompt } from "./harness-console";
-export const group={messages:[] as {author:string;body:string}[],busy:false,active:[] as Agent[],error:"",draft:"",cancelled:false};
+export const group={...freshConversation(),busy:false,active:[] as Agent[],error:"",draft:"",cancelled:false};
 export async function groupSend(message:string,update:()=>void,workContext=""){
  if(group.busy||!message.trim())return;
  const targets:Agent[]=Array.from(new Set(mentionedParticipants(message).map(p=>p.harness)));

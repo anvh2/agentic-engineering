@@ -1,8 +1,9 @@
+import type {ChatConversation} from "./chat-conversation";
 import type {Agent,AppState} from "../types";
 import type {Issue} from "./work-board";
 import {participants} from "./participants";
 import {consoles,runIssuePrompt,runPrompt,stopPrompt} from "./harness-console";
-export type IssueConversation={id:string;project:string;title:string;issueId:string;agent:Agent;dir:string;messages:{author:string;body:string}[];running:boolean;error:string};
+export type IssueConversation=ChatConversation & {id:string;project:string;title:string;issueId:string;agent:Agent;dir:string;running:boolean;error:string};
 export const issueChats:IssueConversation[]=[];
 // Leading mentions address agents; later mentions are references.
 export const explicitTargets=(body:string)=>{const prefix=body.match(/^\s*(?:@[\w-]+[\s,]*)+/)?.[0]||"";return participants.filter(p=>prefix.toLowerCase().match(/@[\w-]+/g)?.includes("@"+p.handle.toLowerCase())).map(p=>p.harness)};
