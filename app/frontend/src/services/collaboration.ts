@@ -1,9 +1,10 @@
+import { mentionedParticipants } from "./participants";
 import type { Agent } from "../types";
 import { consoles,runPrompt,stopPrompt } from "./harness-console";
 export const group={messages:[] as {author:string;body:string}[],busy:false,active:[] as Agent[],error:"",draft:"",cancelled:false};
 export async function groupSend(message:string,update:()=>void){
  if(group.busy||!message.trim())return;
- const targets:Agent[]=/@claude\b/i.test(message)&&!/@codex\b/i.test(message)?["Claude"]:/@codex\b/i.test(message)&&!/@claude\b/i.test(message)?["Codex"]:["Claude","Codex"];
+ const targets:Agent[]=Array.from(new Set(mentionedParticipants(message).map(p=>p.harness)));
  if(targets.some(n=>consoles[n].running)){group.error="Finish the active direct chat first.";update();return}
  group.messages.push({author:"You",body:message});group.draft="";group.busy=true;group.cancelled=false;group.error="";update();
  try{

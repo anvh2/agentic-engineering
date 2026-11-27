@@ -1,3 +1,4 @@
+import { mountMentions } from "./components/mentions";
 import { group,groupSend,stopGroup } from "./services/collaboration";
 import { consoles, runPrompt, stopPrompt, openTerminal, currentRepository, browseRepository, subscribeChat } from "./services/harness-console";
 import { scanAgent, scanAgents } from "./services/agent-connection";
@@ -6,6 +7,7 @@ import type { ViewContext } from "./view-context";
 import { demoStore } from "./services/demo-store";
 import { renderLayout } from "./components/layout";
 export function mountController(root: HTMLElement, ctx: ViewContext) {
+  mountMentions(root);
   const {state,nav,getObjective,getProject}=ctx;
   let {page,projectFilter,detail,tab,modal,roleSelected,docSelected,discussion,usageAgent}=nav;
   const persist=()=>{try{demoStore.save(state)}catch{window.alert("Could not save demo data.");}};
