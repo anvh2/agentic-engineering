@@ -119,3 +119,6 @@ input,textarea,select{background:#161619;border-color:#343439}textarea{resize:ve
 
 /* Seven product domains: compact rail, independent scroll and persistent status. */
 .app-rail{overflow-y:auto;overflow-x:hidden;gap:5px;scrollbar-width:thin}.rail-item{flex-shrink:0;min-height:45px;padding:7px 1px;font-size:9px}.rail-logo{flex-shrink:0}.rail-item:last-child{margin-top:auto}.rail-item:focus-visible{outline-offset:-2px}.section-sidebar .nav{line-height:1.35}.section-sidebar .nav-icon{flex-shrink:0}.section-sidebar .sidebar-foot{flex-shrink:0}.section-sidebar .brand{flex-shrink:0}
+
+/* Native titlebar remains responsible for window controls; no duplicate branding. */
+.section-heading{font-size:18px;font-weight:650;letter-spacing:-.4px;padding:3px 8px 14px;color:var(--ink)}.section-sidebar #project-filter{margin-bottom:14px}.desktop-shell{background:#111113}.desktop-shell>.section-sidebar{background:#151517}.app-rail{background:#111113}.rail-logo{background:#242427;color:#e9e9ed;border:1px solid #38383e}.app-breadcrumb{background:#151517}.desktop-shell>main{background:#151517}
