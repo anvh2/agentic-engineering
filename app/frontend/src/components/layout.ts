@@ -3,13 +3,25 @@ import type { ViewContext } from "../view-context";
 import { escapeHTML } from "./primitives";
 import { renderPage } from "../pages";
 import { renderDialog } from "./dialog";
+// Product domains, not runtime components. Keep page IDs stable for existing handlers.
 const groups = [
- {name:"Work", pages:["Overview","Objectives","Projects","Decisions"]},
- {name:"Team", pages:["Team","Engineering DNA","Sessions","Usage & Cost"]},
+ {name:"Home", pages:["Overview"]},
+ {name:"Work", pages:["Objectives","Projects","Decisions"]},
+ {name:"Team", pages:["Team"]},
  {name:"Chat", pages:["Chat","Collaboration"]},
+ {name:"Knowledge", pages:["Engineering DNA"]},
+ {name:"Insights", pages:["Sessions","Usage & Cost"]},
  {name:"Settings",pages:["Settings"]}
 ];
+const pageLabels:Record<string,string> = {
+ Objectives:"All objectives", Team:"Harnesses & roles",
+ "Engineering DNA":"Engineering DNA & skills", Sessions:"Executions"
+};
+function pageLabel(name:string){return pageLabels[name]||name;}
 const paths:Record<string,string> = {
+ Home:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+ Knowledge:'<path d="M12 5v16M3 4h5a4 4 0 0 1 4 3 4 4 0 0 1 4-3h5v15h-5a4 4 0 0 0-4 2 4 4 0 0 0-4-2H3Z"/>',
+ Insights:'<path d="M3 12h4l3-8 4 16 3-8h4"/>',
  Work:'<rect x="3" y="5" width="18" height="15" rx="2"/><path d="M8 5V3h8v2M3 11h18"/>',
  Team:'<circle cx="9" cy="8" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2M16 5a3 3 0 0 1 0 6m3 9v-2a5 5 0 0 0-3-5"/>',
  Chat:'<path d="M21 11a8 8 0 0 1-8 8H8l-5 3 1-6a8 8 0 0 1 7-13h2a8 8 0 0 1 8 8Z"/>',
@@ -27,6 +39,6 @@ function icon(name:string){return '<svg viewBox="0 0 24 24" fill="none" stroke="
 export function renderLayout(root:HTMLElement,ctx:ViewContext){
  const {nav,projectOptions}=ctx;
  const group=groups.find(g=>g.pages.includes(nav.page))||groups[0];
- const link=(name:string)=>'<button class="nav '+(name===nav.page?'active':'')+'" data-page="'+escapeHTML(name)+'"><span class="nav-icon">'+icon(name)+'</span>'+escapeHTML(name==="Objectives"?"All objectives":name)+'</button>';
- root.innerHTML='<div class="layout desktop-shell"><nav class="app-rail" aria-label="Primary navigation"><div class="rail-logo">ae</div>'+groups.map(g=>'<button class="rail-item '+(g===group?'active':'')+'" data-page="'+(g.name==="Work"?"Objectives":g.pages[0])+'" aria-label="'+g.name+'">'+icon(g.name)+'<span>'+g.name+'</span></button>').join('')+'</nav><aside class="section-sidebar"><div class="brand"><b>Agentic Engineering</b></div><select id="project-filter" aria-label="Project filter">'+projectOptions(nav.projectFilter,true)+'</select><div class="nav-title">'+group.name+'</div>'+group.pages.map(link).join('')+'<div class="sidebar-foot"><small>Native harnesses</small>'+["Claude","Codex"].map(n=>'<div class="harness-indicator"><i class="'+(agentStatus(n as "Claude"|"Codex").state==="Connected"?"online":"")+'"></i>'+n+'<span>'+escapeHTML(agentStatus(n as "Claude"|"Codex").state)+'</span></div>').join('')+'</div></aside><main><div class="app-breadcrumb">'+escapeHTML(group.name)+'<span>/</span>'+escapeHTML(nav.page==="Objectives"?"All objectives":nav.page)+'<span class="preview-label">Preview data</span></div><div class="page-content">'+renderPage(ctx)+'</div><footer>Agentic Engineering v2 · Demo objective data · Native harness diagnostics</footer></main></div>'+(nav.modal?renderDialog(ctx):'');
+ const link=(name:string)=>'<button class="nav '+(name===nav.page?'active':'')+'" data-page="'+escapeHTML(name)+'"><span class="nav-icon">'+icon(name)+'</span>'+escapeHTML(pageLabel(name))+'</button>';
+ root.innerHTML='<div class="layout desktop-shell"><nav class="app-rail" aria-label="Primary navigation"><div class="rail-logo">ae</div>'+groups.map(g=>'<button class="rail-item '+(g===group?'active':'')+'" data-page="'+g.pages[0]+'" aria-label="'+g.name+'" aria-current="'+(g===group?"page":"false")+'">'+icon(g.name)+'<span>'+g.name+'</span></button>').join('')+'</nav><aside class="section-sidebar"><div class="brand"><b>Agentic Engineering</b></div><select id="project-filter" aria-label="Project filter">'+projectOptions(nav.projectFilter,true)+'</select><div class="nav-title">'+group.name+'</div>'+group.pages.map(link).join('')+'<div class="sidebar-foot"><small>Native harnesses</small>'+["Claude","Codex"].map(n=>'<div class="harness-indicator"><i class="'+(agentStatus(n as "Claude"|"Codex").state==="Connected"?"online":"")+'"></i>'+n+'<span>'+escapeHTML(agentStatus(n as "Claude"|"Codex").state)+'</span></div>').join('')+'</div></aside><main><div class="app-breadcrumb">'+escapeHTML(group.name)+'<span>/</span>'+escapeHTML(pageLabel(nav.page))+'<span class="preview-label">Preview data</span></div><div class="page-content">'+renderPage(ctx)+'</div><footer>Agentic Engineering v2 · Demo objective data · Native harness diagnostics</footer></main></div>'+(nav.modal?renderDialog(ctx):'');
 }
