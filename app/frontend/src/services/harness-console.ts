@@ -9,10 +9,10 @@ const fresh=():ConsoleState=>({dir:"",prompt:"",output:"",running:false,error:""
 export const consoles:Record<Agent,ConsoleState>={Claude:fresh(),Codex:fresh()};
 export async function browseRepository(){return await bridge()?.BrowseRepository()||""}
 export async function currentRepository(){return await bridge()?.CurrentRepository()||""}
-export async function runPrompt(name:Agent){
- const c=consoles[name];if(c.running||!c.prompt.trim())return;
- const prompt=c.prompt;c.prompt="";c.turns.push({role:"user",body:prompt});c.running=true;c.error="";c.output="";c.activity="Starting native CLI…";
- try{const b=bridge();if(!b)throw Error("Native desktop required");const r=await b.RunPrompt(name,agentStatus(name).path,c.dir,prompt);c.output="";c.error=r.error;if(r.output)c.turns.push({role:"assistant",body:r.output})}catch(e){c.error=String(e)}finally{c.running=false;c.activity=""}
+export async function runPrompt(name:Agent,override?:string){
+ const c=consoles[name];if(c.running||!(override??c.prompt).trim())return;
+ const prompt=override??c.prompt;if(override===undefined){c.prompt="";c.turns.push({role:"user",body:prompt});}c.running=true;c.error="";c.output="";c.activity="Starting native CLI…";
+ try{const b=bridge();if(!b)throw Error("Native desktop required");const r=await b.RunPrompt(name,agentStatus(name).path,override===undefined?c.dir:"",prompt);c.output="";c.error=r.error;if(r.output&&override===undefined)c.turns.push({role:"assistant",body:r.output});return r}catch(e){c.error=String(e);return {output:"",error:c.error}}finally{c.running=false;c.activity=""}
 }
 export async function stopPrompt(name:Agent){await bridge()?.StopPrompt(name)}
 export async function openTerminal(name:Agent){const b=bridge();if(!b)throw Error("Native desktop required");await b.OpenTerminal(name,agentStatus(name).path,consoles[name].dir)}

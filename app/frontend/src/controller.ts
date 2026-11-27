@@ -1,3 +1,4 @@
+import { group,groupSend,stopGroup } from "./services/collaboration";
 import { consoles, runPrompt, stopPrompt, openTerminal, currentRepository, browseRepository, subscribeChat } from "./services/harness-console";
 import { scanAgent, scanAgents } from "./services/agent-connection";
 import type { Agent } from "./types";
@@ -9,13 +10,15 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
   let {page,projectFilter,detail,tab,modal,roleSelected,docSelected,discussion,usageAgent}=nav;
   const persist=()=>{try{demoStore.save(state)}catch{window.alert("Could not save demo data.");}};
   const render=()=>{Object.assign(nav,{page,projectFilter,detail,tab,modal,roleSelected,docSelected,discussion,usageAgent});renderLayout(root,ctx);docSelected=nav.docSelected;};
-  subscribeChat(name=>{if(page!=="Chat"||(detail||"Codex")!==name)return;const t=root.querySelector("#live-chat-text"),a=root.querySelector("#live-chat-activity");if(t)t.textContent=consoles[name].output;if(a)a.textContent=consoles[name].activity;});
+  subscribeChat(name=>{if(page==="Collaboration"&&group.active===name){const t=root.querySelector("#group-live"),a=root.querySelector("#group-activity");if(t)t.textContent=consoles[name].output;if(a)a.textContent=consoles[name].activity;return;}if(page!=="Chat"||(detail||"Codex")!==name)return;const t=root.querySelector("#live-chat-text"),a=root.querySelector("#live-chat-activity");if(t)t.textContent=consoles[name].output;if(a)a.textContent=consoles[name].activity;});
   const value=(id: string)=>document.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>("#"+id)?.value?.trim()||"";
   root.addEventListener("click",(event)=>{
     if (!(event.target instanceof Element)) return;
     const el=event.target.closest<HTMLElement>("button,[data-objective],[data-project],[data-session]");
     if(!el)return;
     const data=el.dataset, objective=getObjective(detail), project=getProject(detail);
+    if("groupStart" in data||"groupSend" in data){void groupSend("groupStart" in data?"Hello Claude and Codex! Please introduce yourselves and greet each other.":value("group-prompt"),()=>{if(page==="Collaboration")render()});return;}
+    if("groupStop" in data){void stopGroup();return;}
     if(data.switchProject){projectFilter=data.switchProject;detail="";tab="";render();return;}
     if("clearRepo" in data){consoles[detail==="Claude"?"Claude":"Codex"].dir="";render();return;}
     if("browseRepo" in data){const name=detail==="Claude"?"Claude":"Codex";void browseRepository().then(dir=>{if(dir){consoles[name].dir=dir;if(page==="Chat")render();}}).catch(e=>{consoles[name].error=String(e);render()});return;}
@@ -24,6 +27,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     if(data.chatHarness){page="Chat";detail=data.chatHarness;render();return;}
     if(data.harness){detail=detail===data.harness?"":data.harness;render();return;}
     if(data.runPrompt||data.stopPrompt||data.terminal){
+      if(group.busy){window.alert("Finish the group conversation first.");return;}
       const name=(data.runPrompt||data.stopPrompt||data.terminal) as Agent;
       const c=consoles[name];c.dir=value("console-dir");if(!c.running)c.prompt=value("console-prompt");
       if(data.terminal&&!c.dir){window.alert("Choose a working directory first.");return;}
@@ -68,8 +72,8 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
   });
   document.addEventListener("pointerdown",event=>{const menu=root.querySelector<HTMLDetailsElement>(".project-switcher[open]");if(menu&&event.target instanceof Node&&!menu.contains(event.target))menu.open=false;});
   root.addEventListener("keydown",event=>{if(event.key==="Escape"){const menu=root.querySelector<HTMLDetailsElement>(".project-switcher[open]");if(menu){menu.open=false;menu.querySelector("summary")?.focus();}}});
-  root.addEventListener("keydown",event=>{if(event.key==="Enter"&&!event.shiftKey&&!event.isComposing&&event.target instanceof HTMLTextAreaElement&&event.target.id==="console-prompt"){event.preventDefault();root.querySelector<HTMLButtonElement>("[data-run-prompt]")?.click();}});
-  root.addEventListener("input",(event)=>{if(page!=="Chat"||!(event.target instanceof HTMLInputElement||event.target instanceof HTMLTextAreaElement))return;const c=consoles[detail==="Claude"?"Claude":"Codex"];if(c.running)return;if(event.target.id==="console-dir")c.dir=event.target.value;if(event.target.id==="console-prompt")c.prompt=event.target.value;});
+  root.addEventListener("keydown",event=>{if(event.key==="Enter"&&!event.shiftKey&&!event.isComposing&&event.target instanceof HTMLTextAreaElement&&["console-prompt","group-prompt"].includes(event.target.id)){event.preventDefault();root.querySelector<HTMLButtonElement>(event.target.id==="group-prompt"?"[data-group-send]":"[data-run-prompt]")?.click();}});
+  root.addEventListener("input",(event)=>{if(event.target instanceof HTMLTextAreaElement&&event.target.id==="group-prompt"){group.draft=event.target.value;return;}if(page!=="Chat"||!(event.target instanceof HTMLInputElement||event.target instanceof HTMLTextAreaElement))return;const c=consoles[detail==="Claude"?"Claude":"Codex"];if(c.running)return;if(event.target.id==="console-dir")c.dir=event.target.value;if(event.target.id==="console-prompt")c.prompt=event.target.value;});
   root.addEventListener("change",(event)=>{
     const el=event.target as HTMLInputElement,data=el.dataset,objective=getObjective(detail);
     if(el.id==="chat-repository"){consoles[detail==="Claude"?"Claude":"Codex"].dir=el.value;render();return;}

@@ -1,9 +1,7 @@
 import type { ViewContext } from "../view-context";
-import { escapeHTML, cash, sum, pill, action, heading, panel, line } from "../components/primitives";
-export function renderCollaboration(ctx: ViewContext): string {
-  const {state,nav,getObjective,getProject,visibleObjectives,visibleSessions,tabs,projectOptions,roleOptions,options,table,objectiveList,repos,conversation,decisionList,projectKnowledge,editor} = ctx;
-  const {page,projectFilter,detail,tab,modal,roleSelected,docSelected,discussion,usageAgent} = nav;
-  const objectives=visibleObjectives(),sessions=visibleSessions();
-  const selectedObjective=getObjective(detail),selectedProject=getProject(detail),selectedSession=state.sessions.find(s=>s.id===detail);
-  return heading("Collaboration","Agent conversations and human feedback",`<select id="discussion-select">${objectives.map((o)=>`<option value="${o.id}" ${o.id===discussion?"selected":""}>${escapeHTML(o.title)}</option>`).join("")}</select>`)+(objectives.length?conversation(objectives.find((o)=>o.id===discussion)?.id||objectives[0].id):panel("Discussion","No objective selected."));
+import { escapeHTML } from "../components/primitives";
+import { group } from "../services/collaboration";
+import { consoles } from "../services/harness-console";
+export function renderCollaboration(_ctx:ViewContext):string{
+ return `<section class="direct-chat group-chat"><div class="group-header"><strong>Engineering room</strong><small> You · Claude Code · Codex</small></div><div class="chat-transcript">${group.messages.length?group.messages.map(m=>`<div class="chat-turn ${m.author==="You"?"user":"assistant"}"><small>${escapeHTML(m.author)}</small>${escapeHTML(m.body)}</div>`).join(""):`<div class="chat-welcome"><h2>Start a conversation</h2><p>Introduce Claude and Codex to each other.</p><button data-group-start>Say hello</button></div>`}${group.active?`<div class="chat-turn assistant"><small>${group.active}</small><div id="group-live">${escapeHTML(consoles[group.active].output)}</div><small id="group-activity">${escapeHTML(consoles[group.active].activity)}</small></div>`:""}${group.error?`<div class="chat-error">${escapeHTML(group.error)}</div>`:""}</div><div class="chat-bottom"><div class="chat-composer"><textarea id="group-prompt" rows="3" placeholder="Message everyone, @claude or @codex…" ${group.busy?"disabled":""}>${escapeHTML(group.draft)}</textarea><div class="chat-toolbar"><small>Claude + Codex</small><span class="chat-toolbar-spacer"></span>${group.busy?'<button data-group-stop>Stop</button>':'<button class="primary" data-group-send aria-label="Send">↑</button>'}</div></div><small>Native replies · One round per message · In-memory conversation</small></div></section>`;
 }
