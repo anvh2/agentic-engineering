@@ -1,4 +1,4 @@
-import { consoles, runPrompt, stopPrompt, openTerminal } from "./services/harness-console";
+import { consoles, runPrompt, stopPrompt, openTerminal, currentRepository } from "./services/harness-console";
 import { scanAgent, scanAgents } from "./services/agent-connection";
 import type { Agent } from "./types";
 import type { ViewContext } from "./view-context";
@@ -16,6 +16,8 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     if(!el)return;
     const data=el.dataset, objective=getObjective(detail), project=getProject(detail);
     if(data.switchProject){projectFilter=data.switchProject;detail="";tab="";render();return;}
+    if("currentRepo" in data){const name=detail==="Claude"?"Claude":"Codex";void currentRepository().then(dir=>{if(!dir){window.alert("No Git repository found in the app working directory. Enter the local path.");return;}consoles[name].dir=dir;if(page==="Chat")render();}).catch(e=>window.alert(String(e)));return;}
+    if("reviewPrompt" in data){const c=consoles[detail==="Claude"?"Claude":"Codex"];c.prompt="Review this repository without modifying files. Inspect the current branch, architecture, correctness, security, maintainability and tests. Report prioritized findings with file references and distinguish verified evidence from assumptions.";render();return;}
     if(data.chatHarness){detail=data.chatHarness;render();return;}
     if(data.harness){detail=detail===data.harness?"":data.harness;render();return;}
     if(data.runPrompt||data.stopPrompt||data.terminal){
@@ -66,6 +68,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
   root.addEventListener("input",(event)=>{if(page!=="Chat"||!(event.target instanceof HTMLInputElement||event.target instanceof HTMLTextAreaElement))return;const c=consoles[detail==="Claude"?"Claude":"Codex"];if(c.running)return;if(event.target.id==="console-dir")c.dir=event.target.value;if(event.target.id==="console-prompt")c.prompt=event.target.value;});
   root.addEventListener("change",(event)=>{
     const el=event.target as HTMLInputElement,data=el.dataset,objective=getObjective(detail);
+    if(el.id==="chat-repository"){if(el.value)consoles[detail==="Claude"?"Claude":"Codex"].dir=el.value;render();return;}
     if(el.id==="project-filter"){projectFilter=el.value;detail="";tab="";}
     else if(el.id==="discussion-select")discussion=el.value;
     else if(el.id==="role-select")roleSelected=el.value;
