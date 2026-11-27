@@ -23,7 +23,7 @@ func consoleTarget(name,path,dir string)(string,string,error){
  if name!="Claude" && name!="Codex"{return "","",errors.New("Unsupported harness")}
  if strings.HasPrefix(dir,"~/"){home,err:=os.UserHomeDir();if err!=nil{return "","",err};dir=filepath.Join(home,dir[2:])}
  if !filepath.IsAbs(dir){return "","",errors.New("Choose an absolute working directory")}
- info,err:=os.Stat(dir);if err!=nil||!info.IsDir(){return "","",errors.New("Working directory does not exist")}
+ info,err:=os.Stat(dir);if err!=nil||!info.IsDir(){return "","",fmt.Errorf("Working directory does not exist: %s",dir)}
  s:=discovery.Scan(name,path);if s.State!="Connected"{return "","",errors.New("Native authentication not verified")}
  return s.Path,dir,nil
 }

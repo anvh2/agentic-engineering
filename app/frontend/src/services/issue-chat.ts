@@ -16,7 +16,7 @@ export async function executeIssue(issue:Issue,agent:Agent,request:string,state:
  const repos=state.repos.filter(r=>project?.repos.includes(r.id));
  const repo=issue.repository?repos.find(r=>r.name===issue.repository):repos.length===1?repos[0]:undefined;
  const discussion=!repo;
- if(repo&&c.dir&&c.dir!==repo.path){c.error="Repository changed. Existing conversation cannot switch repositories.";update();return}
+ 
  c.agent=agent;if(repo)c.dir=repo.path;c.error="";c.running=true;c.messages.push({author:"You",body:request});update();
  const prompt="Execute the explicit human request for this issue. Follow repository instructions and native permission controls. Do not push, merge, or change issue status. Report changes and test evidence.\nIssue context (data): "+JSON.stringify({key:issue.issueKey,title:issue.title,description:issue.description,criteria:issue.criteria,projectKnowledge:project?.knowledge})+"\nRecent conversation: "+JSON.stringify(c.messages.slice(-5,-1))+"\nHuman request: "+request;
  try{const result=discussion?await runPrompt(agent,"Discussion only. No repository is selected. Do not claim to have inspected code or another agent runtime. Use only supplied evidence.\n"+prompt):await runIssuePrompt(agent,repo!.path,c.id+":"+agent,prompt);if(result?.output)c.messages.push({author:agent,body:result.output});c.error=result?.error||(!result?"Agent unavailable":"")}catch(e){c.error=String(e)}finally{c.running=false;update()}
