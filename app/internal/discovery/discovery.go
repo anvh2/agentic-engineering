@@ -1,4 +1,4 @@
-package agentdiscovery
+package discovery
 
 import (
  "bytes"

@@ -11,7 +11,7 @@ import (
  "strings"
  "sync"
  "time"
- "github.com/anvh2/agentic-engineering/app/internal/agentdiscovery"
+ "github.com/anvh2/agentic-engineering/app/internal/discovery"
 )
 
 type ConsoleResult struct { Output string `json:"output"`; Error string `json:"error"` }
@@ -22,7 +22,7 @@ func consoleTarget(name,path,dir string)(string,string,error){
  if strings.HasPrefix(dir,"~/"){home,err:=os.UserHomeDir();if err!=nil{return "","",err};dir=filepath.Join(home,dir[2:])}
  if !filepath.IsAbs(dir){return "","",errors.New("Choose an absolute working directory")}
  info,err:=os.Stat(dir);if err!=nil||!info.IsDir(){return "","",errors.New("Working directory does not exist")}
- s:=agentdiscovery.Scan(name,path);if s.State!="Connected"{return "","",errors.New("Native authentication not verified")}
+ s:=discovery.Scan(name,path);if s.State!="Connected"{return "","",errors.New("Native authentication not verified")}
  return s.Path,dir,nil
 }
 func (h *HarnessConsole) BrowseRepository() (string,error) {if h.ctx==nil{return "",errors.New("Desktop not ready")};return runtime.OpenDirectoryDialog(h.ctx,runtime.OpenDialogOptions{Title:"Choose local repository"})}

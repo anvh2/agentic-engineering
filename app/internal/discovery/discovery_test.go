@@ -1,4 +1,4 @@
-package agentdiscovery
+package discovery
 import ("testing"; "errors"; "os"; "path/filepath")
 func TestUnsupportedAgent(t *testing.T){if s:=Scan("unknown","");s.State!="Error"{t.Fatalf("unexpected status: %+v",s)}}
 func TestRelativeOverride(t *testing.T){if s:=Scan("Claude","relative/claude");s.State!="Error"{t.Fatalf("unexpected status: %+v",s)}}
