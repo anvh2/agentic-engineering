@@ -15,6 +15,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     const el=event.target.closest<HTMLElement>("button,[data-objective],[data-project],[data-session]");
     if(!el)return;
     const data=el.dataset, objective=getObjective(detail), project=getProject(detail);
+    if(data.switchProject){projectFilter=data.switchProject;detail="";tab="";render();return;}
     if(data.chatHarness){detail=data.chatHarness;render();return;}
     if(data.harness){detail=detail===data.harness?"":data.harness;render();return;}
     if(data.runPrompt||data.stopPrompt||data.terminal){
@@ -41,7 +42,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
       if(modal!=="repo"&&!name){window.alert("Name is required.");return;}
       if(modal==="repo"&&!value("new-repo")&&!name){window.alert("Select a repository or enter a path.");return;}
       if(modal==="objective"&&!getProject(value("new-project"))){window.alert("Create or select a project first.");return;}
-      if(modal==="project"){state.projects.push({id,name,description:value("new-description"),repos:[],knowledge:{}});page="Projects";detail=id;}
+      if(modal==="project"){state.projects.push({id,name,description:value("new-description"),repos:[],knowledge:{}});page="Projects";projectFilter=id;detail=id;}
       else if(modal==="objective"){const pid=value("new-project");const key="OBJ-"+id;state.objectives.push({id:key,project:pid,title:name,description:value("new-description"),criteria:value("new-criteria"),status:"Planned",repos:[...(getProject(pid)?.repos||[])],assignments:{Claude:value("new-Claude"),Codex:value("new-Codex")},tasks:[]});page="Objectives";projectFilter=pid;detail=key;}
       else if(modal==="repo"&&project){let repoID=value("new-repo");if(!repoID&&name){let repo=state.repos.find((r)=>r.path===name);if(!repo){repo={id,name:name.split("/").filter(Boolean).pop()||name,path:name};state.repos.push(repo)}repoID=repo.id;}if(repoID&&!project.repos.includes(repoID))project.repos.push(repoID);}
       else if(modal==="task"&&objective)objective.tasks.push({text:name,done:false});
@@ -60,6 +61,8 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     else return;
     persist();render();
   });
+  document.addEventListener("pointerdown",event=>{const menu=root.querySelector<HTMLDetailsElement>(".project-switcher[open]");if(menu&&event.target instanceof Node&&!menu.contains(event.target))menu.open=false;});
+  root.addEventListener("keydown",event=>{if(event.key==="Escape"){const menu=root.querySelector<HTMLDetailsElement>(".project-switcher[open]");if(menu){menu.open=false;menu.querySelector("summary")?.focus();}}});
   root.addEventListener("input",(event)=>{if(page!=="Chat"||!(event.target instanceof HTMLInputElement||event.target instanceof HTMLTextAreaElement))return;const c=consoles[detail==="Claude"?"Claude":"Codex"];if(c.running)return;if(event.target.id==="console-dir")c.dir=event.target.value;if(event.target.id==="console-prompt")c.prompt=event.target.value;});
   root.addEventListener("change",(event)=>{
     const el=event.target as HTMLInputElement,data=el.dataset,objective=getObjective(detail);
