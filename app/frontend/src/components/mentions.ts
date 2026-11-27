@@ -2,7 +2,7 @@ import { participants } from "../services/participants";
 import { escapeHTML } from "./primitives";
 export function mountMentions(root:HTMLElement){
  let selected=0;
- const field=()=>root.querySelector<HTMLTextAreaElement>("#group-prompt");
+ const field=()=>root.querySelector<HTMLTextAreaElement>("#group-prompt, #issue-chat-prompt");
  const menu=()=>root.querySelector<HTMLElement>("#mention-menu");
  const match=()=>{const f=field();return f?.value.slice(0,f.selectionStart).match(/(?:^|\s)@([\w-]*)$/)};
  const choices=()=>{const m=match();return m?participants.filter(p=>p.handle.startsWith(m[1].toLowerCase())):[]};
