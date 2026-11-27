@@ -35,6 +35,7 @@ func (h *HarnessConsole) RunPrompt(name,path,dir,prompt string) ConsoleResult {
  if h.active[name]!=nil{h.mu.Unlock();cancel();return ConsoleResult{Error:"Harness already running"}}
  h.active[name]=cancel;h.mu.Unlock()
  defer func(){cancel();h.mu.Lock();delete(h.active,name);h.mu.Unlock()}()
+ if strings.TrimSpace(dir)==""{var err error;dir,err=os.UserHomeDir();if err!=nil{return ConsoleResult{Error:err.Error()}}}
  path,dir,err:=consoleTarget(name,path,dir);if err!=nil{return ConsoleResult{Error:err.Error()}}
  args:=[]string{"-p","--tools","Read,Grep,Glob"}
  if name=="Codex"{args=[]string{"exec","--sandbox","read-only","-"}}

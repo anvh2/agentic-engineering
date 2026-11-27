@@ -17,13 +17,13 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     const data=el.dataset, objective=getObjective(detail), project=getProject(detail);
     if(data.switchProject){projectFilter=data.switchProject;detail="";tab="";render();return;}
     if("currentRepo" in data){const name=detail==="Claude"?"Claude":"Codex";void currentRepository().then(dir=>{if(!dir){window.alert("No Git repository found in the app working directory. Enter the local path.");return;}consoles[name].dir=dir;if(page==="Chat")render();}).catch(e=>window.alert(String(e)));return;}
-    if("reviewPrompt" in data){const c=consoles[detail==="Claude"?"Claude":"Codex"];c.prompt="Review this repository without modifying files. Inspect the current branch, architecture, correctness, security, maintainability and tests. Report prioritized findings with file references and distinguish verified evidence from assumptions.";render();return;}
+    if("reviewPrompt" in data){const c=consoles[detail==="Claude"?"Claude":"Codex"];if(!c.dir.trim()){window.alert("Select a real repository directory before reviewing code.");return;}c.prompt="Review this repository without modifying files. Inspect the current branch, architecture, correctness, security, maintainability and tests. Report prioritized findings with file references and distinguish verified evidence from assumptions.";render();return;}
     if(data.chatHarness){detail=data.chatHarness;render();return;}
     if(data.harness){detail=detail===data.harness?"":data.harness;render();return;}
     if(data.runPrompt||data.stopPrompt||data.terminal){
       const name=(data.runPrompt||data.stopPrompt||data.terminal) as Agent;
       const c=consoles[name];c.dir=value("console-dir");if(!c.running)c.prompt=value("console-prompt");
-      if((data.runPrompt||data.terminal)&&!c.dir){window.alert("Choose a working directory first.");return;}
+      if(data.terminal&&!c.dir){window.alert("Choose a working directory first.");return;}
       const pending=data.runPrompt?runPrompt(name):data.stopPrompt?stopPrompt(name):openTerminal(name);
       render();void pending.catch(e=>{c.error=String(e)}).finally(()=>{if(page==="Chat"&&(detail||"Codex")===name&&!modal)render()});return;
     }
