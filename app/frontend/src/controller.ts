@@ -10,7 +10,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
   let {page,projectFilter,detail,tab,modal,roleSelected,docSelected,discussion,usageAgent}=nav;
   const persist=()=>{try{demoStore.save(state)}catch{window.alert("Could not save demo data.");}};
   const render=()=>{Object.assign(nav,{page,projectFilter,detail,tab,modal,roleSelected,docSelected,discussion,usageAgent});renderLayout(root,ctx);docSelected=nav.docSelected;};
-  subscribeChat(name=>{if(page==="Collaboration"&&group.active===name){const t=root.querySelector("#group-live"),a=root.querySelector("#group-activity");if(t)t.textContent=consoles[name].output;if(a)a.textContent=consoles[name].activity;return;}if(page!=="Chat"||(detail||"Codex")!==name)return;const t=root.querySelector("#live-chat-text"),a=root.querySelector("#live-chat-activity");if(t)t.textContent=consoles[name].output;if(a)a.textContent=consoles[name].activity;});
+  subscribeChat(name=>{if(page==="Collaboration"&&group.active.includes(name)){const t=root.querySelector("#group-live-"+name),a=root.querySelector("#group-activity-"+name);if(t)t.textContent=consoles[name].output;if(a)a.textContent=consoles[name].activity;return;}if(page!=="Chat"||(detail||"Codex")!==name)return;const t=root.querySelector("#live-chat-text"),a=root.querySelector("#live-chat-activity");if(t)t.textContent=consoles[name].output;if(a)a.textContent=consoles[name].activity;});
   const value=(id: string)=>document.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>("#"+id)?.value?.trim()||"";
   root.addEventListener("click",(event)=>{
     if (!(event.target instanceof Element)) return;
