@@ -19,6 +19,7 @@ func main() {
   if err := wails.Run(&options.App{
     Title: "Agentic Engineering",
     Bind: []interface{}{&AgentConnection{}, console},
+    OnStartup: func(ctx context.Context){console.ctx=ctx},
     OnShutdown: func(context.Context){console.stopAll()},
     Width: 1200, Height: 850, MinWidth: 760, MinHeight: 540,
     AssetServer: &assetserver.Options{Assets: assets},

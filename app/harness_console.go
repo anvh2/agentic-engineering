@@ -2,6 +2,7 @@ package main
 
 import (
  "bytes"
+ "github.com/wailsapp/wails/v2/pkg/runtime"
  "context"
  "errors"
  "os"
@@ -14,7 +15,7 @@ import (
 )
 
 type ConsoleResult struct { Output string `json:"output"`; Error string `json:"error"` }
-type HarnessConsole struct { mu sync.Mutex; active map[string]context.CancelFunc }
+type HarnessConsole struct { ctx context.Context; mu sync.Mutex; active map[string]context.CancelFunc }
 
 func consoleTarget(name,path,dir string)(string,string,error){
  if name!="Claude" && name!="Codex"{return "","",errors.New("Unsupported harness")}
@@ -24,6 +25,7 @@ func consoleTarget(name,path,dir string)(string,string,error){
  s:=agentdiscovery.Scan(name,path);if s.State!="Connected"{return "","",errors.New("Native authentication not verified")}
  return s.Path,dir,nil
 }
+func (h *HarnessConsole) BrowseRepository() (string,error) {if h.ctx==nil{return "",errors.New("Desktop not ready")};return runtime.OpenDirectoryDialog(h.ctx,runtime.OpenDialogOptions{Title:"Choose local repository"})}
 func (h *HarnessConsole) CurrentRepository() string {
  out,err:=exec.Command("git","rev-parse","--show-toplevel").Output();if err!=nil{return ""};return strings.TrimSpace(string(out))
 }

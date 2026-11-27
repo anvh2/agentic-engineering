@@ -1,4 +1,4 @@
-import { consoles, runPrompt, stopPrompt, openTerminal, currentRepository } from "./services/harness-console";
+import { consoles, runPrompt, stopPrompt, openTerminal, currentRepository, browseRepository } from "./services/harness-console";
 import { scanAgent, scanAgents } from "./services/agent-connection";
 import type { Agent } from "./types";
 import type { ViewContext } from "./view-context";
@@ -16,9 +16,11 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     if(!el)return;
     const data=el.dataset, objective=getObjective(detail), project=getProject(detail);
     if(data.switchProject){projectFilter=data.switchProject;detail="";tab="";render();return;}
+    if("clearRepo" in data){consoles[detail==="Claude"?"Claude":"Codex"].dir="";render();return;}
+    if("browseRepo" in data){const name=detail==="Claude"?"Claude":"Codex";void browseRepository().then(dir=>{if(dir){consoles[name].dir=dir;if(page==="Chat")render();}}).catch(e=>{consoles[name].error=String(e);render()});return;}
     if("currentRepo" in data){const name=detail==="Claude"?"Claude":"Codex";void currentRepository().then(dir=>{if(!dir){window.alert("No Git repository found in the app working directory. Enter the local path.");return;}consoles[name].dir=dir;if(page==="Chat")render();}).catch(e=>window.alert(String(e)));return;}
     if("reviewPrompt" in data){const c=consoles[detail==="Claude"?"Claude":"Codex"];if(!c.dir.trim()){window.alert("Select a real repository directory before reviewing code.");return;}c.prompt="Review this repository without modifying files. Inspect the current branch, architecture, correctness, security, maintainability and tests. Report prioritized findings with file references and distinguish verified evidence from assumptions.";render();return;}
-    if(data.chatHarness){detail=data.chatHarness;render();return;}
+    if(data.chatHarness){page="Chat";detail=data.chatHarness;render();return;}
     if(data.harness){detail=detail===data.harness?"":data.harness;render();return;}
     if(data.runPrompt||data.stopPrompt||data.terminal){
       const name=(data.runPrompt||data.stopPrompt||data.terminal) as Agent;
@@ -65,10 +67,11 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
   });
   document.addEventListener("pointerdown",event=>{const menu=root.querySelector<HTMLDetailsElement>(".project-switcher[open]");if(menu&&event.target instanceof Node&&!menu.contains(event.target))menu.open=false;});
   root.addEventListener("keydown",event=>{if(event.key==="Escape"){const menu=root.querySelector<HTMLDetailsElement>(".project-switcher[open]");if(menu){menu.open=false;menu.querySelector("summary")?.focus();}}});
+  root.addEventListener("keydown",event=>{if(event.key==="Enter"&&!event.shiftKey&&!event.isComposing&&event.target instanceof HTMLTextAreaElement&&event.target.id==="console-prompt"){event.preventDefault();root.querySelector<HTMLButtonElement>("[data-run-prompt]")?.click();}});
   root.addEventListener("input",(event)=>{if(page!=="Chat"||!(event.target instanceof HTMLInputElement||event.target instanceof HTMLTextAreaElement))return;const c=consoles[detail==="Claude"?"Claude":"Codex"];if(c.running)return;if(event.target.id==="console-dir")c.dir=event.target.value;if(event.target.id==="console-prompt")c.prompt=event.target.value;});
   root.addEventListener("change",(event)=>{
     const el=event.target as HTMLInputElement,data=el.dataset,objective=getObjective(detail);
-    if(el.id==="chat-repository"){if(el.value)consoles[detail==="Claude"?"Claude":"Codex"].dir=el.value;render();return;}
+    if(el.id==="chat-repository"){consoles[detail==="Claude"?"Claude":"Codex"].dir=el.value;render();return;}
     if(el.id==="project-filter"){projectFilter=el.value;detail="";tab="";}
     else if(el.id==="discussion-select")discussion=el.value;
     else if(el.id==="role-select")roleSelected=el.value;
