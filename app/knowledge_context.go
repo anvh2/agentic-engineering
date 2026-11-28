@@ -33,6 +33,13 @@ type KnowledgeContextRequest struct {
 }
 
 type KnowledgeTraceEvent struct {
+ RunID string `json:"runId,omitempty"`
+ AgentID string `json:"agentId,omitempty"`
+ At string `json:"at,omitempty"`
+ InputTokens int64 `json:"inputTokens,omitempty"`
+ OutputTokens int64 `json:"outputTokens,omitempty"`
+ CacheReadTokens int64 `json:"cacheReadTokens,omitempty"`
+ CacheWriteTokens int64 `json:"cacheWriteTokens,omitempty"`
 	Kind string `json:"kind"`
 	DocumentID string `json:"documentId,omitempty"`
 	Status string `json:"status,omitempty"`
