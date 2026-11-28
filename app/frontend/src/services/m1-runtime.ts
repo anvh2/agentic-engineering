@@ -160,3 +160,15 @@ export function subscribeM1Events(onChange:()=>void) {
   const runtime=(window as unknown as {runtime?:{EventsOn(event:string,cb:(data:{participantId:string;type:string;seq:number})=>void):void}}).runtime;
   runtime?.EventsOn("m1-native-event",event=>{if(m1.running===event.participantId){m1.eventCount++;onChange();}});
 }
+
+/** Read persisted execution data without changing the legacy M1 page selection. */
+export async function getIssueExecution(objectiveId:string):Promise<M1Snapshot> {
+  const snapshot=await native().GetM1Snapshot(objectiveId);
+  return {...snapshot,turns:snapshot.turns??[],participants:snapshot.participants??[],messages:snapshot.messages??[],objective:{...snapshot.objective,tasks:snapshot.objective.tasks??[]}};
+}
+export async function createIssueExecution(input:M1CreateInput):Promise<M1Creation> {
+  return native().CreateM1Objective(input);
+}
+export async function runIssueExecution(participantId:string,prompt:string):Promise<M1TurnReport> {
+  return native().RunM1Turn({participantId,prompt,knowledgeRoot:"",assigned:[]});
+}
