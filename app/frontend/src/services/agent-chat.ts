@@ -2,7 +2,7 @@ import type {AppState,Agent} from "../types";
 import {storeKnowledgeResult} from "./knowledge-trace";
 import {runPrompt,consoles,stopPrompt} from "./harness-console";
 export const profiles=(state:AppState)=>[...new Set(["alex","emma","noah",...Object.keys(state.agentProfiles??{})])].map(id=>({id,name:id[0].toUpperCase()+id.slice(1),handle:id,role:id==="alex"?"Architect":id==="emma"?"Developer":"Reviewer",harness:(id==="emma"?"Codex":"Claude") as Agent,model:"Default",...state.agentProfiles?.[id]}));
-type Message={author:string;body:string};
+type Message={author:string;body:string;logs?:string[]};
 export const conversations:Record<string,{messages:Message[];running:boolean;error:string;active?:{harness:Agent;name:string};cancelled?:boolean}>={};
 export function conversation(id:string){return conversations[id]??=( {messages:[],running:false,error:""});}
 export async function sendAgentChat(state:AppState,id:string,prompt:string,update:()=>void){
@@ -21,7 +21,7 @@ export async function sendAgentChat(state:AppState,id:string,prompt:string,updat
  update();const r=await pending;c.active=undefined;
  if(r)storeKnowledgeResult(a.id,r);
  if(r?.error)c.error=a.name+": "+r.error;
- if(r?.output)c.messages.push({author:a.name,body:r.output});
+ if(r?.output||consoles[a.harness].logs.length)c.messages.push({author:a.name,body:r?.output??"",logs:[...consoles[a.harness].logs]});
  update();
  }}finally{c.active=undefined;c.running=false;update();}
 }
