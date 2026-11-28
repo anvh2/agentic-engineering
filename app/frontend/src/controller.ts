@@ -85,6 +85,10 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     const el=event.target.closest<HTMLElement>("button,[data-objective],[data-project],[data-session]");
     if(!el)return;
     const data=el.dataset, objective=getObjective(detail), project=getProject(detail);
+    if(data.projectSettings){page="Projects";detail=data.projectSettings;tab="General";render();return;}
+    if(data.projectSettingTab&&project){tab=data.projectSettingTab;render();return;}
+    if("projectSave" in data&&project){const name=value("project-name");if(!name)return;project.name=name;project.description=value("project-description");persist();render();return;}
+    if("projectBrowseRepo" in data){const dir=await browseRepository();const input=root.querySelector<HTMLInputElement>("#new-name");if(dir&&input)input.value=dir;return;}
     if("knowledgeReplay" in data){stopKnowledgePlayback();tab="Knowledge Graph 0";render();return;}
     if("agentNew" in data){stopKnowledgePlayback();detail="new-agent";render();return;}
     if("agentCreate" in data){
@@ -215,7 +219,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     if(data.agentChat){if(!profiles(state).some(a=>a.id===data.agentChat))return;page="Chat";detail="agent:"+data.agentChat;tab="";render();return;}
     if("agentBrowseRepo" in data){const id=detail.slice(6),c=conversation(id);if(c.running)return;void browseRepository().then(dir=>{if(dir){c.repositoryDir=dir;render()}}).catch(e=>{c.error=String(e);render()});return;}
     if("agentClearRepo" in data){const c=conversation(detail.slice(6));if(!c.running){c.repositoryDir=undefined;render()}return;}
-    if("agentSend" in data){const id=detail.slice(6);void sendAgentChat(state,id,value("agent-chat-prompt"),()=>{if(page==="Chat"&&detail==="agent:"+id)render()});return;}
+    if("agentSend" in data){const id=detail.slice(6);void sendAgentChat(state,id,value("agent-chat-prompt"),()=>{if(page==="Chat"&&detail==="agent:"+id)render()},projectFilter);return;}
     if("agentStop" in data){void stopAgentChat(detail.slice(6));return;}
     if(data.chatHarness){page="Chat";tab="";detail=data.chatHarness;render();return;}
     if(data.harness){stopKnowledgePlayback();detail=detail===data.harness?"":data.harness;if(page==="Team"&&profiles(state).some(a=>a.id===data.harness)){tab="Knowledge Graph 0";}render();return;}
@@ -257,7 +261,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
       if(["__proto__","constructor","prototype"].includes(name)){window.alert("Invalid role name.");return;}state.roles[name]=value("new-description");roleSelected=name;}
       modal="";
     }
-    else if(data.unlink&&project)project.repos=project.repos.filter((id)=>id!==data.unlink);
+    else if(data.unlink&&project){project.repos=project.repos.filter((id)=>id!==data.unlink);if(project.defaultRepo===data.unlink)project.defaultRepo=project.repos[0];}
     else if(data.send){const message=value("message");if(!message)return;state.messages.push({objective:data.send,agent:"You",body:message});}
     else if(data.decision){const d=state.decisions.find((d)=>d.id===data.decision);if(d && data.result)d.status=data.result;}
     else if(data.doc)docSelected=data.doc;
@@ -294,6 +298,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
       const panel=root.querySelector<HTMLElement>(".team-properties");if(panel)panel.scrollTop=scroll;
       return;
     }
+    if(el.id==="project-default-repo"){const p=getProject(detail);if(p&&p.repos.includes(el.value)){p.defaultRepo=el.value;persist();render();}return;}
     if(el.id==="chat-repository"){consoles[detail==="Claude"?"Claude":"Codex"].dir=el.value;render();return;}
     if(el.id==="project-filter"){projectFilter=el.value;detail="";tab="";}
     else if(el.id==="discussion-select")discussion=el.value;
