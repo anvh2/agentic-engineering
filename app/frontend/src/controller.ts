@@ -16,9 +16,64 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
   mountMentions(root);
   const {state,nav,getObjective,getProject}=ctx;
   let {page,projectFilter,detail,tab,modal,roleSelected,docSelected,discussion,usageAgent}=nav;
+  let knowledgeTimer: number | undefined;
+  let knowledgeCompletedAt = 0;
+  const stopKnowledgePlayback=()=>{if(knowledgeTimer!==undefined){window.clearInterval(knowledgeTimer);knowledgeTimer=undefined;knowledgeCompletedAt=0;}};
   const persist=()=>{try{demoStore.save(state)}catch{window.alert("Could not save demo data.");}};
-  const render=()=>{Object.assign(nav,{page,projectFilter,detail,tab,modal,roleSelected,docSelected,discussion,usageAgent});renderLayout(root,ctx);docSelected=nav.docSelected;};
-  subscribeKnowledgeEvents(agentId=>{if(page==="Team"&&detail===agentId)render()});
+  const render=()=>{Object.assign(nav,{page,projectFilter,detail,tab,modal,roleSelected,docSelected,discussion,usageAgent});renderLayout(root,ctx);docSelected=nav.docSelected;syncKnowledgePlayback();};
+  const syncKnowledgePlayback=()=>{
+    if(page!=="Team"||!profiles(state).some(a=>a.id===detail)||tab==="Roles"||tab==="Harnesses"){stopKnowledgePlayback();return;}
+    if(knowledgeTimer!==undefined)return;
+    knowledgeTimer=window.setInterval(()=>{
+      if(page!=="Team"||!profiles(state).some(a=>a.id===detail)||tab==="Roles"||tab==="Harnesses"){stopKnowledgePlayback();return;}
+      const match=/^Knowledge (Graph|Timeline|Context) ([0-6])$/.exec(tab);
+      const view=match?.[1]||"Graph",phase=Number(match?.[2]||0);
+      const preview=root.querySelector<HTMLElement>("[data-knowledge-preview]");
+      if(!preview){stopKnowledgePlayback();return;}
+      if(phase===6){
+        if(!knowledgeCompletedAt){
+          preview.querySelectorAll(".knowledge-flow-active,.knowledge-node-active").forEach(el=>{
+            el.classList.remove("knowledge-flow-active","knowledge-node-active");
+            if(el.hasAttribute("data-knowledge-edge"))el.setAttribute("stroke-dasharray","none");
+          });
+          const status=preview.querySelector("[data-knowledge-phase]");
+          if(status)status.textContent="Completed";
+          knowledgeCompletedAt=Date.now();
+        }
+        if(Date.now()-knowledgeCompletedAt<8000)return;
+      }
+      const next=(phase+1)%7;
+      knowledgeCompletedAt=0;
+      const entries=JSON.parse(preview.dataset.knowledgeEntries||"[]") as Array<{phase:number;tokens:number;kind:string}>;
+      const loaded=entries.filter(e=>e.phase<=next),total=loaded.reduce((sum,e)=>sum+e.tokens,0);
+      tab="Knowledge "+view+" "+next;nav.tab=tab;
+      const setText=(selector:string,value:string)=>{const el=preview.querySelector(selector);if(el)el.textContent=value;};
+      setText("[data-knowledge-phase]",["Waiting","Bootstrap","Repository discovery","Planning","Implementation","Debugging","Verification"][next]);
+      setText("[data-knowledge-count]",loaded.length+" / "+entries.length);
+      setText("[data-knowledge-total]",total.toLocaleString());
+      setText("[data-knowledge-total-svg]",total.toLocaleString()+" est. tokens");
+      preview.querySelectorAll("[data-knowledge-edge],[data-knowledge-node]").forEach(el=>{
+        const edge=el.hasAttribute("data-knowledge-edge");
+        const p=Number(el.getAttribute(edge?"data-knowledge-edge":"data-knowledge-node"));
+        el.setAttribute("stroke",p<=next?"#79a98e":"var(--edge)");
+        if(!edge)el.setAttribute("fill",p<=next?"#25332d":"var(--raised)");
+        if(edge)el.setAttribute("stroke-dasharray",p<=next?"none":"4 4");
+        el.classList.toggle(edge?"knowledge-flow-active":"knowledge-node-active",p===next);
+      });
+      preview.querySelectorAll("[data-knowledge-label],[data-knowledge-status]").forEach(el=>{
+        const label=el.hasAttribute("data-knowledge-label");
+        const p=Number(el.getAttribute(label?"data-knowledge-label":"data-knowledge-status"));
+        el.textContent=p<=next?(label?"Loaded · "+el.getAttribute("data-tokens")+" tokens":"Loaded"):p===99?(next===6?"Skipped · Not relevant":"Not selected"):"Available";
+      });
+      for(const kind of ["DNA","Role","Standard","Skill","Reference"]){
+        const n=loaded.filter(e=>e.kind===kind).reduce((sum,e)=>sum+e.tokens,0);
+        setText('[data-knowledge-category="'+kind+'"]',n.toLocaleString()+" tokens");
+        const bar=preview.querySelector<HTMLElement>('[data-knowledge-bar="'+kind+'"]');
+        if(bar)bar.style.width=(total?100*n/total:0)+"%";
+      }
+    },1500);
+  };
+  subscribeKnowledgeEvents(()=>{});
   subscribeChat(name=>{if(page==="Chat"||page==="Collaboration")updateChatStream(root,name,consoles[name].output,consoles[name].activity)});
   const updateIssue=()=>{if(page==="Chat"||page==="Objectives")render()};
   const launch=(issue:import("./services/work-board").Issue,agent:Agent,request:string)=>{void executeIssue(issue,agent,request,state,updateIssue)};
@@ -30,7 +85,8 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     const el=event.target.closest<HTMLElement>("button,[data-objective],[data-project],[data-session]");
     if(!el)return;
     const data=el.dataset, objective=getObjective(detail), project=getProject(detail);
-    if("agentNew" in data){detail="new-agent";render();return;}
+    if("knowledgeReplay" in data){stopKnowledgePlayback();tab="Knowledge Graph 0";render();return;}
+    if("agentNew" in data){stopKnowledgePlayback();detail="new-agent";render();return;}
     if("agentCreate" in data){
       const name=value("new-agent-name"),handle=value("new-agent-handle").replace(/^@/,"").toLowerCase(),role=value("new-agent-role"),harness=value("new-agent-harness");
       const status=root.querySelector<HTMLElement>("[data-profile-status]");
@@ -160,7 +216,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     if("agentSend" in data){const id=detail.slice(6);void sendAgentChat(state,id,value("agent-chat-prompt"),()=>{if(page==="Chat"&&detail==="agent:"+id)render()});return;}
     if("agentStop" in data){void stopAgentChat(detail.slice(6));return;}
     if(data.chatHarness){page="Chat";tab="";detail=data.chatHarness;render();return;}
-    if(data.harness){detail=detail===data.harness?"":data.harness;if(page==="Team"&&profiles(state).some(a=>a.id===data.harness)){tab="Knowledge Graph 0";}render();return;}
+    if(data.harness){stopKnowledgePlayback();detail=detail===data.harness?"":data.harness;if(page==="Team"&&profiles(state).some(a=>a.id===data.harness)){tab="Knowledge Graph 0";}render();return;}
     if(data.runPrompt||data.stopPrompt||data.terminal){
       if(group.busy){window.alert("Finish the group conversation first.");return;}
       const name=(data.runPrompt||data.stopPrompt||data.terminal) as Agent;
