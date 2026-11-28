@@ -19,7 +19,24 @@ export interface M1Task {
   revision: number;
 }
 export interface M1Message {seq: number; from: string; to?: string; body: string; created_at: string}
+export interface M1TurnSummary {
+  turnId:string;
+  sessionId:string;
+  participantId:string;
+  handle:string;
+  agent:string;
+  role:string;
+  trigger:string;
+  state:string;
+  startedAt:string;
+  endedAt?:string;
+  toolFailures:number;
+  logPath:string;
+  logSha256:string;
+  usage:Array<{provider:string;model:string;uncachedInput:number|null;cacheRead:number|null;cacheWrite:number|null;output:number|null;costUsd:number|null;costKind:string}>;
+}
 export interface M1Snapshot {
+  turns: M1TurnSummary[];
   objective: {id:string; title:string; description:string; acceptance_criteria:string; status:string; tasks:M1Task[]};
   participants: M1Participant[];
   messages: M1Message[];
