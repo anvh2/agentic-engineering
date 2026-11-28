@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -74,7 +75,7 @@ func knowledgeApplicable(e KnowledgeEntry,role string,languages []string)bool{
 func compactKnowledgeIndex(entries []KnowledgeEntry)string{
 	var b strings.Builder
 	for _,e:=range entries{
-		fmt.Fprintf(&b,"- %s | %s | %s | %s\n",e.ID,e.Title,e.Kind,e.Description)
+		fmt.Fprintf(&b,"- %s | %s | %s | %s | %s\n",e.ID,e.Title,e.Kind,e.Description,e.Path)
 	}
 	return b.String()
 }
@@ -82,7 +83,7 @@ func compactKnowledgeIndex(entries []KnowledgeEntry)string{
 // BuildKnowledgeContext does not invoke a model or perform network retrieval.
 // It copies only eligible on-demand documents into a run-scoped directory and
 // injects bootstrap documents exactly once for this execution.
-func BuildKnowledgeContext(req KnowledgeContextRequest)(KnowledgeContext,error){
+func BuildKnowledgeContext(ctx context.Context, req KnowledgeContextRequest)(KnowledgeContext,error){
 	var out KnowledgeContext
 	if strings.TrimSpace(req.Root)==""{return out,errors.New("knowledge root required")}
 	pack,err:=(&KnowledgeSource{}).LoadLocal(req.Root);if err!=nil{return out,err}
@@ -105,6 +106,7 @@ func BuildKnowledgeContext(req KnowledgeContextRequest)(KnowledgeContext,error){
 	var bytes int
 	var onDemand []KnowledgeEntry
 	for _,e:=range eligible{
+		if err:=ctx.Err();err!=nil{return KnowledgeContext{},err}
 		source,err:=knowledgeSafeFile(pack.Root,e.Path);if err!=nil{return out,fmt.Errorf("%s: %w",e.ID,err)}
 		raw,err:=os.ReadFile(source);if err!=nil{return out,err}
 		sum:=sha256.Sum256(raw)
@@ -114,7 +116,7 @@ func BuildKnowledgeContext(req KnowledgeContextRequest)(KnowledgeContext,error){
 		if e.Load=="bootstrap"{
 			// Strip metadata frontmatter from the injected body to reduce context.
 			docBody:=knowledgeMarkdownBody(raw)
-            bytes+=len(docBody)
+			bytes+=len(docBody)
 			if bytes>knowledgeBootstrapLimit{return out,errors.New("knowledge bootstrap body exceeds 24 KB limit")}
 			fmt.Fprintf(&body,"\n--- %s (%s) ---\n%s\n",e.Title,e.ID,string(docBody))
 			out.Loaded=append(out.Loaded,e.ID)
@@ -135,11 +137,12 @@ func BuildKnowledgeContext(req KnowledgeContextRequest)(KnowledgeContext,error){
 	cleanup:=true
 	defer func(){if cleanup{os.RemoveAll(dir)}}()
 	for _,e:=range onDemand{
+		if err:=ctx.Err();err!=nil{return KnowledgeContext{},err}
 		source,err:=knowledgeSafeFile(pack.Root,e.Path);if err!=nil{return out,err}
 		raw,err:=os.ReadFile(source);if err!=nil{return out,err}
 		// Paths are validated by knowledgeSafeFile. This directory contains no unassigned documents.
 		clean := filepath.Clean(e.Path)
-		if filepath.IsAbs(e.Path) || clean=="." || clean==".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) || strings.HasPrefix(clean, ".git"+string(os.PathSeparator)) {
+		if filepath.IsAbs(e.Path) || strings.Contains(e.Path,"\\") || clean=="." || clean==".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) || clean==".git" || strings.HasPrefix(clean, ".git"+string(os.PathSeparator)) {
 			return KnowledgeContext{}, fmt.Errorf("unsafe on-demand document path: %s",e.ID)
 		}
 		target:=filepath.Join(dir,clean)
