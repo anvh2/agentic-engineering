@@ -27,8 +27,12 @@ func (CodexAdapter) Run(ctx context.Context, spec TurnSpec, emit func(Event)) (T
 		OnLine: stream.line,
 	})
 	if err != nil {
-		// An unusable stream or process start error must never be accepted as
-		// successful execution, even if the process status is zero.
+		// An unusable stream must not pass validation. Cancellation is still
+		// classified as interrupted when the launcher returned after SIGINT.
+		if ctx.Err() != nil {
+			stream.result.Interrupted = true
+			return stream.result, nil
+		}
 		return stream.result, fmt.Errorf("run codex: %w", err)
 	}
 	result, err := stream.finish(outcome.ExitCode, outcome.Interrupted, nil)
