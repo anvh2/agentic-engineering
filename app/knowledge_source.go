@@ -188,7 +188,7 @@ func (s *KnowledgeSource) ImportJSON(raw string)(KnowledgePack,error){
   seenID[e.ID]=true;seenPath[e.Path]=true
   if e.Content==nil{return KnowledgePack{},fmt.Errorf("document %s has no content; use GitHub URL for path-only manifests",e.ID)}
   if len(*e.Content)>2<<20{return KnowledgePack{},fmt.Errorf("document %s is too large",e.ID)}
-  if filepath.IsAbs(e.Path) || e.Path=="" || strings.Contains(e.Path,"\"){return KnowledgePack{},errors.New("invalid document path")}
+  if filepath.IsAbs(e.Path) || e.Path=="" || strings.Contains(e.Path,"\\"){return KnowledgePack{},errors.New("invalid document path")}
   clean:=filepath.Clean(e.Path)
   if clean=="." || clean==".." || strings.HasPrefix(clean,".."+string(os.PathSeparator)) || clean=="manifest.json" || clean==".git" || strings.HasPrefix(clean,".git"+string(os.PathSeparator)){return KnowledgePack{},errors.New("unsafe document path")}
   path:=filepath.Join(temp,clean)
