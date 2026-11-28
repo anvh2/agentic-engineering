@@ -33,12 +33,16 @@ type nativeChatEvent struct {
 	Item struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
+		Command string `json:"command"`
+		AggregatedOutput string `json:"aggregated_output"`
+		ExitCode *int `json:"exit_code"`
 	} `json:"item"`
 	Message struct {
 		Content []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 			Name string `json:"name"`
+			Input struct { FilePath string `json:"file_path"`; Command string `json:"command"`; Pattern string `json:"pattern"` } `json:"input"`
 		} `json:"content"`
 	} `json:"message"`
 }
@@ -77,7 +81,15 @@ func (s *chatStream) text(body string) {
 	}
 }
 
+func (s *chatStream) console(message string) {
+	if s.emit != nil && message != "" {
+		if len(message) > 4096 { message = message[:4096] + " …" }
+		s.emit("console", message)
+	}
+}
+
 func (s *chatStream) activity(message string) {
+	s.console(message)
 	if s.emit != nil {
 		s.emit("activity", message)
 	}
@@ -147,6 +159,11 @@ func (s *chatStream) readClaudeEvent(event nativeChatEvent) {
 			s.activity("Using " + event.Event.ContentBlock.Name)
 		}
 	case "assistant":
+		for _, block := range event.Message.Content {
+			if block.Type == "tool_use" {
+				s.console(block.Name + " " + strings.TrimSpace(block.Input.FilePath + " " + block.Input.Command + " " + block.Input.Pattern))
+			}
+		}
 		if !s.partial {
 			for _, block := range event.Message.Content {
 				if block.Type == "text" {
@@ -165,6 +182,10 @@ func (s *chatStream) readClaudeEvent(event nativeChatEvent) {
 }
 
 func (s *chatStream) readCodexEvent(event nativeChatEvent) {
+	if event.Item.Type == "command_execution" {
+		if event.Type == "item.started" { s.console("$ " + event.Item.Command) }
+		if event.Type == "item.completed" { s.console(event.Item.AggregatedOutput) }
+	}
 	if event.Type == "item.completed" && event.Item.Type == "agent_message" {
 		if s.answer.Len() > 0 {
 			s.text("\n\n")
