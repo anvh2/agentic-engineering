@@ -82,3 +82,18 @@ func TestChatStreamNativeUsage(t *testing.T){
 		if stream.usage==nil||stream.usage.InputTokens!=tc.wantIn||stream.usage.OutputTokens!=tc.wantOut||stream.usage.CacheReadTokens!=tc.wantCache{t.Errorf("%s usage=%+v",tc.name,stream.usage)}
 	}
 }
+
+func TestClaudeModelUsageAggregatesInvocation(t *testing.T) {
+	stream := &chatStream{name: "Claude"}
+	event := `{"type":"result","usage":{"input_tokens":2,"output_tokens":1},"modelUsage":{"claude-one":{"inputTokens":10,"outputTokens":20,"cacheReadInputTokens":100,"cacheCreationInputTokens":5},"claude-two":{"inputTokens":30,"outputTokens":40,"cacheReadInputTokens":200,"cacheCreationInputTokens":6}}}`
+	if _, err := stream.Write([]byte(event + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if stream.usage == nil {
+		t.Fatal("missing Claude invocation usage")
+	}
+	got := stream.usage
+	if got.Scope != "invocation" || got.InputTokens != 40 || got.OutputTokens != 60 || got.CacheReadTokens != 300 || got.CacheWriteTokens != 11 {
+		t.Fatalf("wrong invocation totals: %+v", got)
+	}
+}
