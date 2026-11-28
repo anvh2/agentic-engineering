@@ -284,3 +284,36 @@ func (r *Runner) execute(ctx context.Context, adapter agent.Adapter, spec agent.
 	return result, path, hex.EncodeToString(digest.Sum(nil)), runErr
 }
 
+
+func (r *Runner) wakeLoop(ctx context.Context) {
+	defer r.wg.Done()
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.wakeSignal:
+		case <-ticker.C:
+		}
+		pending, err := r.service.PendingWakeParticipants(ctx, 8)
+		if err != nil {
+			if ctx.Err() != nil { return }
+			fmt.Fprintln(os.Stderr, "M1 pending wakes:", err)
+			continue
+		}
+		for _, p := range pending {
+			if ctx.Err() != nil { return }
+			name := "Claude"
+			if p.Agent == string(agent.Codex) { name = "Codex" }
+			status := discovery.Scan(name, "")
+			if status.State != "Connected" { continue }
+			_, err := r.RunTurn(ctx, p.ID, core.TriggerWake,
+				"You have a collaboration message. Read messages and your objective through authenticated MCP, then act only within native permissions.",
+				"", agent.Binary{Kind: agent.Kind(p.Agent),Path: status.Path,Version: status.Version}, nil)
+			if err != nil && ctx.Err() == nil {
+				fmt.Fprintln(os.Stderr, "M1 wake:", err)
+			}
+		}
+	}
+}
