@@ -9,6 +9,7 @@ import type { Agent } from "./types";
 import type { ViewContext } from "./view-context";
 import { demoStore } from "./services/demo-store";
 import { renderLayout } from "./components/layout";
+import { syncKnowledge,loadKnowledgeDirectory,readKnowledgeEntry } from "./services/knowledge-source";
 export function mountController(root: HTMLElement, ctx: ViewContext) {
   mountMentions(root);
   const {state,nav,getObjective,getProject}=ctx;
@@ -62,7 +63,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
         const p=Number(el.getAttribute(label?"data-knowledge-label":"data-knowledge-status"));
         el.textContent=p<=next?(label?"Loaded · "+el.getAttribute("data-tokens")+" tokens":"Loaded"):p===99?(next===6?"Skipped · Not relevant":"Not selected"):"Available";
       });
-      for(const kind of ["DNA","Role","Context","Standard","Skill"]){
+      for(const kind of ["DNA","Role","Standard","Skill","Reference"]){
         const n=loaded.filter(e=>e.kind===kind).reduce((sum,e)=>sum+e.tokens,0);
         setText('[data-knowledge-category="'+kind+'"]',n.toLocaleString()+" tokens");
         const bar=preview.querySelector<HTMLElement>('[data-knowledge-bar="'+kind+'"]');
@@ -81,6 +82,36 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     const el=event.target.closest<HTMLElement>("button,[data-objective],[data-project],[data-session]");
     if(!el)return;
     const data=el.dataset, objective=getObjective(detail), project=getProject(detail);
+    if("knowledgeSync" in data || "knowledgeLocal" in data){
+      const status=root.querySelector<HTMLElement>("[data-knowledge-source-status]");
+      if(status)status.textContent="Reading knowledge source...";
+      const ref=value("knowledge-github-ref")||"main";
+      const directory=value("knowledge-local-path");
+      try{
+        const pack="knowledgeSync" in data?await syncKnowledge(ref):await loadKnowledgeDirectory(directory);
+        state.knowledgePack=pack;
+        const valid=new Set(pack.entries.map(e=>e.id));
+        state.agentKnowledge=Object.fromEntries(Object.entries(state.agentKnowledge??{}).map(([agent,ids])=>[agent,ids.filter(id=>valid.has(id))]));
+        persist();render();
+        const output=root.querySelector<HTMLElement>("[data-knowledge-source-status]");
+        if(output)output.textContent=pack.entries.length+" documents linked from "+pack.id+" v"+pack.version;
+      }catch(e){
+        if(status)status.textContent=String(e instanceof Error?e.message:e);
+      }
+      return;
+    }
+    if(data.knowledgeRead){
+      const viewer=root.querySelector<HTMLElement>("[data-knowledge-reader]");
+      const documentBody=viewer?.querySelector<HTMLElement>("[data-knowledge-document-body]");
+      const documentTitle=viewer?.querySelector<HTMLElement>("[data-knowledge-document-title]");
+      const pack=state.knowledgePack;
+      const entry=pack?.entries.find(e=>e.id===data.knowledgeRead);
+      if(!viewer||!documentBody||!documentTitle||!pack||!entry)return;
+      viewer.hidden=false;documentTitle.textContent=entry.path;documentBody.textContent="Reading...";
+      try{documentBody.textContent=await readKnowledgeEntry(pack,entry.id)}
+      catch(e){documentBody.textContent=String(e instanceof Error?e.message:e)}
+      return;
+    }
     if(data.assignmentOpen){
       const picker=Array.from(root.querySelectorAll<HTMLDetailsElement>("[data-assignment-picker]")).find(p=>p.dataset.assignmentPicker===data.assignmentOpen);
       if(picker){picker.hidden=!picker.hidden;picker.open=!picker.hidden;}return;
@@ -91,8 +122,14 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
       const choices=Array.from(picker.querySelectorAll<HTMLInputElement>("[data-assignment-doc]"));
       const keys=new Set(choices.map(c=>c.dataset.assignmentDoc));
       state.agentKnowledge??={};
-      state.agentKnowledge[detail]=[...new Set([...(state.agentKnowledge[detail]??[]).filter(k=>!keys.has(k)),...choices.filter(c=>c.checked).map(c=>c.dataset.assignmentDoc!).filter(k=>Object.hasOwn(state.knowledge,k))])];
-      persist();render();return;
+      const valid=new Set(state.knowledgePack?.entries.map(e=>e.id)??[]);
+      state.agentKnowledge[detail]=[...new Set([...(state.agentKnowledge[detail]??[]).filter(k=>!keys.has(k)&&valid.has(k)),...choices.filter(c=>c.checked).map(c=>c.dataset.assignmentDoc!).filter(k=>valid.has(k))])];
+      const scroll=root.querySelector<HTMLElement>(".team-properties")?.scrollTop??0;
+      const selectedView=/^Knowledge (Graph|Timeline|Context) [0-6]$/.exec(tab)?.[1]||"Graph";
+      tab="Knowledge "+selectedView+" 0";
+      stopKnowledgePlayback();persist();render();
+      const panel=root.querySelector<HTMLElement>(".team-properties");if(panel)panel.scrollTop=scroll;
+      return;
     }
     if("issueRepairRepo" in data){const ic=issueChat(detail);if(!ic||ic.running)return;const issue=issues().find(x=>x.id===ic.issueId&&x.project===ic.project);const project=getProject(ic.project);const repos=state.repos.filter(r=>project?.repos.includes(r.id));const repo=issue?.repository?repos.find(r=>r.name===issue.repository):repos.length===1?repos[0]:undefined;if(!repo)return;void browseRepository().then(dir=>{if(!dir)return;repo.path=dir;persist();ic.dir=dir;ic.error="Repository path updated. Retry the request.";render()}).catch(e=>{ic.error=String(e);render()});return;}
     if("issueRetry" in data){const ic=issueChat(detail);const issue=issues().find(x=>x.id===ic?.issueId&&x.project===projectFilter);const last=ic?.messages.filter(m=>m.author==="You").slice(-1)[0];if(ic&&issue&&last&&!ic.running)launch(issue,ic.agent,last.body);return;}
