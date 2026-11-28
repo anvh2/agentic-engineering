@@ -61,7 +61,7 @@ function knowledgePreview(agent:{id:string;name:string;role:string;harness:strin
   line("Native input",usage?usage.inputTokens.toLocaleString()+" tokens":"Not reported")+
   line("Native output",usage?usage.outputTokens.toLocaleString()+" tokens":"Not reported")+
   line("Cache read",usage?(usage.cacheReadTokens??0).toLocaleString()+" tokens":"Not reported")+
-  '<p class="team-note">Context estimate is size-derived; native usage is reported by the CLI when available. They are different measurements.</p></div>';
+  '<p class="team-note">Context is bytes/4, not billed tokens. Claude invocation input excludes cache reads; Codex input includes cached input. Usage scope: '+esc(usage?.scope??"not reported")+'.</p></div>';
  return '<section class="panel" data-knowledge-runtime><div class="between"><h3>Knowledge trace</h3><small class="muted">'+esc(phase)+'</small></div><div class="chips" role="group" aria-label="Knowledge trace view">'+views+'</div><div class="between space" style="gap:10px;flex-wrap:wrap"><small class="muted">'+esc(run?.runId?"Run "+run.runId:"No run recorded")+'</small><small class="muted">'+boot.length+' injected · '+onDemand.length+' available</small></div>'+
   (view==="Graph"?graph:view==="Timeline"?timeline:context)+'</section>';
 }
