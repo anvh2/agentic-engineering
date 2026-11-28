@@ -14,7 +14,6 @@ import (
 // ACP callbacks are deliberately restricted until scoped filesystem and
 // interactive permission support are implemented.
 type desktopACPClient struct {
-	acp.Client
 	mu sync.Mutex
 	stream *chatStream
 }
@@ -62,6 +61,7 @@ func runACPChat(ctx context.Context, name, nativePath, dir, prompt string, strea
 	if executable == "" {
 		return ConsoleResult{Error: "ACP adapter not installed: "+binary}
 	}
+	stream.activity("Starting "+name+" ACP…")
 	cmd := exec.CommandContext(ctx, executable)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "PATH="+path, "INITIAL_AGENT_MODE=read-only")
@@ -77,13 +77,43 @@ func runACPChat(ctx context.Context, name, nativePath, dir, prompt string, strea
 	init, err := conn.Initialize(ctx, acp.InitializeRequest{ProtocolVersion:acp.ProtocolVersionNumber})
 	if err != nil { return ConsoleResult{Error:fmt.Sprintf("ACP initialize: %v",err)} }
 	if init.ProtocolVersion != acp.ProtocolVersionNumber { return ConsoleResult{Error:"Unsupported ACP protocol"} }
+	stream.activity("Creating ACP session…")
 	session, err := conn.NewSession(ctx, acp.NewSessionRequest{Cwd:dir, McpServers:[]acp.McpServer{}})
 	if err != nil { return ConsoleResult{Error:fmt.Sprintf("ACP session: %v",err)} }
+	stream.activity("ACP session connected")
 	if onStart != nil { onStart() }
-	_, err = conn.Prompt(ctx, acp.PromptRequest{SessionId:session.SessionId, Prompt:[]acp.ContentBlock{acp.TextBlock(prompt)}})
+	response, err := conn.Prompt(ctx, acp.PromptRequest{SessionId:session.SessionId, Prompt:[]acp.ContentBlock{acp.TextBlock(prompt)}})
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	result := ConsoleResult{Output:stream.answer.String()}
-	if err != nil { result.Error = fmt.Sprintf("ACP prompt: %v",err) }
+	if ctx.Err() != nil { result.Error = "ACP prompt cancelled or timed out" } else if err != nil { result.Error = fmt.Sprintf("ACP prompt: %v",err) } else if fmt.Sprint(response.StopReason) != "end_turn" { result.Error = fmt.Sprintf("ACP stopped: %v", response.StopReason) }
 	return result
+}
+
+func (c *desktopACPClient) WriteTextFile(_ context.Context, _ acp.WriteTextFileRequest) (acp.WriteTextFileResponse, error) {
+	return acp.WriteTextFileResponse{}, fmt.Errorf("ACP client capability not granted")
+}
+
+func (c *desktopACPClient) ReadTextFile(_ context.Context, _ acp.ReadTextFileRequest) (acp.ReadTextFileResponse, error) {
+	return acp.ReadTextFileResponse{}, fmt.Errorf("ACP client capability not granted")
+}
+
+func (c *desktopACPClient) CreateTerminal(_ context.Context, _ acp.CreateTerminalRequest) (acp.CreateTerminalResponse, error) {
+	return acp.CreateTerminalResponse{}, fmt.Errorf("ACP client capability not granted")
+}
+
+func (c *desktopACPClient) TerminalOutput(_ context.Context, _ acp.TerminalOutputRequest) (acp.TerminalOutputResponse, error) {
+	return acp.TerminalOutputResponse{}, fmt.Errorf("ACP client capability not granted")
+}
+
+func (c *desktopACPClient) ReleaseTerminal(_ context.Context, _ acp.ReleaseTerminalRequest) (acp.ReleaseTerminalResponse, error) {
+	return acp.ReleaseTerminalResponse{}, fmt.Errorf("ACP client capability not granted")
+}
+
+func (c *desktopACPClient) WaitForTerminalExit(_ context.Context, _ acp.WaitForTerminalExitRequest) (acp.WaitForTerminalExitResponse, error) {
+	return acp.WaitForTerminalExitResponse{}, fmt.Errorf("ACP client capability not granted")
+}
+
+func (c *desktopACPClient) KillTerminal(_ context.Context, _ acp.KillTerminalRequest) (acp.KillTerminalResponse, error) {
+	return acp.KillTerminalResponse{}, fmt.Errorf("ACP client capability not granted")
 }
