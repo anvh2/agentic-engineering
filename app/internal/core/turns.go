@@ -231,7 +231,15 @@ func (s *Service) FinishTurn(ctx context.Context, turnID string, o TurnOutcome) 
 				return err
 			}
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE turn_tokens SET revoked_at = ? WHERE turn_id = ? AND revoked_at IS NULL`, now, turnID)
+		if _, err := tx.ExecContext(ctx, `UPDATE turn_tokens SET revoked_at = ? WHERE turn_id = ? AND revoked_at IS NULL`, now, turnID); err != nil {
+			return err
+		}
+		if state != "succeeded" && r.NativeSessionID == "" {
+			// A failed first launch may never have created a native session.
+			// Retire that app session instead of retrying an invented ID.
+			_, err = tx.ExecContext(ctx, `UPDATE sessions SET state = 'failed', closed_at = ?
+				WHERE id = (SELECT session_id FROM turns WHERE id = ?) AND state = 'active'`, now, turnID)
+		}
 		return err
 	})
 }
