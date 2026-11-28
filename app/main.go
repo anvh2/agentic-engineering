@@ -16,11 +16,12 @@ var assets embed.FS
 
 func main() {
   console := &HarnessConsole{}
+  collaboration := &M1Runtime{}
   if err := wails.Run(&options.App{
     Title: "Agentic Engineering",
-    Bind: []interface{}{&AgentConnection{}, &KnowledgeSource{}, console},
-    OnStartup: func(ctx context.Context){console.ctx=ctx},
-    OnShutdown: func(context.Context){console.stopAll()},
+    Bind: []interface{}{&AgentConnection{}, &KnowledgeSource{}, console, collaboration},
+    OnStartup: func(ctx context.Context){console.ctx=ctx; collaboration.start(ctx)},
+    OnShutdown: func(ctx context.Context){console.stopAll(); collaboration.stop(ctx)},
     Width: 1200, Height: 850, MinWidth: 760, MinHeight: 540,
     AssetServer: &assetserver.Options{Assets: assets},
     BackgroundColour: &options.RGBA{R:17,G:17,B:19,A:255},
