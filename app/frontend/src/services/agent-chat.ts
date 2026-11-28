@@ -6,7 +6,10 @@ export const profiles=(state:AppState)=>[...new Set(["alex","emma","noah",...Obj
 type Message={author:string;body:string;blocks?:ChatBlock[]};
 export const conversations:Record<string,{repositoryDir?:string;messages:Message[];running:boolean;error:string;active?:{harness:Agent;name:string};cancelled?:boolean}>={};
 export function conversation(id:string){return conversations[id]??=( {messages:[],running:false,error:""});}
-export async function sendAgentChat(state:AppState,id:string,prompt:string,update:()=>void){
+export async function sendAgentChat(state:AppState,id:string,prompt:string,update:()=>void,projectId="all"){
+ const project=state.projects.find(p=>p.id===projectId);
+ const linked=state.repos.filter(r=>project?.repos.includes(r.id));
+ const repositoryDir=(linked.find(r=>r.id===project?.defaultRepo)||linked[0])?.path??"";
  const c=conversation(id);if(c.running||!prompt.trim())return;
  if(id==="group"){c.error="Group collaboration is temporarily disabled.";update();return;}
  const pack=state.knowledgePack;if(!pack){c.error="Connect knowledge first.";update();return;}
@@ -18,7 +21,7 @@ export async function sendAgentChat(state:AppState,id:string,prompt:string,updat
  if(c.cancelled)break;
  if(consoles[a.harness].running){c.error=a.name+": harness busy";continue;}
  c.active={harness:a.harness,name:a.name};
- const pending=runPrompt(a.harness,prompt,{request:{repositoryDir:c.repositoryDir??"",agentId:a.id,root:pack.root,role:a.role,languages:state.agentLanguages?.[a.id]??[],assigned:state.agentKnowledge?.[a.id]??[],task:prompt},model:a.model,author:a.name});
+ const pending=runPrompt(a.harness,prompt,{request:{repositoryDir,agentId:a.id,root:pack.root,role:a.role,languages:state.agentLanguages?.[a.id]??[],assigned:state.agentKnowledge?.[a.id]??[],task:prompt},model:a.model,author:a.name});
  update();const r=await pending;c.active=undefined;
  if(r)storeKnowledgeResult(a.id,r);
  if(r?.error)c.error=a.name+": "+r.error;
