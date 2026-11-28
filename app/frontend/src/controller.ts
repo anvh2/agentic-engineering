@@ -92,22 +92,11 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
       state.agentProfiles[id]={handle,role:value("profile-role"),harness,model:value("profile-model").trim()||"Default"};
       persist();render();return;
     }
-    if(data.profileTest){
-      const id=data.profileTest;
-      const output=root.querySelector<HTMLElement>("[data-profile-test-result]");
-      if(!output)return;
-      const profile=state.agentProfiles?.[id]??{role:id==="alex"?"Architect":id==="emma"?"Developer":"Reviewer",harness:id==="emma"?"Codex":"Claude",model:"Default"};
-      const pack=state.knowledgePack;
-      const prompt=value("profile-test-prompt").trim();
-      if(!pack||!prompt){output.textContent="Connect knowledge and enter a test message first.";return;}
-      const entries=knowledgeForAgent(pack,profile.role,state.agentKnowledge?.[id]??[]);
-      const bridge=(window as unknown as {go?:{main?:{HarnessConsole?:{RunAgentContextTest(name:string,path:string,model:string,root:string,ids:string[],prompt:string):Promise<{output:string;error:string}>}}}}).go?.main?.HarnessConsole;
-      if(!bridge){output.textContent="Open the native desktop app.";return;}
-      const button=root.querySelector<HTMLButtonElement>("[data-profile-test]");if(button)button.disabled=true;
-      output.textContent="Reading selected files and running native harness...";
-      try{const result=await bridge.RunAgentContextTest(profile.harness,localStorage.getItem("agent-path:"+profile.harness)||"",profile.model,pack.root,entries.map(e=>e.id),prompt);output.textContent=(result.error?"Error: "+result.error:"Native run completed. Context sent:\n"+entries.map(e=>e.id).join("\n"))+"\n\n"+result.output;}
-      catch(e){output.textContent=String(e)}finally{if(button)button.disabled=false}
-      return;
+    if(data.profileChat){
+      const id=data.profileChat;
+      const profile=state.agentProfiles?.[id]??{role:id==="alex"?"Architect":id==="emma"?"Developer":"Reviewer",harness:id==="emma"?"Codex":"Claude",model:"Default",handle:id};
+      if(consoles[profile.harness as Agent].running){window.alert("Harness already running");return;}
+      page="Chat";detail=profile.harness;tab="Agent:"+id;render();return;
     }
     if("knowledgeSync" in data || "knowledgeLocal" in data){
       const status=root.querySelector<HTMLElement>("[data-knowledge-source-status]");
@@ -177,14 +166,19 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     if("browseRepo" in data){const name=detail==="Claude"?"Claude":"Codex";void browseRepository().then(dir=>{if(dir){consoles[name].dir=dir;if(page==="Chat")render();}}).catch(e=>{consoles[name].error=String(e);render()});return;}
     if("currentRepo" in data){const name=detail==="Claude"?"Claude":"Codex";void currentRepository().then(dir=>{if(!dir){window.alert("No Git repository found in the app working directory. Enter the local path.");return;}consoles[name].dir=dir;if(page==="Chat")render();}).catch(e=>window.alert(String(e)));return;}
     if("reviewPrompt" in data){const c=consoles[detail==="Claude"?"Claude":"Codex"];if(!c.dir.trim()){window.alert("Select a real repository directory before reviewing code.");return;}c.prompt="Review this repository without modifying files. Inspect the current branch, architecture, correctness, security, maintainability and tests. Report prioritized findings with file references and distinguish verified evidence from assumptions.";render();return;}
-    if(data.chatHarness){page="Chat";detail=data.chatHarness;render();return;}
+    if(data.chatHarness){page="Chat";tab="";detail=data.chatHarness;render();return;}
     if(data.harness){detail=detail===data.harness?"":data.harness;if(page==="Team"&&["alex","emma","noah"].includes(data.harness)){tab="Knowledge Graph 0";stopKnowledgePlayback();}render();return;}
     if(data.runPrompt||data.stopPrompt||data.terminal){
       if(group.busy){window.alert("Finish the group conversation first.");return;}
       const name=(data.runPrompt||data.stopPrompt||data.terminal) as Agent;
       const c=consoles[name];c.dir=value("console-dir");if(!c.running)c.prompt=value("console-prompt");
       if(data.terminal&&!c.dir){window.alert("Choose a working directory first.");return;}
-      const pending=data.runPrompt?runPrompt(name):data.stopPrompt?stopPrompt(name):openTerminal(name);
+      const id=page==="Chat"&&tab.startsWith("Agent:")?tab.slice(6):"";
+      const profile=id?(state.agentProfiles?.[id]??{role:id==="alex"?"Architect":id==="emma"?"Developer":"Reviewer",model:"Default",handle:id}):undefined;
+      const pack=state.knowledgePack;
+      if(data.runPrompt&&profile&&!pack){window.alert("Connect knowledge first");return;}
+      const context=profile&&pack?{root:pack.root,ids:knowledgeForAgent(pack,profile.role,state.agentKnowledge?.[id]??[]).map(e=>e.id),model:profile.model,author:profile.handle}:undefined;
+      const pending=data.runPrompt?runPrompt(name,undefined,context):data.stopPrompt?stopPrompt(name):openTerminal(name);
       render();void pending.catch(e=>{c.error=String(e)}).finally(()=>{if(page==="Chat"&&(detail||"Codex")===name&&!modal)render()});return;
     }
     if("rescan" in data || data.checkAgent){
