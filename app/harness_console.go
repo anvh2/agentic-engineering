@@ -31,10 +31,10 @@ func (h *HarnessConsole) BrowseRepository() (string,error) {if h.ctx==nil{return
 func (h *HarnessConsole) CurrentRepository() string {
  out,err:=exec.Command("git","rev-parse","--show-toplevel").Output();if err!=nil{return ""};return strings.TrimSpace(string(out))
 }
-func (h *HarnessConsole) RunPrompt(name,path,dir,prompt string) ConsoleResult { return h.runPrompt(name,path,dir,prompt,"") }
-func (h *HarnessConsole) RunIssuePrompt(name,path,dir,key,prompt string) ConsoleResult { if strings.TrimSpace(dir)==""||strings.TrimSpace(key)==""{return ConsoleResult{Error:"Issue repository and key required"}};return h.runPrompt(name,path,dir,prompt,key) }
-func (h *HarnessConsole) runPrompt(name,path,dir,prompt,key string) ConsoleResult {
- if strings.TrimSpace(prompt)==""||len(prompt)>32768{return ConsoleResult{Error:"Prompt is empty or too long"}}
+func (h *HarnessConsole) RunPrompt(name,path,dir,prompt string) ConsoleResult { return h.runPrompt(name,path,dir,prompt,"","") }
+func (h *HarnessConsole) RunIssuePrompt(name,path,dir,key,prompt string) ConsoleResult { if strings.TrimSpace(dir)==""||strings.TrimSpace(key)==""{return ConsoleResult{Error:"Issue repository and key required"}};return h.runPrompt(name,path,dir,prompt,key,"") }
+func (h *HarnessConsole) runPrompt(name,path,dir,prompt,key,model string) ConsoleResult {
+ if strings.TrimSpace(prompt)==""||len(prompt)>262144{return ConsoleResult{Error:"Prompt is empty or too long"}}
  ctx,cancel:=context.WithTimeout(context.Background(),20*time.Minute)
  h.mu.Lock()
  if h.active==nil{h.active=make(map[string]context.CancelFunc)}
@@ -50,6 +50,7 @@ func (h *HarnessConsole) runPrompt(name,path,dir,prompt,key string) ConsoleResul
  args:=[]string{"-p","--tools","Read,Grep,Glob","--output-format","stream-json","--verbose","--include-partial-messages"}
  if name=="Codex"{args=[]string{"exec","--sandbox","read-only","--json"};if standalone{args=append(args,"--skip-git-repo-check")};args=append(args,"-")}
  if key!=""{if name=="Claude"{args=[]string{"-p","--output-format","stream-json","--verbose","--include-partial-messages"}}else{args=[]string{"exec","--sandbox","workspace-write","--json","-"}}}
+ if model!="" && model!="Default" {args=append([]string{args[0],"--model",model},args[1:]...)}
  cmd:=exec.CommandContext(ctx,path,args...)
  cmd.Dir=dir;cmd.Stdin=strings.NewReader(prompt)
  cmd.Env=append(os.Environ(),"PATH="+filepath.Dir(path)+":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:"+os.Getenv("PATH"))
@@ -70,4 +71,15 @@ func(h *HarnessConsole) OpenTerminal(name,path,dir string)error{
  quote:=func(s string)string{return "'"+strings.ReplaceAll(s,"'","'\"'\"'")+"'"}
  command:="cd "+quote(dir)+" && "+quote(path)
  return exec.Command("osascript","-e","on run argv","-e","tell application \"Terminal\" to do script (item 1 of argv)","-e","tell application \"Terminal\" to activate","-e","end run",command).Run()
+}
+
+// RunAgentContextTest reads selected documents and sends their contents to the native harness.
+func(h *HarnessConsole) RunAgentContextTest(name,path,model,root string,ids []string,prompt string) ConsoleResult {
+ if strings.TrimSpace(prompt)=="" {return ConsoleResult{Error:"Enter a test message"}}
+ if len(ids)==0{return ConsoleResult{Error:"Select knowledge first"}}
+ var b strings.Builder
+ source:=&KnowledgeSource{}
+ for _,id:=range ids {doc,err:=source.ReadEntry(root,id);if err!=nil{return ConsoleResult{Error:err.Error()}};fmt.Fprintf(&b,"\n--- Document: %s ---\n%s\n",id,doc)}
+ b.WriteString("\n--- User message ---\n"+prompt)
+ return h.runPrompt(name,path,"",b.String(),"",model)
 }
