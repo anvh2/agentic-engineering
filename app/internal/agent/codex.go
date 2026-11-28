@@ -44,9 +44,8 @@ func CodexArgs(spec TurnSpec) ([]string, error) {
 	} else if spec.Instructions != "" {
 		args = append(args, "-c", "developer_instructions="+strconv.Quote(spec.Instructions))
 	}
-	// Shared launcher currently takes argv; stdin support is required before
-	// sensitive task prompts can be passed. Token is still exclusively env-based.
-	args = append(args, "--", spec.Prompt)
+	// Task text is consumed from stdin, not argv (which other processes can read).
+	args = append(args, "-")
 	return args, nil
 }
 
