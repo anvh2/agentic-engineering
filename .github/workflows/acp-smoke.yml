@@ -1,0 +1,37 @@
+name: ACP smoke
+on:
+  pull_request:
+    paths:
+      - 'app/spikes/acp/**'
+      - '.github/workflows/acp-smoke.yml'
+jobs:
+  initialize:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: '@agentclientprotocol/claude-agent-acp'
+            binary: claude-agent-acp
+          - package: '@agentclientprotocol/codex-acp'
+            binary: codex-acp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Compile upstream SDK probe
+        working-directory: app/spikes/acp
+        run: |
+          go mod tidy
+          go vet ./...
+          go build -o acp-probe .
+      - name: Install upstream adapter for compatibility probe
+        run: npm install --global ${{ matrix.package }}
+      - name: Initialize without credentials or inference
+        working-directory: app/spikes/acp
+        run: ./acp-probe ${{ matrix.binary }}
