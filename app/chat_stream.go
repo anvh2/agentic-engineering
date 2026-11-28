@@ -29,7 +29,11 @@ func(s *chatStream) flush(){
  add:=func(t string){if t!=""{s.answer.WriteString(t);s.emit("text",t)}}
  if s.name=="Claude"{
  switch e.Type{
+ case "system":
+ s.emit("activity","Claude session initialized")
  case "stream_event":
+ if e.Event.Type=="message_start"{s.emit("activity","Receiving Claude response")}
+ if e.Event.ContentBlock.Type=="thinking"||e.Event.Delta.Type=="thinking_delta"{s.emit("activity","Thinking…")}
  if e.Event.Delta.Type=="text_delta"{s.partial=true;add(e.Event.Delta.Text)}
  if e.Event.ContentBlock.Type=="tool_use"{s.emit("activity","Using "+e.Event.ContentBlock.Name)}
  case "assistant":
@@ -38,6 +42,8 @@ func(s *chatStream) flush(){
  }
  }else{
  if e.Type=="item.completed"&&e.Item.Type=="agent_message"{if s.answer.Len()>0{add("\n\n")};add(e.Item.Text)}
- if strings.HasPrefix(e.Type,"item.")&&e.Item.Type!="agent_message"{s.emit("activity",strings.ReplaceAll(e.Item.Type,"_"," "))}
+ if e.Type=="thread.started"{s.emit("activity","Codex session initialized")}
+ if e.Type=="turn.started"{s.emit("activity","Codex turn started")}
+ if strings.HasPrefix(e.Type,"item.")&&e.Item.Type!=""&&e.Item.Type!="agent_message"{s.emit("activity",strings.ReplaceAll(e.Item.Type,"_"," "))}
  }
 }
