@@ -214,6 +214,9 @@ func BuildKnowledgeContext(ctx context.Context, request KnowledgeContextRequest)
 		if gitErr != nil { return result, fmt.Errorf("resolve knowledge revision: %w", gitErr) }
 		result.Revision = strings.TrimSpace(string(out))
 	}
+	if request.RepositoryDir != "" {
+		request.Languages = repositoryLanguages(request.RepositoryDir, request.Languages)
+	}
 	entries, err := selectKnowledge(pack, request)
 	if err != nil {
 		return result, err
@@ -264,4 +267,19 @@ func BuildKnowledgeContext(ctx context.Context, request KnowledgeContextRequest)
 		}
 	}
 	return result, nil
+}
+
+ // repositoryLanguages supplements explicit agent languages with project markers.
+func repositoryLanguages(root string, configured []string) []string {
+ languages := append([]string(nil), configured...)
+ for _, marker := range []struct{ path, language string }{
+  {"go.mod", "go"}, {"tsconfig.json", "typescript"}, {"frontend/tsconfig.json", "typescript"}, {"app/go.mod", "go"}, {"app/frontend/tsconfig.json", "typescript"},
+ } {
+  if info, err := os.Stat(filepath.Join(root, marker.path)); err == nil && info.Mode().IsRegular() {
+   found := false
+   for _, language := range languages { if strings.EqualFold(language, marker.language) { found = true; break } }
+   if !found { languages = append(languages, marker.language) }
+  }
+ }
+ return languages
 }
