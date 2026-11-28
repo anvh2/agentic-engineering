@@ -72,20 +72,25 @@ function assignmentPanel(ctx:ViewContext,id:string,role:string):string{
  const pack=ctx.state.knowledgePack;
  if(!pack)return '<section class="team-assignment"><strong>Knowledge</strong><p class="team-note">No source connected.</p><button data-page="Engineering DNA">Connect source</button></section>';
  const saved=ctx.state.agentKnowledge?.[id]??[];
- const roleName=role.toLowerCase();
- const inherited=pack.entries.filter(e=>e.kind==="engineering"||e.kind==="roles"&&e.path.includes("/"+roleName+"/"));
+ const languages=ctx.state.agentLanguages?.[id]??[];
+ const availableLanguages=[...new Set(pack.entries.flatMap(e=>e.languages??[]).map(x=>x.toLowerCase()))].sort();
+ const inherited=pack.entries.filter(e=>e.load==="bootstrap"&&knowledgeApplicable(e,role,languages));
  const group=(title:string,kinds:string[])=>{
-  const items=pack.entries.filter(e=>kinds.includes(e.kind));
+  const items=pack.entries.filter(e=>e.load==="on-demand"&&kinds.includes(e.kind)&&knowledgeApplicable(e,role,languages));
   const assigned=items.filter(e=>saved.includes(e.id));
-  return '<section class="team-assignment"><div class="between"><strong>'+title+' · '+assigned.length+'</strong><button data-assignment-open="'+title+'" aria-label="Assign '+title+'">+</button></div>'+
-   assigned.map(e=>'<div class="team-assignment-row"><span title="'+esc(e.path)+'">'+esc(knowledgeDisplayName(e))+'</span><small>Direct</small></div>').join("")+
-   (!assigned.length?'<p class="team-note">No assignments.</p>':'')+
-   '<details data-assignment-picker="'+title+'" hidden><summary>Choose from library</summary>'+items.map(e=>'<label class="team-assignment-choice"><input type="checkbox" data-assignment-doc="'+esc(e.id)+'" '+(saved.includes(e.id)?'checked':'')+'><span title="'+esc(e.path)+'">'+esc(knowledgeDisplayName(e))+'</span></label>').join("")+
+  return '<section class="team-assignment"><div class="between"><strong>'+esc(title)+' · '+assigned.length+'</strong><button data-assignment-open="'+esc(title)+'" aria-label="Assign '+esc(title)+'">+</button></div>'+
+   assigned.map(e=>'<div class="team-assignment-row"><span title="'+esc(e.path)+'">'+esc(knowledgeDisplayName(e))+'</span><small>'+esc(e.status||"unknown")+'</small></div>').join("")+
+   (!assigned.length?'<p class="team-note">No direct assignments.</p>':'')+
+   '<details data-assignment-picker="'+esc(title)+'" hidden><summary>Choose from library</summary>'+items.map(e=>'<label class="team-assignment-choice"><input type="checkbox" data-assignment-doc="'+esc(e.id)+'" '+(saved.includes(e.id)?'checked':'')+'><span title="'+esc(e.path)+'">'+esc(knowledgeDisplayName(e))+' <small>· '+esc(e.status||"unknown")+'</small></span></label>').join("")+
    '<button data-assignment-done>Done</button></details></section>';
  };
- return '<section class="team-assignment"><strong>Knowledge</strong>'+inherited.map(e=>'<div class="team-assignment-row"><span>'+esc(knowledgeDisplayName(e))+'</span><small>'+(e.kind==="engineering"?"Workspace":"Role")+'</small></div>').join("")+'</section>'+
- group("Standards",["standards"])+group("Skills",["skills"])+group("References",["references","guides"])+
- '<section class="team-assignment"><strong>Source</strong><p class="team-note">'+esc(pack.id)+' · '+esc(pack.version)+' · '+esc(pack.status)+'</p><p class="team-note">Local file adapter · Preview only</p><button data-page="Engineering DNA">Open knowledge library</button></section>';
+ const languagePanel='<section class="team-assignment"><strong>Project languages</strong><p class="team-note">Select languages for this agent. Language-specific standards only apply to matching projects.</p>'+
+  (availableLanguages.length?availableLanguages.map(lang=>'<label class="team-assignment-choice"><input type="checkbox" data-agent-language="'+esc(lang)+'" '+(languages.includes(lang)?'checked':'')+'><span>'+esc(lang)+'</span></label>').join(""):'<p class="team-note">No language-specific documents.</p>')+'</section>';
+ return languagePanel+
+ '<section class="team-assignment"><strong>Automatic bootstrap · '+inherited.length+'</strong><p class="team-note">Engineering DNA, matching role and applicable standards. Draft entries remain provisional.</p>'+
+ inherited.map(e=>'<div class="team-assignment-row"><span title="'+esc(e.path)+'">'+esc(knowledgeDisplayName(e))+'</span><small>'+esc(e.status||"unknown")+'</small></div>').join("")+'</section>'+
+ group("Skills",["skills"])+group("References",["references","guides","profiles","lesson"])+
+ '<section class="team-assignment"><strong>Source</strong><p class="team-note">'+esc(pack.id)+' · '+esc(pack.version)+' · '+esc(pack.status)+'</p><p class="team-note">Role and language applicability from manifest.json</p><button data-page="Engineering DNA">Open knowledge library</button></section>';
 }
 
 export function renderTeam(ctx:ViewContext):string {
