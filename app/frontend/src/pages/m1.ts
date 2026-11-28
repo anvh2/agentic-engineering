@@ -42,7 +42,10 @@ Independent code review</textarea></label>
     ${report?`<div class="line"><strong>${val(report.state)}</strong><p>${val(report.error??"")}</p>
       <p style="white-space:pre-wrap;overflow-wrap:anywhere">${val(report.finalText)}</p>
       <small>${usage}</small>
-      <small style="display:block;overflow-wrap:anywhere">Evidence: ${val(report.evidencePath)} · SHA-256 ${val(report.evidenceSha256)}</small></div>`:""}
+      <small style="display:block;overflow-wrap:anywhere">Native events: ${val(report.evidencePath)} · SHA-256 ${val(report.evidenceSha256)}</small>
+      <small style="display:block;overflow-wrap:anywhere">Git head: ${val(report.gitHead??"unknown")} · patch: ${val(report.diffPath??"unavailable")} · SHA-256 ${val(report.diffSha256??"")}</small>
+      ${report.gitStatus?`<details><summary>Worktree changes</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere">${val(report.gitStatus)}</pre></details>`:""}
+      ${report.gitEvidenceError?`<p role="status">Git evidence unavailable: ${val(report.gitEvidenceError)}</p>`:""}</div>`:""}
    </article>`;
  }).join("");
  const tasks=snapshot.objective.tasks.map(task=>`<article class="line">
