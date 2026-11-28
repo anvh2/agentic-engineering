@@ -56,3 +56,39 @@
 .wk-document hr{margin:24px 0}
 .wk-shell button,.wk-option{transition:background-color 120ms ease,color 120ms ease}
 @media(prefers-reduced-motion:reduce){.wk-shell button,.wk-option{transition:none}}
+
+/* Playground V4: compact document and progressive disclosure. */
+.wk-detail{transition:grid-template-columns 160ms ease}
+.wk-detail.wk-detail-collapsed{grid-template-columns:minmax(0,1fr) 0px}
+.wk-detail-collapsed>aside.wk-properties{visibility:hidden;padding:0;border:0}
+.wk-document-inner{max-width:740px;margin:0 auto}
+.wk-breadcrumb-separator{opacity:.5}
+.wk-shell input.wk-title:not([type=hidden]){font-size:22px;font-weight:500;letter-spacing:-.02em}
+.wk-document textarea,.wk-document .wk-title{transition:background-color 120ms ease}
+.wk-document textarea:hover,.wk-document .wk-title:hover{background:#1b1b1e}
+.wk-shell .wk-select{padding:5px 6px;gap:8px}
+.wk-select>span:last-child{opacity:0;transition:opacity 120ms}
+.wk-select:hover>span:last-child,.wk-select:focus-visible>span:last-child,.wk-select[data-state=open]>span:last-child{opacity:1}
+.wk-property .wk-avatar{width:19px;height:19px;flex-basis:19px;font-size:10px}
+.wk-activity-tabs{gap:16px;border-bottom:1px solid #29292d;margin:8px 0 18px}
+.wk-shell .wk-activity-tabs button{padding:6px 0 9px;border-radius:0;border-bottom:2px solid transparent;background:transparent}
+.wk-shell .wk-activity-tabs button[aria-selected=true]{background:transparent;border-bottom-color:#b3b3bc;color:#eee}
+.wk-activity,.wk-message{position:relative;align-items:flex-start;margin-bottom:16px}
+.wk-message:not(:last-child):before{content:"";position:absolute;left:11px;top:27px;bottom:-12px;width:1px;background:#29292d}
+.wk-composer{display:block;padding:8px 10px;transition:border-color 120ms}
+.wk-composer:focus-within{border-color:#55555e}
+.wk-composer-actions{display:flex;align-items:center;margin-top:4px}
+.wk-composer .wk-mention-wrap textarea{min-height:28px}
+.wk-composer:focus-within .wk-mention-wrap textarea{min-height:48px}
+.wk-execution{display:block;padding:3px 0}
+.wk-execution summary,.wk-evidence summary{display:flex;align-items:center;gap:8px;list-style:none;padding:8px 0;cursor:pointer}
+.wk-execution summary::-webkit-details-marker,.wk-evidence summary::-webkit-details-marker{display:none}
+.wk-execution summary:hover,.wk-evidence summary:hover{color:#fff}
+.wk-agent-info{display:grid;gap:2px;flex:1;min-width:0}
+.wk-agent-info small{margin:0}
+.wk-disclosure{color:#85858e;flex-shrink:0;margin-left:auto;transition:transform 150ms ease}
+details[open]>summary>.wk-disclosure{transform:rotate(90deg)}
+.wk-execution-body{padding:8px 0 4px 32px;animation:wk-reveal 150ms ease-out}
+@keyframes wk-reveal{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:translateY(0)}}
+@media(max-width:850px){.wk-detail.wk-detail-collapsed{grid-template-columns:minmax(0,1fr)}.wk-detail-collapsed>aside.wk-properties{display:none}}
+@media(prefers-reduced-motion:reduce){.wk-detail,.wk-disclosure,.wk-composer,.wk-select>span:last-child{transition:none}.wk-execution-body{animation:none}}
