@@ -91,7 +91,7 @@ func BuildKnowledgeContext(req KnowledgeContextRequest)(KnowledgeContext,error){
 	eligible:=make([]KnowledgeEntry,0)
 	for _,e:=range pack.Entries{
 		if !knowledgeApplicable(e,req.Role,req.Languages){continue}
-		if e.Load=="bootstrap" || assigned[e.ID] {eligible=append(eligible,e)}
+		if e.Load=="bootstrap" || (e.Load=="on-demand" && assigned[e.ID]) {eligible=append(eligible,e)}
 	}
 	// Reject IDs absent from the source or not applicable to this role/language.
 	for _,id:=range req.Assigned{
