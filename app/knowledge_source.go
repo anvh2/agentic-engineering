@@ -25,6 +25,10 @@ type KnowledgeEntry struct {
  Path string `json:"path"`
  Kind string `json:"kind"`
  Load string `json:"load,omitempty"`
+ Status string `json:"status,omitempty"`
+ Roles []string `json:"roles,omitempty"`
+ Languages []string `json:"languages,omitempty"`
+ SHA256 string `json:"sha256,omitempty"`
  Bytes int64 `json:"bytes"`
  Tokens int64 `json:"tokens"`
 }
