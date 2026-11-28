@@ -24,8 +24,7 @@ type chatStream struct {
 	usage *TokenUsage
 }
 func(s *chatStream) Write(p []byte)(int,error){
-	for _,b:=range p{if b=='
-'{s.flush()}else{s.pending.WriteByte(b)}}
+	for _,b:=range p{if b=='\n'{s.flush()}else{s.pending.WriteByte(b)}}
 	return len(p),nil
 }
 func(s *chatStream) flush(){
