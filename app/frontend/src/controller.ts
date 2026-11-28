@@ -1,4 +1,5 @@
 import {profiles,conversation,sendAgentChat,stopAgentChat} from "./services/agent-chat";
+import {m1,createM1,runM1,cancelM1,refreshM1,postM1Message,verdictM1,restoreM1,subscribeM1Events} from "./services/m1-runtime";
 import {updateChatStream} from "./components/chat-view";
 import {executeIssue,explicitTargets,issueChat,stopIssue} from "./services/issue-chat";
 import { saveIssue,statuses,priorities,issues,boardContext,nextIssueKey,projectPrefix,setProjectPrefix } from "./services/work-board";
@@ -86,6 +87,39 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     const el=event.target.closest<HTMLElement>("button,[data-objective],[data-project],[data-session]");
     if(!el)return;
     const data=el.dataset, objective=getObjective(detail), project=getProject(detail);
+    if("m1Create" in data){
+      const developer=value("m1-developer") as Agent,reviewer=value("m1-reviewer") as Agent;
+      await createM1({repository:value("m1-repo"),title:value("m1-title"),description:value("m1-description"),
+        acceptanceCriteria:value("m1-criteria"),developer,reviewer,
+        wakeBudget:Number(value("m1-wake"))||0,
+        tasks:value("m1-tasks").split(/\r?\n/).map(s=>s.trim()).filter(Boolean)});
+      render();return;
+    }
+    if(data.m1Run){
+      const participant=data.m1Run;
+      const prompt=value("m1-prompt-"+participant),knowledgeRoot=value("m1-knowledge");
+      if(!prompt){m1.error="Enter a task prompt first.";render();return;}
+      const job=runM1(participant,prompt,knowledgeRoot);
+      render();
+      await job;
+      render();return;
+    }
+    if("m1Stop" in data){await cancelM1();return;}
+    if("m1Refresh" in data){await refreshM1();render();return;}
+    if("m1Send" in data){
+      const body=value("m1-message");if(body){await postM1Message(value("m1-recipient"),body);render();}
+      return;
+    }
+    if(data.m1Verdict){
+      const task=m1.snapshot?.objective.tasks.find(t=>t.id===data.m1Verdict);
+      if(!task)return;
+      await verdictM1({taskId:task.id,expectedRevision:task.revision,
+        accepted:data.m1Accepted==="true",
+        verificationEvidence:value("m1-test-"+task.id),
+        reviewEvidence:value("m1-review-"+task.id),
+        directorNote:value("m1-note-"+task.id)});
+      render();return;
+    }
     if(data.projectSettings){page="Projects";detail=data.projectSettings;tab="General";render();return;}
     if(data.projectSettingTab&&project){tab=data.projectSettingTab;render();return;}
     if("projectSave" in data&&project){const name=value("project-name");if(!name)return;project.name=name;project.description=value("project-description");persist();render();return;}
@@ -311,6 +345,8 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     persist();render();
   });
 
+  subscribeM1Events(()=>{const count=root.querySelector<HTMLElement>("[data-m1-events]");if(count)count.textContent=String(m1.eventCount);});
   render();
+  void restoreM1().then(()=>{if(page==="M1")render();});
   void scanAgents().then(()=>{if((page==="Overview"||page==="Chat"||page==="Team"&&tab!=="Roles")&&!modal)render();});
 }
