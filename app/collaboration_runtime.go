@@ -125,6 +125,11 @@ func (m *M1Runtime) CreateM1Objective(req M1CreateRequest) (M1Objective, error) 
 		len(req.Tasks) == 0 || len(req.Tasks) > 20 || req.WakeBudget < 0 || req.WakeBudget > 20 {
 		return M1Objective{}, errors.New("title, acceptance criteria, 1–20 tasks and bounded wake budget required")
 	}
+	for _, task := range req.Tasks {
+		if strings.TrimSpace(task) == "" {
+			return M1Objective{}, errors.New("task titles must not be empty")
+		}
+	}
 	repository, err := m1GitRoot(ctx, req.Repository)
 	if err != nil {
 		return M1Objective{}, err
@@ -146,9 +151,6 @@ func (m *M1Runtime) CreateM1Objective(req M1CreateRequest) (M1Objective, error) 
 	}
 	tasks := make([]core.TaskInput, 0, len(req.Tasks))
 	for _, task := range req.Tasks {
-		if strings.TrimSpace(task) == "" {
-			return M1Objective{}, errors.New("task titles must not be empty")
-		}
 		tasks = append(tasks, core.TaskInput{Title: task})
 	}
 	project, err := r.Service().CreateProject(ctx, filepath.Base(repository), repository)
@@ -247,6 +249,16 @@ func (m *M1Runtime) RunM1Turn(req M1RunRequest) (collaboration.TurnReport, error
 	if knowledge.Version != "1.0.0" {
 		return collaboration.TurnReport{}, fmt.Errorf("M1 is pinned to engineering-knowledge 1.0.0, found %s", knowledge.Version)
 	}
+	peers, err := r.Service().ListParticipantRecords(m.ctx, p.ObjectiveID)
+	if err != nil {
+		return collaboration.TurnReport{}, err
+	}
+	var peerPaths strings.Builder
+	for _, peer := range peers {
+		if peer.ID != p.ID {
+			fmt.Fprintf(&peerPaths, "Peer %s (%s) worktree (read-only): %s\\n", peer.Handle, peer.Role, peer.Workdir)
+		}
+	}
 	instructions := fmt.Sprintf(
 		"You are the %s agent (%s) in a human-directed engineering objective. "+
 			"Use the authenticated agentic_engineering MCP tools to read your objective, claim and update tasks, "+
@@ -256,7 +268,7 @@ func (m *M1Runtime) RunM1Turn(req M1RunRequest) (collaboration.TurnReport, error
 			"Document status 'draft' remains provisional; approved rules remain binding.\n%s\n"+
 			"On-demand references (read only when relevant): %s\n%s",
 		p.Role, p.Handle, knowledge.Version, knowledge.Status, knowledge.Revision,
-		knowledge.Bootstrap, knowledge.Directory, knowledge.Index,
+		knowledge.Bootstrap, knowledge.Directory, knowledge.Index, peerPaths.String(),
 	)
 	prompt := req.Prompt
 	if knowledge.Directory != "" {
