@@ -40,11 +40,11 @@ function knowledgePreview(agent:{id:string;name:string;role:string;harness:strin
  const onDemand=entries.filter(e=>available.has(e.id));
  const edge=(d:string)=>'<path d="'+d+'" stroke="var(--subtle)" opacity=".65" stroke-width="1.3" fill="none"/>';
  const graph='<div class="overflow"><svg role="img" aria-label="Knowledge execution evidence" viewBox="0 0 650 350" style="width:100%;min-width:470px;border:1px solid var(--edge);border-radius:7px">'
-  +node(210,15,230,65,agent.name,agent.role+" · "+agent.harness,fill.agent,"agent")
-  +edge("M325 80V110")+node(170,110,310,65,"Bootstrap context",boot.length+" injected documents",boot.length?fill.bootstrap:"var(--raised)","bootstrap")
+  +node(210,15,230,agent.name,agent.role+" · "+agent.harness,fill.agent,"agent")
+  +edge("M325 80V110")+node(170,110,310,"Bootstrap context",boot.length+" injected documents",boot.length?fill.bootstrap:"var(--raised)","bootstrap")
   +edge("M325 175V205H170V220 M325 205H480V220")
-  +node(15,220,295,65,agent.harness==="Claude"?"Claude Code":"Codex CLI",phase,fill.harness,"harness")
-  +node(335,220,300,65,"On-demand knowledge",onDemand.length+" available · reads not verified",onDemand.length?fill.onDemand:"var(--raised)","onDemand")
+  +node(15,220,295,agent.harness==="Claude"?"Claude Code":"Codex CLI",phase,fill.harness,"harness")
+  +node(335,220,300,"On-demand knowledge",onDemand.length+" available · reads not verified",onDemand.length?fill.onDemand:"var(--raised)","onDemand")
   +edge("M162 285V310H325V320 M485 285V310H325V320")
   +'<text x="325" y="340" font-size="12" text-anchor="middle" fill="var(--subtle)">'+esc(run?"Execution evidence captured":"No execution has been recorded")+'</text></svg></div>';
  const timeline=events.length?'<div class="overflow"><table><thead><tr><th>Time</th><th>Event</th><th>Document</th><th>Detail</th></tr></thead><tbody>'+events.map(e=>
