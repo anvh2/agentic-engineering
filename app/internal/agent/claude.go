@@ -34,8 +34,7 @@ func ClaudeArgs(spec TurnSpec, mcpConfigPath string) ([]string, error) {
 		"mcp__agentic_engineering__read_messages",
 		"mcp__agentic_engineering__get_objective",
 		"mcp__agentic_engineering__claim_task",
-		"mcp__agentic_engineering__update_task",
-		"--permission-mode", "default"}
+		"mcp__agentic_engineering__update_task",}
 	if spec.Model != "" {
 		args = append(args, "--model", spec.Model)
 	}
