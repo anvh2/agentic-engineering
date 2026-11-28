@@ -10,7 +10,7 @@ import type { Agent } from "./types";
 import type { ViewContext } from "./view-context";
 import { demoStore } from "./services/demo-store";
 import { renderLayout } from "./components/layout";
-import { syncKnowledge,loadKnowledgeDirectory,readKnowledgeEntry,knowledgeForAgent } from "./services/knowledge-source";
+import { syncKnowledge,listKnowledgeRefs,importKnowledgeJSON,readKnowledgeEntry,knowledgeForAgent } from "./services/knowledge-source";
 export function mountController(root: HTMLElement, ctx: ViewContext) {
   mountMentions(root);
   const {state,nav,getObjective,getProject}=ctx;
@@ -107,24 +107,47 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
       if(consoles[profile.harness as Agent].running){window.alert("Harness already running");return;}
       page="Chat";detail="agent:"+id;tab="";render();return;
     }
-    if("knowledgeSync" in data || "knowledgeLocal" in data){
+    if(data.knowledgeImportMode){
+      const mode=data.knowledgeImportMode;
+      root.querySelectorAll<HTMLElement>("[data-knowledge-pane]").forEach(p=>{p.hidden=p.dataset.knowledgePane!==mode});
+      root.querySelectorAll<HTMLButtonElement>("[data-knowledge-import-mode]").forEach(btn=>btn.setAttribute("aria-pressed",String(btn.dataset.knowledgeImportMode===mode)));
+      return;
+    }
+    if("knowledgeRefs" in data){
       const status=root.querySelector<HTMLElement>("[data-knowledge-source-status]");
-      if(status)status.textContent="Reading knowledge source...";
-      const ref=value("knowledge-github-ref")||"main";
-      const repository=value("knowledge-github-repository");
-      const manifest=value("knowledge-github-manifest")||"manifest.json";
-      const directory=value("knowledge-local-path");
+      const repository=value("knowledge-github-url");
+      if(status)status.textContent="Discovering GitHub branches and tags...";
       try{
-        const pack="knowledgeSync" in data?await syncKnowledge(ref,repository,manifest):await loadKnowledgeDirectory(directory);
+        const refs=await listKnowledgeRefs(repository);
+        const choice=root.querySelector<HTMLSelectElement>("#knowledge-discovered-ref");
+        if(choice){
+          choice.replaceChildren();
+          const original=document.createElement("option");original.value="";original.textContent="Use ref from URL (default main)";choice.add(original);
+          for(const ref of refs){const opt=document.createElement("option");opt.value=ref.name;opt.textContent=ref.kind+" · "+ref.name;choice.add(opt);}
+          choice.dataset.forUrl=repository;
+          choice.hidden=false;
+        }
+        if(status)status.textContent=refs.length+" branches/tags found. Choose a ref or use the ref from the URL.";
+      }catch(e){if(status)status.textContent=String(e instanceof Error?e.message:e);}
+      return;
+    }
+    if("knowledgeSync" in data || "knowledgeJson" in data){
+      const status=root.querySelector<HTMLElement>("[data-knowledge-source-status]");
+      const isJSON="knowledgeJson" in data;
+      const url=value("knowledge-github-url");
+      const selected=root.querySelector<HTMLSelectElement>("#knowledge-discovered-ref");
+      const selectedRef=selected?.dataset.forUrl===url?selected.value:"";
+      const json=value("knowledge-json-input");
+      if(status)status.textContent=isJSON?"Validating JSON knowledge pack...":"Syncing GitHub knowledge pack...";
+      try{
+        const pack=isJSON?await importKnowledgeJSON(json):await syncKnowledge(url,selectedRef);
         state.knowledgePack=pack;
         const valid=new Set(pack.entries.map(e=>e.id));
         state.agentKnowledge=Object.fromEntries(Object.entries(state.agentKnowledge??{}).map(([agent,ids])=>[agent,ids.filter(id=>valid.has(id))]));
         persist();render();
         const output=root.querySelector<HTMLElement>("[data-knowledge-source-status]");
-        if(output)output.textContent=pack.entries.length+" documents linked from "+pack.id+" v"+pack.version;
-      }catch(e){
-        if(status)status.textContent=String(e instanceof Error?e.message:e);
-      }
+        if(output)output.textContent=pack.entries.length+" documents imported from "+pack.id+" v"+pack.version;
+      }catch(e){if(status)status.textContent=String(e instanceof Error?e.message:e);}
       return;
     }
     if(data.knowledgeRead){
