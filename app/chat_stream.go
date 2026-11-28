@@ -73,9 +73,7 @@ func(s *chatStream) flush(){
 			if s.answer.Len()==0{add(e.Result)}
 		}
 	}else{
-		if e.Type=="item.completed"&&e.Item.Type=="agent_message"{if s.answer.Len()>0{add("
-
-")};add(e.Item.Text)}
+		if e.Type=="item.completed"&&e.Item.Type=="agent_message"{if s.answer.Len()>0{add("\n\n")};add(e.Item.Text)}
 		if e.Type=="thread.started"{activity("Codex session initialized")}
 		if e.Type=="turn.started"{activity("Codex turn started")}
 		if strings.HasPrefix(e.Type,"item.")&&e.Item.Type!=""&&e.Item.Type!="agent_message"{activity(strings.ReplaceAll(e.Item.Type,"_"," "))}
