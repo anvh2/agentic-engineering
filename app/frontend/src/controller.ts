@@ -27,9 +27,20 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
       const view=match?.[1]||"Graph",phase=Number(match?.[2]||0);
       const preview=root.querySelector<HTMLElement>("[data-knowledge-preview]");
       if(!preview){stopKnowledgePlayback();return;}
-      if(phase===6){if(!knowledgeCompletedAt)knowledgeCompletedAt=Date.now();if(Date.now()-knowledgeCompletedAt<8000)return;}
+      if(phase===6){
+        if(!knowledgeCompletedAt){
+          preview.querySelectorAll(".knowledge-flow-active,.knowledge-node-active").forEach(el=>{
+            el.classList.remove("knowledge-flow-active","knowledge-node-active");
+            if(el.hasAttribute("data-knowledge-edge"))el.setAttribute("stroke-dasharray","none");
+          });
+          const status=preview.querySelector("[data-knowledge-phase]");
+          if(status)status.textContent="Completed · 6/6";
+          knowledgeCompletedAt=Date.now();
+        }
+        if(Date.now()-knowledgeCompletedAt<8000)return;
+      }
       const next=(phase+1)%7;
-      knowledgeCompletedAt=next===6?Date.now():0;
+      knowledgeCompletedAt=0;
       const entries=JSON.parse(preview.dataset.knowledgeEntries||"[]") as Array<{phase:number;tokens:number;kind:string}>;
       const loaded=entries.filter(e=>e.phase<=next),total=loaded.reduce((sum,e)=>sum+e.tokens,0);
       tab="Knowledge "+view+" "+next;nav.tab=tab;
