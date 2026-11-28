@@ -1,6 +1,7 @@
 import type { ViewContext } from "../view-context";
 import { escapeHTML, pill, action, heading, panel, line } from "../components/primitives";
 import { agentNames, agentStatus, configuredPath } from "../services/agent-connection";
+import { knowledgeForAgent, knowledgeDisplayName, knowledgePhase } from "../services/knowledge-source";
 function renderHarnesses(ctx:ViewContext):string {
  const {state,nav,tabs,options}=ctx;
  if(nav.tab==="Roles")return heading("Team","Native harnesses and reusable role knowledge")+tabs(["Agents","Roles","Harnesses"])+`<div class="between space"><select id="role-select">${options(Object.keys(state.roles),nav.roleSelected)}</select>${action("+ New role",'data-open="role"')}</div>`+panel("Base knowledge",`<textarea id="role-knowledge" class="editor">${escapeHTML(state.roles[nav.roleSelected])}</textarea><div class="right">${action("Save role","data-save-role",true)}</div>`);
@@ -11,51 +12,57 @@ function renderHarnesses(ctx:ViewContext):string {
 }
 
 
-// Design preview only: these are illustrative events, not harness telemetry.
-function knowledgePreview(agent: {name:string;role:string;harness:string}, ctx:ViewContext):string {
+// Trace uses the connected local source manifest and this agent's assignments.
+// The playback is illustrative until native file-read events are connected.
+function knowledgePreview(agent:{id:string;name:string;role:string;harness:string},ctx:ViewContext):string{
  const esc=escapeHTML;
- const entries=[
-  {name:"Engineering DNA",kind:"DNA",phase:1,tokens:280,reason:"Workspace bootstrap"},
-  {name:agent.role,kind:"Role",phase:1,tokens:190,reason:"Assigned role"},
-  {name:"Repository context",kind:"Context",phase:2,tokens:240,reason:"Native discovery"},
-  {name:"Go Standard",kind:"Standard",phase:3,tokens:410,reason:"Go implementation"},
-  {name:"Messaging Standard",kind:"Standard",phase:3,tokens:360,reason:"Kafka consumer"},
-  {name:"Database Standard",kind:"Standard",phase:4,tokens:320,reason:"Persistence"},
-  {name:"Debugging",kind:"Skill",phase:5,tokens:480,reason:"Failed test"},
-  {name:"Testing Standard",kind:"Standard",phase:6,tokens:260,reason:"Verification"},
-  {name:"Code Review",kind:"Skill",phase:6,tokens:390,reason:"Review"},
-  {name:"TypeScript Standard",kind:"Standard",phase:99,tokens:500,reason:"Not relevant"}
- ];
+ const pack=ctx.state.knowledgePack;
+ const eligible=knowledgeForAgent(pack,agent.role,ctx.state.agentKnowledge?.[agent.id]??[]);
+ if(!pack)return panel("Knowledge trace",'<p class="team-note">Connect engineering-knowledge to see the files selected for this agent.</p><button data-page="Engineering DNA">Connect knowledge source</button>');
+ const entries=eligible.map(e=>({
+  id:e.id,name:knowledgeDisplayName(e),kind:e.kind==="engineering"?"DNA":e.kind==="roles"?"Role":e.kind==="skills"?"Skill":e.kind==="standards"?"Standard":"Reference",
+  phase:knowledgePhase(e),tokens:e.tokens,reason:e.kind==="engineering"?"Workspace":e.kind==="roles"?"Role":"Direct assignment"
+ }));
  const phases=["Waiting","Bootstrap","Repository discovery","Planning","Implementation","Debugging","Verification"];
  const match=/^Knowledge (Graph|Timeline|Context) ([0-6])$/.exec(ctx.nav.tab);
- const view=match?.[1]||"Graph", step=Number(match?.[2]||0);
- const loaded=entries.filter(e=>e.phase<=step),total=loaded.reduce((n,e)=>n+e.tokens,0);
+ const view=match?.[1]||"Graph",step=Number(match?.[2]||0);
+ const loaded=entries.filter(e=>e.phase<=step);
+ const total=loaded.reduce((sum,e)=>sum+e.tokens,0);
  const motion='<style>@keyframes knowledge-flow{from{stroke-dasharray:5 7;stroke-dashoffset:24}to{stroke-dasharray:5 7;stroke-dashoffset:0}}@keyframes knowledge-node{from{opacity:.45}to{opacity:1}}.knowledge-flow-active{animation:knowledge-flow .65s linear 2}.knowledge-node-active{animation:knowledge-node .65s ease-out}[data-knowledge-node],[data-knowledge-edge]{transition:stroke .35s ease,fill .35s ease}[data-knowledge-bar]{transition:width .4s ease}@media(prefers-reduced-motion:reduce){.knowledge-flow-active,.knowledge-node-active{animation:none}}</style>';
- const graph='<div class="overflow"><svg role="img" aria-label="Illustrative knowledge flow" viewBox="0 0 660 440" style="width:100%;min-width:460px;display:block;background:radial-gradient(var(--edge) 1px,transparent 1px);background-size:15px 15px;border:1px solid var(--edge);border-radius:7px"><text x="10" y="17" fill="var(--subtle)" font-size="10">FOUNDATION &amp; CONTEXT</text><text x="460" y="17" fill="var(--subtle)" font-size="10">STANDARDS &amp; SKILLS</text>'+entries.map((e,i)=>{
- const left=i<5,x=left?10:460,y=30+(i%5)*72,active=e.phase<=step;
- return '<path data-knowledge-edge="'+e.phase+'" class="'+(active&&e.phase===step?'knowledge-flow-active':'')+'" d="M'+(left?200:460)+' '+(y+25)+' C'+(left?230:430)+' '+(y+25)+','+(left?230:430)+' 180,'+(left?255:405)+' 180" fill="none" stroke="'+(active?'#79a98e':'var(--edge)')+'" stroke-dasharray="'+(active?'none':'4 4')+'"/>';
- }).join("")+'<rect x="255" y="142" width="150" height="76" rx="7" fill="var(--raised)" stroke="var(--subtle)"/><text x="330" y="171" text-anchor="middle" fill="var(--ink)" font-size="14">'+esc(agent.name)+'</text><text x="330" y="191" text-anchor="middle" fill="var(--subtle)" font-size="11">'+esc(agent.role)+'</text>'+entries.map((e,i)=>{
- const x=i<5?10:460,y=30+(i%5)*72,active=e.phase<=step;
- return '<rect data-knowledge-node="'+e.phase+'" class="'+(active&&e.phase===step?'knowledge-node-active':'')+'" x="'+x+'" y="'+y+'" width="190" height="50" rx="6" fill="'+(active?'#25332d':'var(--raised)')+'" stroke="'+(active?'#79a98e':'var(--edge)')+'"/><text x="'+(x+10)+'" y="'+(y+19)+'" fill="var(--ink)" font-size="12">'+esc(e.name)+'</text><text data-knowledge-label="'+e.phase+'" data-tokens="'+e.tokens+'" x="'+(x+10)+'" y="'+(y+36)+'" fill="var(--subtle)" font-size="10">'+(active?'Loaded · '+e.tokens+' tokens':e.phase===99?(step===6?'Skipped · Not relevant':'Not selected'):'Available')+'</text>';
- }).join("")+'<path d="M330 218V350" stroke="var(--subtle)" stroke-dasharray="3 5"/><rect x="255" y="350" width="150" height="58" rx="7" fill="var(--raised)" stroke="var(--edge)"/><text x="330" y="371" text-anchor="middle" fill="var(--subtle)" font-size="11">Knowledge context</text><text x="330" y="391" text-anchor="middle" fill="var(--ink)" font-size="13" data-knowledge-total-svg>'+total.toLocaleString()+' est. tokens</text></svg></div>';
- const timeline='<div class="overflow"><table><thead><tr><th>Phase</th><th>Knowledge</th><th>Trigger</th><th>Status</th></tr></thead><tbody>'+entries.map(e=>'<tr><td>'+ (e.phase===99?'—':esc(phases[e.phase]))+'</td><td>'+esc(e.name)+'</td><td>'+esc(e.reason)+'</td><td data-knowledge-status="'+e.phase+'">'+(e.phase<=step?'Loaded':e.phase===99?(step===6?'Skipped · Not relevant':'Not selected'):'Available')+'</td></tr>').join("")+'</tbody></table></div>';
- const usage=["DNA","Role","Context","Standard","Skill"].map(k=>{const n=loaded.filter(e=>e.kind===k).reduce((sum,e)=>sum+e.tokens,0);return line(esc(k),'<span data-knowledge-category="'+k+'">'+n.toLocaleString()+' tokens</span>')+'<div class="progress"><i data-knowledge-bar="'+k+'" style="width:'+(total?100*n/total:0)+'%"></i></div>';}).join("");
- return '<div data-knowledge-preview data-knowledge-entries="'+esc(JSON.stringify(entries))+'">'+motion+'<section class="panel"><div class="between"><h3>Knowledge trace</h3><small class="muted" title="Illustrative playback, not live runtime telemetry">Preview</small></div><div class="chips" role="group" aria-label="Knowledge view">'+["Graph","Timeline","Context"].map(v=>'<button data-tab="Knowledge '+v+' '+step+'" aria-pressed="'+(v===view)+'" style="padding:5px 10px;'+(v===view?'background:var(--raised);':'')+'">'+v+'</button>').join("")+'</div><div class="between space" style="flex-wrap:wrap;gap:8px"><span data-knowledge-phase>'+esc(phases[step])+'</span><span class="muted"><span data-knowledge-count>'+loaded.length+" / "+entries.length+'</span> loaded · <span title="Estimated cumulative document tokens, not actual context usage or billed tokens"><span data-knowledge-total>'+total.toLocaleString()+'</span> est. tokens</span></span></div>'+(view==="Graph"?graph:view==="Timeline"?timeline:usage)+'</section></div>';
-
+ const left=entries.filter(e=>e.kind!=="Standard"),right=entries.filter(e=>e.kind==="Standard");
+ const height=Math.max(440,Math.max(left.length,right.length)*62+80);
+ const cy=Math.round(height/2);
+ const layout=[...left.map((e,i)=>({e,x:10,y:40+i*62,side:"left"})),...right.map((e,i)=>({e,x:460,y:40+i*62,side:"right"}))];
+ const graph='<div class="overflow"><svg role="img" aria-label="Selected engineering knowledge flow" viewBox="0 0 660 '+height+'" style="width:100%;min-width:460px;display:block;background:radial-gradient(var(--edge) 1px,transparent 1px);background-size:15px 15px;border:1px solid var(--edge);border-radius:7px"><text x="10" y="17" fill="var(--subtle)" font-size="10">FOUNDATION, SKILLS &amp; REFERENCES</text><text x="460" y="17" fill="var(--subtle)" font-size="10">STANDARDS</text>'+
+ layout.map(({e,x,y,side})=>{const active=e.phase<=step;const ex=side==="left"?255:405;return '<path data-knowledge-edge="'+e.phase+'" class="'+(active&&e.phase===step?'knowledge-flow-active':'')+'" d="M'+(side==="left"?x+190:x)+' '+(y+25)+' C'+(side==="left"?230:430)+' '+(y+25)+','+(side==="left"?230:430)+' '+cy+','+ex+' '+cy+'" fill="none" stroke="'+(active?'#79a98e':'var(--edge)')+'" stroke-dasharray="'+(active?'none':'4 4')+'"/>';}).join("")+
+ '<rect x="255" y="'+(cy-38)+'" width="150" height="76" rx="7" fill="var(--raised)" stroke="var(--subtle)"/><text x="330" y="'+(cy-8)+'" text-anchor="middle" fill="var(--ink)" font-size="14">'+esc(agent.name)+'</text><text x="330" y="'+(cy+12)+'" text-anchor="middle" fill="var(--subtle)" font-size="11">'+esc(agent.role)+'</text>'+
+ layout.map(({e,x,y})=>{const active=e.phase<=step;return '<rect data-knowledge-node="'+e.phase+'" class="'+(active&&e.phase===step?'knowledge-node-active':'')+'" x="'+x+'" y="'+y+'" width="190" height="50" rx="6" fill="'+(active?'#25332d':'var(--raised)')+'" stroke="'+(active?'#79a98e':'var(--edge)')+'"/><text x="'+(x+10)+'" y="'+(y+19)+'" fill="var(--ink)" font-size="12">'+esc(e.name)+'</text><text data-knowledge-label="'+e.phase+'" data-tokens="'+e.tokens+'" x="'+(x+10)+'" y="'+(y+36)+'" fill="var(--subtle)" font-size="10">'+(active?'Loaded · '+e.tokens+' est. tokens':'Available')+'</text>';}).join("")+
+ '<path d="M330 '+(cy+38)+'V'+(cy+83)+'" stroke="var(--subtle)" stroke-dasharray="3 5"/><rect x="255" y="'+(cy+83)+'" width="150" height="58" rx="7" fill="var(--raised)" stroke="var(--edge)"/><text x="330" y="'+(cy+105)+'" text-anchor="middle" fill="var(--subtle)" font-size="11">Knowledge context</text><text x="330" y="'+(cy+125)+'" text-anchor="middle" fill="var(--ink)" font-size="13" data-knowledge-total-svg>'+total.toLocaleString()+' est. tokens</text></svg></div>';
+ const timeline='<div class="overflow"><table><thead><tr><th>Phase</th><th>Knowledge</th><th>Source</th><th>Status</th></tr></thead><tbody>'+entries.map(e=>'<tr><td>'+esc(phases[e.phase])+'</td><td>'+esc(e.name)+'</td><td>'+esc(e.reason)+'</td><td data-knowledge-status="'+e.phase+'">'+(e.phase<=step?'Loaded':'Available')+'</td></tr>').join("")+'</tbody></table></div>';
+ const usage=["DNA","Role","Standard","Skill","Reference"].map(k=>{const n=loaded.filter(e=>e.kind===k).reduce((sum,e)=>sum+e.tokens,0);return line(esc(k),'<span data-knowledge-category="'+k+'">'+n.toLocaleString()+' tokens</span>')+'<div class="progress"><i data-knowledge-bar="'+k+'" style="width:'+(total?100*n/total:0)+'%"></i></div>';}).join("");
+ return '<div data-knowledge-preview data-knowledge-entries="'+esc(JSON.stringify(entries))+'">'+motion+'<section class="panel"><div class="between"><h3>Knowledge trace</h3><small class="muted" title="Selected files from '+esc(pack.id)+' '+esc(pack.version)+'; playback is illustrative, not native read telemetry">Preview</small></div><div class="chips" role="group" aria-label="Knowledge view">'+["Graph","Timeline","Context"].map(v=>'<button data-tab="Knowledge '+v+' '+step+'" aria-pressed="'+(v===view)+'" style="padding:5px 10px;'+(v===view?'background:var(--raised);':'')+'">'+v+'</button>').join("")+'</div><div class="between space" style="flex-wrap:wrap;gap:8px"><span data-knowledge-phase>'+esc(phases[step])+'</span><span class="muted"><span data-knowledge-count>'+loaded.length+" / "+entries.length+'</span> loaded · <span title="Size-derived estimate (bytes / 4); not actual model token usage"><span data-knowledge-total>'+total.toLocaleString()+'</span> est. tokens</span></span></div>'+(view==="Graph"?graph:view==="Timeline"?timeline:usage)+'</section></div>';
 }
 
-// Preview assignments reference the existing library; no runtime injection.
-function assignmentPanel(ctx:ViewContext, id:string):string {
+// Agents refer to document IDs, not copied skill or standard contents.
+function assignmentPanel(ctx:ViewContext,id:string):string{
  const esc=escapeHTML;
+ const pack=ctx.state.knowledgePack;
+ if(!pack)return '<section class="team-assignment"><strong>Knowledge</strong><p class="team-note">No source connected.</p><button data-page="Engineering DNA">Connect source</button></section>';
  const saved=ctx.state.agentKnowledge?.[id]??[];
- const docs=Object.keys(ctx.state.knowledge);
- const skills=docs.filter(k=>/SKILL\.md$/i.test(k));
- const standards=docs.filter(k=>!skills.includes(k));
- const group=(title:string,items:string[])=>{
- const assigned=items.filter(k=>saved.includes(k));
- return '<section class="team-assignment"><div class="between"><strong>'+title+' · '+assigned.length+'</strong><button data-assignment-open="'+title+'" aria-label="Assign '+title+'">+</button></div>'+assigned.map(k=>'<div class="team-assignment-row"><span>'+esc(k)+'</span><small>Direct</small></div>').join("")+(!assigned.length?'<p class="team-note">No direct assignments.</p>':'')+'<details data-assignment-picker="'+title+'" hidden><summary>Choose from library</summary>'+items.map(k=>'<label class="team-assignment-choice"><input type="checkbox" data-assignment-doc="'+esc(k)+'" '+(saved.includes(k)?'checked':'')+'><span>'+esc(k)+'</span></label>').join("")+(!items.length?'<p class="team-note">No matching library entries yet.</p>':'')+'<button data-assignment-done>Done</button></details></section>';
+ const roleName=id==="alex"?"architect":id==="emma"?"developer":"reviewer";
+ const inherited=pack.entries.filter(e=>e.kind==="engineering"||e.kind==="roles"&&e.path.includes("/"+roleName+"/"));
+ const group=(title:string,kinds:string[])=>{
+  const items=pack.entries.filter(e=>kinds.includes(e.kind));
+  const assigned=items.filter(e=>saved.includes(e.id));
+  return '<section class="team-assignment"><div class="between"><strong>'+title+' · '+assigned.length+'</strong><button data-assignment-open="'+title+'" aria-label="Assign '+title+'">+</button></div>'+
+   assigned.map(e=>'<div class="team-assignment-row"><span title="'+esc(e.path)+'">'+esc(knowledgeDisplayName(e))+'</span><small>Direct</small></div>').join("")+
+   (!assigned.length?'<p class="team-note">No assignments.</p>':'')+
+   '<details data-assignment-picker="'+title+'" hidden><summary>Choose from library</summary>'+items.map(e=>'<label class="team-assignment-choice"><input type="checkbox" data-assignment-doc="'+esc(e.id)+'" '+(saved.includes(e.id)?'checked':'')+'><span title="'+esc(e.path)+'">'+esc(knowledgeDisplayName(e))+'</span></label>').join("")+
+   '<button data-assignment-done>Done</button></details></section>';
  };
- return '<section class="team-assignment"><strong>Knowledge</strong><div class="team-assignment-row"><span>Engineering DNA</span><small>Workspace</small></div></section>'+group("Standards",standards)+group("Skills",skills)+'<section class="team-assignment"><strong>Adapter</strong><p>Local files <small>· Planned</small></p><p class="team-note">Selective loading · Preview assignments</p><button data-page="Engineering DNA">Open knowledge library</button></section>';
+ return '<section class="team-assignment"><strong>Knowledge</strong>'+inherited.map(e=>'<div class="team-assignment-row"><span>'+esc(knowledgeDisplayName(e))+'</span><small>'+(e.kind==="engineering"?"Workspace":"Role")+'</small></div>').join("")+'</section>'+
+ group("Standards",["standards"])+group("Skills",["skills"])+group("References",["references","guides"])+
+ '<section class="team-assignment"><strong>Source</strong><p class="team-note">'+esc(pack.id)+' · '+esc(pack.version)+' · '+esc(pack.status)+'</p><p class="team-note">Local file adapter · Preview only</p><button data-page="Engineering DNA">Open knowledge library</button></section>';
 }
 
 export function renderTeam(ctx:ViewContext):string {
