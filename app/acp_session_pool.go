@@ -22,6 +22,8 @@ type acpSessionPool struct {
 	mu          sync.Mutex
 	sessions    map[string]*acpChatSession
 	idleTimeout time.Duration
+	starting map[string]bool
+	closed bool
 }
 
 type acpChatSession struct {
@@ -134,8 +136,16 @@ func startACPSession(ctx context.Context, name, nativePath, directory string) (_
 
 func (p *acpSessionPool) acquire(ctx context.Context, key, name, nativePath, directory string) (*acpChatSession, bool, error) {
 	var stale *acpChatSession
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return nil, false, errors.New("ACP pool closed")
+	}
 	if key != "" {
-		p.mu.Lock()
+		if p.starting[key] {
+			p.mu.Unlock()
+			return nil, false, errors.New("ACP conversation already starting")
+		}
 		if current := p.sessions[key]; current != nil {
 			select {
 			case <-current.conn.Done():
@@ -155,26 +165,35 @@ func (p *acpSessionPool) acquire(ctx context.Context, key, name, nativePath, dir
 				return current, true, nil
 			}
 		}
-		p.mu.Unlock()
+		if p.starting == nil {
+			p.starting = make(map[string]bool)
+		}
+		p.starting[key] = true
 	}
+	p.mu.Unlock()
 	if stale != nil {
 		stale.close()
 	}
 	session, err := startACPSession(ctx, name, nativePath, directory)
+	p.mu.Lock()
+	delete(p.starting, key)
 	if err != nil {
+		p.mu.Unlock()
 		return nil, false, err
+	}
+	if p.closed {
+		p.mu.Unlock()
+		session.close()
+		return nil, false, errors.New("ACP pool closed")
 	}
 	session.busy = true
 	if key != "" {
-		p.mu.Lock()
 		if p.sessions == nil {
 			p.sessions = make(map[string]*acpChatSession)
 		}
-		// HarnessConsole serializes turns per provider, so there is a single
-		// creator for a given conversation while the handshake is in progress.
 		p.sessions[key] = session
-		p.mu.Unlock()
 	}
+	p.mu.Unlock()
 	return session, false, nil
 }
 
@@ -211,6 +230,7 @@ func (p *acpSessionPool) release(key string, session *acpChatSession, healthy bo
 
 func (p *acpSessionPool) closeAll() {
 	p.mu.Lock()
+	p.closed = true
 	sessions := p.sessions
 	p.sessions = nil
 	for _, session := range sessions {
@@ -252,7 +272,10 @@ func (p *acpSessionPool) run(ctx context.Context, name, nativePath, directory, p
 		session.client.mu.Lock()
 		supported := false
 		for _, candidate := range session.client.commands {
-			if candidate.Name == command { supported = true; break }
+			if candidate.Name == command {
+				supported = true
+				break
+			}
 		}
 		session.client.mu.Unlock()
 		if !reused || !supported {
@@ -271,7 +294,9 @@ func (p *acpSessionPool) run(ctx context.Context, name, nativePath, directory, p
 	usage := session.client.usage
 	session.client.mu.Unlock()
 	result := ConsoleResult{Output: output, SessionID: string(session.id), SessionReused: reused, Commands: commands, ACPContext: usage}
-	if err == nil { result.ACPUsage = response.Usage }
+	if err == nil {
+		result.ACPUsage = response.Usage
+	}
 	if ctx.Err() != nil {
 		result.Error = "ACP prompt cancelled or timed out"
 	} else if err != nil {
