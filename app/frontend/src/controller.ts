@@ -13,6 +13,8 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
   mountMentions(root);
   const {state,nav,getObjective,getProject}=ctx;
   let {page,projectFilter,detail,tab,modal,roleSelected,docSelected,discussion,usageAgent}=nav;
+  let knowledgeTimer: number | undefined;
+  const stopKnowledgePlayback=()=>{if(knowledgeTimer!==undefined){window.clearInterval(knowledgeTimer);knowledgeTimer=undefined;}};
   const persist=()=>{try{demoStore.save(state)}catch{window.alert("Could not save demo data.");}};
   const render=()=>{Object.assign(nav,{page,projectFilter,detail,tab,modal,roleSelected,docSelected,discussion,usageAgent});renderLayout(root,ctx);docSelected=nav.docSelected;};
   subscribeChat(name=>{if(page==="Chat"||page==="Collaboration")updateChatStream(root,name,consoles[name].output,consoles[name].activity)});
@@ -26,6 +28,30 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     const el=event.target.closest<HTMLElement>("button,[data-objective],[data-project],[data-session]");
     if(!el)return;
     const data=el.dataset, objective=getObjective(detail), project=getProject(detail);
+    if("knowledgePause" in data){stopKnowledgePlayback();return;}
+    if("knowledgePlay" in data){
+      stopKnowledgePlayback();
+      if(page!=="Team"||!["alex","emma","noah"].includes(detail))return;
+      const agent=detail;
+      const view=/^Knowledge (Graph|Timeline|Context) [0-6]$/.exec(tab)?.[1]||"Graph";
+      const advance=(phase:number)=>{
+        const panel=root.querySelector(".team-view .team-profile");
+        const scrolls: Array<[Element,number,number]>=[];
+        for(let node:Element|null=panel;node;node=node.parentElement)scrolls.push([node,node.scrollTop,node.scrollLeft]);
+        const x=window.scrollX,y=window.scrollY;
+        tab="Knowledge "+view+" "+phase;render();
+        let node:Element|null=root.querySelector(".team-view .team-profile");
+        for(const [,top,left] of scrolls){if(!node)break;node.scrollTop=top;node.scrollLeft=left;node=node.parentElement;}
+        window.scrollTo(x,y);
+      };
+      let phase=0;advance(phase);
+      knowledgeTimer=window.setInterval(()=>{
+        if(page!=="Team"||detail!==agent||tab!=="Knowledge "+view+" "+phase){stopKnowledgePlayback();return;}
+        advance(++phase);if(phase===6)stopKnowledgePlayback();
+      },1100);
+      return;
+    }
+    if(data.page||data.tab||data.harness||"back" in data||data.switchProject)stopKnowledgePlayback();
     if("issueRepairRepo" in data){const ic=issueChat(detail);if(!ic||ic.running)return;const issue=issues().find(x=>x.id===ic.issueId&&x.project===ic.project);const project=getProject(ic.project);const repos=state.repos.filter(r=>project?.repos.includes(r.id));const repo=issue?.repository?repos.find(r=>r.name===issue.repository):repos.length===1?repos[0]:undefined;if(!repo)return;void browseRepository().then(dir=>{if(!dir)return;repo.path=dir;persist();ic.dir=dir;ic.error="Repository path updated. Retry the request.";render()}).catch(e=>{ic.error=String(e);render()});return;}
     if("issueRetry" in data){const ic=issueChat(detail);const issue=issues().find(x=>x.id===ic?.issueId&&x.project===projectFilter);const last=ic?.messages.filter(m=>m.author==="You").slice(-1)[0];if(ic&&issue&&last&&!ic.running)launch(issue,ic.agent,last.body);return;}
     if(data.issueChat){page="Chat";detail=data.issueChat;render();return;}
