@@ -4,7 +4,7 @@ export interface KnowledgeTraceEvent {
   inputTokens?:number; outputTokens?:number; cacheReadTokens?:number; cacheWriteTokens?:number;
 }
 export interface NativeTokenUsage {
-  provider:string; inputTokens:number; outputTokens:number;
+  provider:string; scope?:string; inputTokens:number; outputTokens:number;
   cacheReadTokens?:number; cacheWriteTokens?:number;
 }
 export interface NativeKnowledgeResult {
