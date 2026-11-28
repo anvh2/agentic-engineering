@@ -49,6 +49,7 @@ type M1Snapshot struct {
 	Objective core.ObjectiveView `json:"objective"`
 	Participants []core.ParticipantRecord `json:"participants"`
 	Messages []core.Message `json:"messages"`
+	Turns []core.TurnSummary `json:"turns"`
 }
 
 type M1RunRequest struct {
@@ -306,7 +307,11 @@ func (m *M1Runtime) GetM1Snapshot(objectiveID string) (M1Snapshot, error) {
 	if err != nil {
 		return M1Snapshot{}, err
 	}
-	return M1Snapshot{Objective: objective, Participants: participants, Messages: messages}, nil
+	turns, err := r.Service().ListTurns(m.ctx, objectiveID, 100)
+	if err != nil {
+		return M1Snapshot{}, err
+	}
+	return M1Snapshot{Objective: objective, Participants: participants, Messages: messages, Turns: turns}, nil
 }
 
 func (m *M1Runtime) PostM1Message(objectiveID, toHandle, body string) (core.Message, error) {
