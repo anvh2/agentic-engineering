@@ -1,6 +1,6 @@
 import type { KnowledgePack } from "./services/knowledge-source";
 export type Agent = "Claude" | "Codex";
-export interface Project { id: string; name: string; description: string; repos: string[]; knowledge: Record<string,string> }
+export interface Project { id: string; name: string; description: string; repos: string[]; defaultRepo?: string; knowledge: Record<string,string> }
 export interface Repository { id: string; name: string; path: string }
 export interface Task { text: string; done: boolean }
 export interface Objective { id: string; project: string; title: string; description: string; criteria: string; status: string; repos: string[]; assignments: Record<Agent,string>; tasks: Task[] }
