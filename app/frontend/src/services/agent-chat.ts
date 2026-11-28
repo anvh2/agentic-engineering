@@ -4,7 +4,7 @@ import {storeKnowledgeResult} from "./knowledge-trace";
 import {runPrompt,consoles,stopPrompt} from "./harness-console";
 export const profiles=(state:AppState)=>[...new Set(["alex","emma","noah",...Object.keys(state.agentProfiles??{})])].map(id=>({id,name:id[0].toUpperCase()+id.slice(1),handle:id,role:id==="alex"?"Architect":id==="emma"?"Developer":"Reviewer",harness:(id==="emma"?"Codex":"Claude") as Agent,model:"Default",...state.agentProfiles?.[id]}));
 type Message={author:string;body:string;blocks?:ChatBlock[]};
-export const conversations:Record<string,{messages:Message[];running:boolean;error:string;active?:{harness:Agent;name:string};cancelled?:boolean}>={};
+export const conversations:Record<string,{repositoryDir?:string;messages:Message[];running:boolean;error:string;active?:{harness:Agent;name:string};cancelled?:boolean}>={};
 export function conversation(id:string){return conversations[id]??=( {messages:[],running:false,error:""});}
 export async function sendAgentChat(state:AppState,id:string,prompt:string,update:()=>void){
  const c=conversation(id);if(c.running||!prompt.trim())return;
@@ -18,7 +18,7 @@ export async function sendAgentChat(state:AppState,id:string,prompt:string,updat
  if(c.cancelled)break;
  if(consoles[a.harness].running){c.error=a.name+": harness busy";continue;}
  c.active={harness:a.harness,name:a.name};
- const pending=runPrompt(a.harness,prompt,{request:{agentId:a.id,root:pack.root,role:a.role,languages:state.agentLanguages?.[a.id]??[],assigned:state.agentKnowledge?.[a.id]??[],task:prompt},model:a.model,author:a.name});
+ const pending=runPrompt(a.harness,prompt,{request:{repositoryDir:c.repositoryDir??"",agentId:a.id,root:pack.root,role:a.role,languages:state.agentLanguages?.[a.id]??[],assigned:state.agentKnowledge?.[a.id]??[],task:prompt},model:a.model,author:a.name});
  update();const r=await pending;c.active=undefined;
  if(r)storeKnowledgeResult(a.id,r);
  if(r?.error)c.error=a.name+": "+r.error;
