@@ -77,8 +77,7 @@ func TestChatStreamNativeUsage(t *testing.T){
 		{"Codex",`{"type":"turn.completed","usage":{"input_tokens":300,"output_tokens":45,"cached_input_tokens":250}}`,300,45,250},
 	}{
 		stream:=&chatStream{name:tc.name}
-		if _,err:=stream.Write([]byte(tc.line+"
-"));err!=nil{t.Fatal(err)}
+		if _,err:=stream.Write([]byte(tc.line+"\n"));err!=nil{t.Fatal(err)}
 		if stream.usage==nil||stream.usage.InputTokens!=tc.wantIn||stream.usage.OutputTokens!=tc.wantOut||stream.usage.CacheReadTokens!=tc.wantCache{t.Errorf("%s usage=%+v",tc.name,stream.usage)}
 	}
 }
