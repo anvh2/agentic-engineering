@@ -3,14 +3,14 @@ import {freshConversation,type ChatConversation,type ChatBlock} from "./chat-con
 import type { Agent } from "../types";
 import { agentStatus } from "./agent-connection";
 interface Result extends NativeKnowledgeResult {}
-interface ConsoleBridge { RunAgentContextTest(name:string,path:string,model:string,request:{agentId:string;root:string;role:string;languages:string[];assigned:string[];task:string},prompt:string):Promise<Result>; BrowseRepository():Promise<string>; CurrentRepository():Promise<string>; RunPrompt(name:string,path:string,dir:string,prompt:string):Promise<Result>; RunIssuePrompt(name:string,path:string,dir:string,key:string,prompt:string):Promise<Result>; StopPrompt(name:string):Promise<void>; OpenTerminal(name:string,path:string,dir:string):Promise<void> }
+interface ConsoleBridge { RunAgentContextTest(name:string,path:string,model:string,request:{repositoryDir?:string;agentId:string;root:string;role:string;languages:string[];assigned:string[];task:string},prompt:string):Promise<Result>; BrowseRepository():Promise<string>; CurrentRepository():Promise<string>; RunPrompt(name:string,path:string,dir:string,prompt:string):Promise<Result>; RunIssuePrompt(name:string,path:string,dir:string,key:string,prompt:string):Promise<Result>; StopPrompt(name:string):Promise<void>; OpenTerminal(name:string,path:string,dir:string):Promise<void> }
 const bridge=()=> (window as unknown as {go?:{main?:{HarnessConsole?:ConsoleBridge}}}).go?.main?.HarnessConsole;
 interface ConsoleState extends ChatConversation {dir:string;prompt:string;output:string;running:boolean;error:string;activity:string;blocks:ChatBlock[]}
 const fresh=():ConsoleState=>({...freshConversation(),dir:"",prompt:"",output:"",running:false,error:"",activity:"",blocks:[]});
 export const consoles:Record<Agent,ConsoleState>={Claude:fresh(),Codex:fresh()};
 export async function browseRepository(){return await bridge()?.BrowseRepository()||""}
 export async function currentRepository(){return await bridge()?.CurrentRepository()||""}
-export async function runPrompt(name:Agent,override?:string,context?:{request:{agentId:string;root:string;role:string;languages:string[];assigned:string[];task:string};model:string;author:string}){
+export async function runPrompt(name:Agent,override?:string,context?:{request:{repositoryDir?:string;agentId:string;root:string;role:string;languages:string[];assigned:string[];task:string};model:string;author:string}){
  const c=consoles[name];if(c.running||!(override??c.prompt).trim())return;
  const prompt=override??c.prompt;if(override===undefined){c.prompt="";c.messages.push({author:"You",body:prompt});}c.running=true;c.error="";c.output="";c.blocks=[];c.activity="Starting native CLI…";
  try{const b=bridge();if(!b)throw Error("Native desktop required");const r=context?await b.RunAgentContextTest(name,agentStatus(name).path,context.model,context.request,prompt):await b.RunPrompt(name,agentStatus(name).path,override===undefined?c.dir:"",prompt);c.output="";c.error=r.error;if(r.output&&override===undefined)c.messages.push({author:context?.author??name,body:r.output,blocks:structuredClone(c.blocks)});return r}catch(e){c.error=String(e);return {output:"",error:c.error}}finally{c.running=false;c.activity=""}
