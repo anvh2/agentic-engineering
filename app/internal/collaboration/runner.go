@@ -231,7 +231,7 @@ func (r *Runner) RunTurn(ctx context.Context, participantID string, trigger core
 	if gitSnapshotErr != nil {
 		report.GitEvidenceError = gitSnapshotErr.Error()
 	}
-	if result.Interrupted {
+	if result.Interrupted || ctx.Err() != nil {
 		report.State = "interrupted"
 		report.Error = "turn interrupted"
 	} else if err != nil {
