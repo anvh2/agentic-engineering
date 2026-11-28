@@ -24,6 +24,7 @@ type acpSessionPool struct {
 	idleTimeout time.Duration
 	starting map[string]bool
 	closed bool
+	pending sync.WaitGroup // every in-flight startup is joined on shutdown
 }
 
 type acpChatSession struct {
@@ -170,12 +171,14 @@ func (p *acpSessionPool) acquire(ctx context.Context, key, name, nativePath, dir
 		}
 		p.starting[key] = true
 	}
+	p.pending.Add(1)
 	p.mu.Unlock()
 	if stale != nil {
 		stale.close()
 	}
 	session, err := startACPSession(ctx, name, nativePath, directory)
 	p.mu.Lock()
+	defer p.pending.Done()
 	delete(p.starting, key)
 	if err != nil {
 		p.mu.Unlock()
@@ -242,6 +245,9 @@ func (p *acpSessionPool) closeAll() {
 	for _, session := range sessions {
 		session.close()
 	}
+	// Startup goroutines have observed the closed flag and terminated their
+	// newly spawned adapters before the pool can finish shutting down.
+	p.pending.Wait()
 }
 
 func (p *acpSessionPool) run(ctx context.Context, name, nativePath, directory, prompt, conversationKey, followUp string, stream *chatStream, onStart func(bool)) ConsoleResult {
