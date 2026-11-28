@@ -111,9 +111,11 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
       const status=root.querySelector<HTMLElement>("[data-knowledge-source-status]");
       if(status)status.textContent="Reading knowledge source...";
       const ref=value("knowledge-github-ref")||"main";
+      const repository=value("knowledge-github-repository");
+      const manifest=value("knowledge-github-manifest")||"manifest.json";
       const directory=value("knowledge-local-path");
       try{
-        const pack="knowledgeSync" in data?await syncKnowledge(ref):await loadKnowledgeDirectory(directory);
+        const pack="knowledgeSync" in data?await syncKnowledge(ref,repository,manifest):await loadKnowledgeDirectory(directory);
         state.knowledgePack=pack;
         const valid=new Set(pack.entries.map(e=>e.id));
         state.agentKnowledge=Object.fromEntries(Object.entries(state.agentKnowledge??{}).map(([agent,ids])=>[agent,ids.filter(id=>valid.has(id))]));
