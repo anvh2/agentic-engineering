@@ -9,8 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -382,9 +382,9 @@ func (h *HarnessConsole) runAgentContext(name, path, model, conversationKey stri
 	}
 	var followUp strings.Builder
 	if knowledge.Directory != "" {
-		fmt.Fprintf(&followUp, "Current on-demand directory: %s\\nAvailable document IDs and paths:\\n%s\\nPrevious temporary paths may have expired.\\n", knowledge.Directory, knowledge.Index)
+		fmt.Fprintf(&followUp, "Current on-demand directory: %s\nAvailable document IDs and paths:\n%s\nPrevious temporary paths may have expired.\n", knowledge.Directory, knowledge.Index)
 	}
-	followUp.WriteString("--- User request ---\\n" + prompt)
+	followUp.WriteString("--- User request ---\n" + prompt)
 	// Rotate the ACP session when the pack, bootstrap rules, role or assigned
 	// documents change. Task text and temporary file paths are excluded.
 	if conversationKey != "" {
