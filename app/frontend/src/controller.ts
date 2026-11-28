@@ -77,7 +77,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
   const startAssigned=(issue:import("./services/work-board").Issue)=>{if(issue.assignee==="Claude"||issue.assignee==="Codex")launch(issue,issue.assignee,"Implement this issue and report evidence.")};
   root.addEventListener("issue-start",((e:CustomEvent)=>{startAssigned(e.detail)}) as EventListener);
   const value=(id: string)=>document.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>("#"+id)?.value?.trim()||"";
-  root.addEventListener("click",(event)=>{
+  root.addEventListener("click",async (event)=>{
     if (!(event.target instanceof Element)) return;
     const el=event.target.closest<HTMLElement>("button,[data-objective],[data-project],[data-session]");
     if(!el)return;
