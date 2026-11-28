@@ -51,7 +51,7 @@ func TestNativeArgsScopedReadOnly(t *testing.T) {
 }
 
 func TestKnowledgeRelativePath(t *testing.T) {
-	for _, path := range []string{"../other.md", "/etc/passwd", ".git/config", `a.md`, ""} {
+	for _, path := range []string{"../other.md", "/etc/passwd", ".git/config", "a"+string(rune(92))+"b.md", ""} {
 		if _, err := safeKnowledgeRelativePath(path); err == nil {
 			t.Errorf("accepted unsafe path %q", path)
 		}
