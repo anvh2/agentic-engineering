@@ -246,14 +246,32 @@ func (p *acpSessionPool) run(ctx context.Context, name, nativePath, directory, p
 	if onStart != nil {
 		onStart(reused)
 	}
+	// Provider commands must be advertised and sent verbatim, without bootstrap.
+	if strings.HasPrefix(followUp, "/") {
+		command := strings.TrimPrefix(strings.Fields(followUp)[0], "/")
+		session.client.mu.Lock()
+		supported := false
+		for _, candidate := range session.client.commands {
+			if candidate.Name == command { supported = true; break }
+		}
+		session.client.mu.Unlock()
+		if !reused || !supported {
+			healthy = reused
+			return ConsoleResult{Error: "Command unavailable in current ACP session"}
+		}
+		prompt = followUp
+	}
 	response, err := session.conn.Prompt(ctx, acp.PromptRequest{
 		SessionId: session.id,
 		Prompt:    []acp.ContentBlock{acp.TextBlock(prompt)},
 	})
 	session.client.mu.Lock()
 	output := stream.answer.String()
+	commands := append([]acp.AvailableCommand{}, session.client.commands...)
+	usage := session.client.usage
 	session.client.mu.Unlock()
-	result := ConsoleResult{Output: output, SessionID: string(session.id), SessionReused: reused}
+	result := ConsoleResult{Output: output, SessionID: string(session.id), SessionReused: reused, Commands: commands, ACPContext: usage}
+	if err == nil { result.ACPUsage = response.Usage }
 	if ctx.Err() != nil {
 		result.Error = "ACP prompt cancelled or timed out"
 	} else if err != nil {

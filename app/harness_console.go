@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/anvh2/agentic-engineering/app/internal/discovery"
+	"github.com/coder/acp-go-sdk"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -32,6 +33,9 @@ type ConsoleResult struct {
 	KnowledgeEvents        []KnowledgeTraceEvent `json:"knowledgeEvents,omitempty"`
 	SessionID              string                `json:"sessionId,omitempty"`
 	SessionReused          bool                  `json:"sessionReused,omitempty"`
+	Commands []acp.AvailableCommand `json:"commands"`
+	ACPUsage *acp.Usage `json:"acpUsage,omitempty"`
+	ACPContext *acp.SessionUsageUpdate `json:"acpContext,omitempty"`
 }
 
 type HarnessConsole struct {
@@ -385,6 +389,7 @@ func (h *HarnessConsole) runAgentContext(name, path, model, conversationKey stri
 		fmt.Fprintf(&followUp, "Current on-demand directory: %s\nAvailable document IDs and paths:\n%s\nPrevious temporary paths may have expired.\n", knowledge.Directory, knowledge.Index)
 	}
 	followUp.WriteString("--- User request ---\n" + prompt)
+	if strings.HasPrefix(strings.TrimSpace(prompt), "/") { followUp.Reset(); followUp.WriteString(strings.TrimSpace(prompt)) }
 	// Rotate the ACP session when the pack, bootstrap rules, role or assigned
 	// documents change. Task text and temporary file paths are excluded.
 	if conversationKey != "" {

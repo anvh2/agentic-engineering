@@ -8,7 +8,7 @@ export interface NativeTokenUsage {
   cacheReadTokens?:number; cacheWriteTokens?:number;
 }
 export interface NativeKnowledgeResult {
-  output:string; error:string; runId?:string; estimatedContextTokens?:number;
+  output:string; error:string; sessionId?:string; sessionReused?:boolean; commands?:{name:string;description:string}[]; acpUsage?:{inputTokens:number;outputTokens:number;cachedReadTokens?:number;cachedWriteTokens?:number;totalTokens:number}; acpContext?:{used:number;size:number;cost?:{amount:number;currency:string}}; runId?:string; estimatedContextTokens?:number;
   usage?:NativeTokenUsage; knowledgeEvents?:KnowledgeTraceEvent[];
 }
 export interface KnowledgeRun {

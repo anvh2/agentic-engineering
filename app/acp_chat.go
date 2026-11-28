@@ -13,6 +13,8 @@ import (
 type desktopACPClient struct {
 	mu sync.Mutex
 	stream *chatStream
+	commands []acp.AvailableCommand
+	usage *acp.SessionUsageUpdate
 }
 
 func (c *desktopACPClient) RequestPermission(_ context.Context, _ acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
@@ -22,6 +24,12 @@ func (c *desktopACPClient) RequestPermission(_ context.Context, _ acp.RequestPer
 func (c *desktopACPClient) SessionUpdate(_ context.Context, n acp.SessionNotification) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if n.Update.AvailableCommandsUpdate != nil {
+		c.commands = n.Update.AvailableCommandsUpdate.AvailableCommands
+	}
+	if n.Update.UsageUpdate != nil {
+		c.usage = n.Update.UsageUpdate
+	}
 	if c.stream == nil {
 		return nil
 	}
