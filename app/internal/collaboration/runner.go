@@ -133,20 +133,19 @@ func (r *Runner) Close(ctx context.Context) error {
 		cancel()
 	}
 	r.mu.Unlock()
-	done := make(chan struct{})
-	go func() {
-		r.wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-done:
+	// The managed worker and all native turns must exit before SQLite closes.
+	// The desktop caller supplies a bounded lifecycle context, but returning
+	// before owned processes stop would leave a background writer on a closed DB.
+	r.wg.Wait()
+	if err := ctx.Err(); err != nil {
+		// Timeout was exceeded only after all goroutines joined. Continue
+		// closing resources and report the deadline to the caller.
+		_ = r.endpoint.Close(context.WithoutCancel(ctx))
+		_ = r.db.Close()
+		return err
 	}
 	err := r.endpoint.Close(ctx)
-	if closeErr := r.db.Close(); err == nil {
-		err = closeErr
-	}
+	if closeErr := r.db.Close(); err == nil { err = closeErr }
 	return err
 }
 
