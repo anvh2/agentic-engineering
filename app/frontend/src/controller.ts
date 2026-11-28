@@ -81,6 +81,19 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     const el=event.target.closest<HTMLElement>("button,[data-objective],[data-project],[data-session]");
     if(!el)return;
     const data=el.dataset, objective=getObjective(detail), project=getProject(detail);
+    if(data.assignmentOpen){
+      const picker=Array.from(root.querySelectorAll<HTMLDetailsElement>("[data-assignment-picker]")).find(p=>p.dataset.assignmentPicker===data.assignmentOpen);
+      if(picker){picker.hidden=!picker.hidden;picker.open=!picker.hidden;}return;
+    }
+    if("assignmentDone" in data){
+      if(page!=="Team"||!["alex","emma","noah"].includes(detail))return;
+      const picker=el.closest("details");if(!picker)return;
+      const choices=Array.from(picker.querySelectorAll<HTMLInputElement>("[data-assignment-doc]"));
+      const keys=new Set(choices.map(c=>c.dataset.assignmentDoc));
+      state.agentKnowledge??={};
+      state.agentKnowledge[detail]=[...new Set([...(state.agentKnowledge[detail]??[]).filter(k=>!keys.has(k)),...choices.filter(c=>c.checked).map(c=>c.dataset.assignmentDoc!).filter(k=>Object.hasOwn(state.knowledge,k))])];
+      persist();render();return;
+    }
     if("issueRepairRepo" in data){const ic=issueChat(detail);if(!ic||ic.running)return;const issue=issues().find(x=>x.id===ic.issueId&&x.project===ic.project);const project=getProject(ic.project);const repos=state.repos.filter(r=>project?.repos.includes(r.id));const repo=issue?.repository?repos.find(r=>r.name===issue.repository):repos.length===1?repos[0]:undefined;if(!repo)return;void browseRepository().then(dir=>{if(!dir)return;repo.path=dir;persist();ic.dir=dir;ic.error="Repository path updated. Retry the request.";render()}).catch(e=>{ic.error=String(e);render()});return;}
     if("issueRetry" in data){const ic=issueChat(detail);const issue=issues().find(x=>x.id===ic?.issueId&&x.project===projectFilter);const last=ic?.messages.filter(m=>m.author==="You").slice(-1)[0];if(ic&&issue&&last&&!ic.running)launch(issue,ic.agent,last.body);return;}
     if(data.issueChat){page="Chat";detail=data.issueChat;render();return;}
