@@ -16,7 +16,7 @@ type ParticipantRecord struct {
 	Agent string `json:"agent"` // native harness
 	AgentID string `json:"agentId,omitempty"`
 	Name string `json:"name,omitempty"`
-	Role string
+	Role string `json:"role"`
 	Model string `json:"model,omitempty"`
 	KnowledgeRoot string `json:"knowledgeRoot,omitempty"`
 	Languages []string `json:"languages,omitempty"`

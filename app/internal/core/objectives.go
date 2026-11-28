@@ -44,40 +44,7 @@ type ParticipantInput struct {
 	Workdir string
 }
 
-var participantHandlePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,39}package core
-
-import (
-	"context"
-	"database/sql"
-	"errors"
-	"path/filepath"
-	"encoding/json"
-	"regexp"
-	"strings"
-)
-
-// Project is the business boundary.
-type Project struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-}
-
-// CreateProject is a trusted (desktop) operation.
-func (s *Service) CreateProject(ctx context.Context, name, description string) (Project, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return Project{}, invalid("project name is required")
-	}
-	p := Project{ID: newID("prj"), Name: name, Description: description}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO projects(id, name, description, created_at) VALUES (?, ?, ?, ?)`,
-		p.ID, p.Name, p.Description, s.ts())
-	return p, err
-}
-
-// ParticipantInput assigns an agent in a role. Workdir is the worktree the
-// participant's sessions run in; it must be absolute.
-)
+var participantHandlePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,39}$`)
 
 // TaskInput seeds a task. Agents may add none in M1; tasks come from the
 // Director or a planning turn through trusted calls.
