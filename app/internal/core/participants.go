@@ -22,7 +22,7 @@ type ParticipantRecord struct {
 	Languages []string `json:"languages,omitempty"`
 	Assigned []string `json:"assigned,omitempty"`
 	languagesJSON string
-	assignedJSON string `json:"role"`
+	assignedJSON string
 	Workdir string `json:"workdir"`
 }
 
