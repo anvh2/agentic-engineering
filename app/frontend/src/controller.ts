@@ -14,7 +14,8 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
   const {state,nav,getObjective,getProject}=ctx;
   let {page,projectFilter,detail,tab,modal,roleSelected,docSelected,discussion,usageAgent}=nav;
   let knowledgeTimer: number | undefined;
-  const stopKnowledgePlayback=()=>{if(knowledgeTimer!==undefined){window.clearInterval(knowledgeTimer);knowledgeTimer=undefined;}};
+  let knowledgeCompletedAt = 0;
+  const stopKnowledgePlayback=()=>{if(knowledgeTimer!==undefined){window.clearInterval(knowledgeTimer);knowledgeTimer=undefined;knowledgeCompletedAt=0;}};
   const persist=()=>{try{demoStore.save(state)}catch{window.alert("Could not save demo data.");}};
   const render=()=>{Object.assign(nav,{page,projectFilter,detail,tab,modal,roleSelected,docSelected,discussion,usageAgent});renderLayout(root,ctx);docSelected=nav.docSelected;syncKnowledgePlayback();};
   const syncKnowledgePlayback=()=>{
@@ -26,7 +27,9 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
       const view=match?.[1]||"Graph",phase=Number(match?.[2]||0);
       const preview=root.querySelector<HTMLElement>("[data-knowledge-preview]");
       if(!preview){stopKnowledgePlayback();return;}
+      if(phase===6){if(!knowledgeCompletedAt)knowledgeCompletedAt=Date.now();if(Date.now()-knowledgeCompletedAt<8000)return;}
       const next=(phase+1)%7;
+      knowledgeCompletedAt=next===6?Date.now():0;
       const entries=JSON.parse(preview.dataset.knowledgeEntries||"[]") as Array<{phase:number;tokens:number;kind:string}>;
       const loaded=entries.filter(e=>e.phase<=next),total=loaded.reduce((sum,e)=>sum+e.tokens,0);
       tab="Knowledge "+view+" "+next;nav.tab=tab;
@@ -38,14 +41,15 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
       preview.querySelectorAll("[data-knowledge-edge],[data-knowledge-node]").forEach(el=>{
         const edge=el.hasAttribute("data-knowledge-edge");
         const p=Number(el.getAttribute(edge?"data-knowledge-edge":"data-knowledge-node"));
-        el.setAttribute("stroke",p<=next?"#92a0ae":"var(--edge)");
+        el.setAttribute("stroke",p<=next?"#79a98e":"var(--edge)");
+        if(!edge)el.setAttribute("fill",p<=next?"#25332d":"var(--raised)");
         if(edge)el.setAttribute("stroke-dasharray",p<=next?"none":"4 4");
         el.classList.toggle(edge?"knowledge-flow-active":"knowledge-node-active",p===next);
       });
       preview.querySelectorAll("[data-knowledge-label],[data-knowledge-status]").forEach(el=>{
         const label=el.hasAttribute("data-knowledge-label");
         const p=Number(el.getAttribute(label?"data-knowledge-label":"data-knowledge-status"));
-        el.textContent=p<=next?(label?"Simulated load · "+el.getAttribute("data-tokens")+" tokens":"Simulated load"):p===99?"Not selected":"Available";
+        el.textContent=p<=next?(label?"Simulated load · "+el.getAttribute("data-tokens")+" tokens":"Simulated load"):p===99?(next===6?"Skipped · Not relevant":"Not selected"):"Available";
       });
       for(const kind of ["DNA","Role","Context","Standard","Skill"]){
         const n=loaded.filter(e=>e.kind===kind).reduce((sum,e)=>sum+e.tokens,0);
