@@ -9,7 +9,7 @@ import { renderDialog } from "./dialog";
 // Product domains, not runtime components. Keep page IDs stable for existing handlers.
 const groups = [
  {name:"Home", pages:["Overview"]},
- {name:"Work", pages:["Objectives","M1","Projects","Decisions"]},
+ {name:"Work", pages:["Objectives","Projects","Decisions"]},
  {name:"Team", pages:["Team"]},
  {name:"Chat", pages:["Chat"]},
  {name:"Knowledge", pages:["Engineering DNA"]},
