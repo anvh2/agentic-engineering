@@ -231,11 +231,11 @@ func (r *Runner) RunTurn(ctx context.Context, participantID string, trigger core
 	if gitSnapshotErr != nil {
 		report.GitEvidenceError = gitSnapshotErr.Error()
 	}
-	if err != nil {
-		report.Error = err.Error()
-	} else if result.Interrupted {
+	if result.Interrupted {
 		report.State = "interrupted"
 		report.Error = "turn interrupted"
+	} else if err != nil {
+		report.Error = "native turn failed; inspect local evidence"
 	} else if result.ExitCode == 0 && result.NativeError == "" && result.ToolFailures == 0 {
 		report.State = "succeeded"
 	} else {
