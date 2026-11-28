@@ -1,6 +1,6 @@
 import { toggleKnowledgeGroup } from "./pages/team";
 import {profiles,conversation,sendAgentChat,stopAgentChat} from "./services/agent-chat";
-import {m1,createM1,runM1,cancelM1,refreshM1,postM1Message,verdictM1,restoreM1,subscribeM1Events} from "./services/m1-runtime";
+import {m1,createM1,runM1,cancelM1,refreshM1,postM1Message,verdictM1,restoreM1,subscribeM1Events,createIssueExecution,runIssueExecution} from "./services/m1-runtime";
 import {updateChatStream} from "./components/chat-view";
 import {executeIssue,explicitTargets,issueChat,stopIssue} from "./services/issue-chat";
 import { saveIssue,statuses,priorities,issues,boardContext,nextIssueKey,projectPrefix,setProjectPrefix } from "./services/work-board";
@@ -80,7 +80,29 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
   subscribeChat(name=>{if(page==="Chat"||page==="Collaboration")updateChatStream(root,name,consoles[name].output,consoles[name].activity,consoles[name].blocks);if(page==="Chat"&&detail.startsWith("agent:")&&conversation(detail.slice(6),projectFilter).active?.harness===name){const panel=root.querySelector<HTMLDetailsElement>("#agent-session-monitor");if(panel){const template=document.createElement("template");template.innerHTML=renderSessionMonitor({...ctx,nav:{...ctx.nav,detail,projectFilter}});const next=template.content.firstElementChild as HTMLDetailsElement|null;if(next){next.open=panel.open;panel.replaceWith(next);}}}});
   const updateIssue=()=>{if(page==="Chat"||page==="Objectives")render()};
   const launch=(issue:import("./services/work-board").Issue,agent:Agent,request:string)=>{void executeIssue(issue,agent,request,state,updateIssue)};
-  const startAssigned=(issue:import("./services/work-board").Issue)=>{if(issue.assignee==="Claude"||issue.assignee==="Codex")launch(issue,issue.assignee,"Implement this issue and report evidence.")};
+  const activeIssues=new Set<string>();
+  const startAssigned=async(issue:import("./services/work-board").Issue)=>{
+    if(activeIssues.has(issue.id))return;
+    activeIssues.add(issue.id);
+    try{
+      const project=getProject(issue.project);
+      const repos=state.repos.filter(r=>project?.repos.includes(r.id));
+      if(!project||repos.length!==1)throw Error("Native issue execution currently requires exactly one linked repository.");
+      const selected=(id:string|undefined)=>{
+        const a=profiles(state).find(p=>p.id===id&&state.agentProfiles?.[p.id]);
+        if(!a)throw Error("Select a configured Team agent.");
+        return {id:a.id,name:a.name,handle:a.handle,role:a.role,harness:a.harness,model:a.model,knowledgeRoot:state.knowledgePack?.root??"",languages:[...(state.agentLanguages?.[a.id]??[])],assigned:[...(state.agentKnowledge?.[a.id]??[])]};
+      };
+      const developer=selected(issue.assignee),reviewer=selected(issue.reviewer);
+      if(developer.id===reviewer.id)throw Error("Independent reviewer required.");
+      const objective=await createIssueExecution({repository:repos[0].path,title:issue.title,description:issue.description,acceptanceCriteria:issue.criteria,developer,reviewer,wakeBudget:4,tasks:[issue.title]});
+      const participant=objective.participants.find(p=>p.agentId===developer.id);
+      if(!participant)throw Error("Developer participant not found.");
+      const report=await runIssueExecution(participant.id,"Implement the objective using authenticated MCP. Claim the task, run relevant tests, submit evidence and send a handoff to the independent reviewer. Do not accept your own work.");
+      if(report.state!=="succeeded")throw Error(report.error||"Native execution did not succeed.");
+    }catch(e){window.alert(String(e));}
+    finally{activeIssues.delete(issue.id);updateIssue();}
+  };
   root.addEventListener("issue-start",((e:CustomEvent)=>{startAssigned(e.detail)}) as EventListener);
   const value=(id: string)=>document.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>("#"+id)?.value?.trim()||"";
   root.addEventListener("click",async (event)=>{
