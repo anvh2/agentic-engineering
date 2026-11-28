@@ -64,7 +64,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     else if(data.project){page="Projects";detail=data.project;tab="";}
     else if(data.session){page="Sessions";detail=data.session;tab="";}
     else if("back" in data){detail="";tab="";}
-    else if(data.tab){tab=data.tab;detail="";}
+    else if(data.tab){tab=data.tab;if(!/^Knowledge (Graph|Timeline|Context) [0-6]$/.test(tab))detail="";}
     else if(data.open)modal=data.open;
     else if("cancel" in data)modal="";
     else if("create" in data){
