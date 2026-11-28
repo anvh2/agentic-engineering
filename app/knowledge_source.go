@@ -18,7 +18,14 @@ import (
 
 const knowledgeRepository = "https://github.com/anvh2/engineering-knowledge.git"
 
+type KnowledgeGroup struct {
+ ID string `json:"id"`
+ Title string `json:"title"`
+}
+
 type KnowledgeEntry struct {
+ Group string `json:"group,omitempty"`
+ Capabilities []string `json:"capabilities,omitempty"`
  ID string `json:"id"`
  Title string `json:"title,omitempty"`
  Description string `json:"description,omitempty"`
@@ -33,6 +40,7 @@ type KnowledgeEntry struct {
  Tokens int64 `json:"tokens"`
 }
 type KnowledgePack struct {
+ Groups []KnowledgeGroup `json:"groups,omitempty"`
  SchemaVersion int `json:"schemaVersion"`
  ID string `json:"id"`
  Version string `json:"version"`
