@@ -185,8 +185,8 @@ func (h *HarnessConsole) runPrompt(name, path, dir, prompt, key, model, knowledg
 	}
 	defer finish()
 
-	standalone := strings.TrimSpace(dir) == "" || knowledgeDir != ""
-	if knowledgeDir != "" {
+	standalone := strings.TrimSpace(dir) == ""
+	if standalone && knowledgeDir != "" {
 		dir = knowledgeDir
 	} else if standalone {
 		dir, err = os.MkdirTemp("", "ae-chat-*")
@@ -207,7 +207,11 @@ func (h *HarnessConsole) runPrompt(name, path, dir, prompt, key, model, knowledg
 		}
 		prompt = "Working in isolated worktree: " + dir + "\n" + prompt
 	}
-	command := exec.CommandContext(ctx, path, nativeArgs(name, key, model, standalone)...)
+	args := nativeArgs(name, key, model, standalone)
+	if name == "Claude" && knowledgeDir != "" && !standalone {
+		args = append(args, "--add-dir", knowledgeDir)
+	}
+	command := exec.CommandContext(ctx, path, args...)
 	command.Dir = dir
 	command.Stdin = strings.NewReader(prompt)
 	command.Env = append(os.Environ(), "PATH="+filepath.Dir(path)+":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:"+os.Getenv("PATH"))
@@ -320,6 +324,7 @@ func (h *HarnessConsole) RunAgentContextTest(name, path, model string, request K
 	}
 
 	var contextText strings.Builder
+	fmt.Fprintf(&contextText, "Knowledge pack: %s; version: %s; pack status: %s; source revision: %s\n", knowledge.PackID, knowledge.Version, knowledge.Status, knowledge.Revision)
 	contextText.WriteString("Role: " + request.Role + "\n")
 	contextText.WriteString("Document status 'draft' means provisional guidance, not owner-approved or runtime authorization.\n")
 	contextText.WriteString("The following bootstrap context applies to this execution:\n")
@@ -346,7 +351,7 @@ func (h *HarnessConsole) RunAgentContextTest(name, path, model string, request K
 		}
 		record(KnowledgeTraceEvent{Kind: "execution.started"})
 	}
-	result := h.runPrompt(name, path, "", contextText.String(), "", model, knowledge.Directory, started)
+	result := h.runPrompt(name, path, request.RepositoryDir, contextText.String(), "", model, knowledge.Directory, started)
 	result.RunID = runID
 	result.EstimatedContextTokens = int64((contextText.Len() + 3) / 4)
 	if result.Usage != nil {
