@@ -1,4 +1,4 @@
-import {sendAgentChat,profiles} from "./services/agent-chat";
+import {sendAgentChat,stopAgentChat} from "./services/agent-chat";
 import {updateChatStream} from "./components/chat-view";
 import {executeIssue,explicitTargets,issueChat,stopIssue} from "./services/issue-chat";
 import { saveIssue,statuses,priorities,issues,boardContext,nextIssueKey,projectPrefix,setProjectPrefix } from "./services/work-board";
@@ -169,7 +169,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     if("reviewPrompt" in data){const c=consoles[detail==="Claude"?"Claude":"Codex"];if(!c.dir.trim()){window.alert("Select a real repository directory before reviewing code.");return;}c.prompt="Review this repository without modifying files. Inspect the current branch, architecture, correctness, security, maintainability and tests. Report prioritized findings with file references and distinguish verified evidence from assumptions.";render();return;}
     if(data.agentChat){page="Chat";detail="agent:"+data.agentChat;tab="";render();return;}
     if("agentSend" in data){const id=detail.slice(6);void sendAgentChat(state,id,value("agent-chat-prompt"),()=>{if(page==="Chat"&&detail==="agent:"+id)render()});return;}
-    if("agentStop" in data){for(const a of profiles(state))if(consoles[a.harness].running)void stopPrompt(a.harness);return;}
+    if("agentStop" in data){void stopAgentChat(detail.slice(6));return;}
     if(data.chatHarness){page="Chat";tab="";detail=data.chatHarness;render();return;}
     if(data.harness){detail=detail===data.harness?"":data.harness;if(page==="Team"&&["alex","emma","noah"].includes(data.harness)){tab="Knowledge Graph 0";stopKnowledgePlayback();}render();return;}
     if(data.runPrompt||data.stopPrompt||data.terminal){
