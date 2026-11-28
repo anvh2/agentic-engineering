@@ -9,7 +9,7 @@ import type { Agent } from "./types";
 import type { ViewContext } from "./view-context";
 import { demoStore } from "./services/demo-store";
 import { renderLayout } from "./components/layout";
-import { syncKnowledge,loadKnowledgeDirectory,readKnowledgeEntry } from "./services/knowledge-source";
+import { syncKnowledge,loadKnowledgeDirectory,readKnowledgeEntry,knowledgeForAgent } from "./services/knowledge-source";
 export function mountController(root: HTMLElement, ctx: ViewContext) {
   mountMentions(root);
   const {state,nav,getObjective,getProject}=ctx;
@@ -82,6 +82,33 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     const el=event.target.closest<HTMLElement>("button,[data-objective],[data-project],[data-session]");
     if(!el)return;
     const data=el.dataset, objective=getObjective(detail), project=getProject(detail);
+    if(data.profileSave){
+      const id=data.profileSave,handle=value("profile-handle").trim().replace(/^@/,"").toLowerCase();
+      const status=root.querySelector<HTMLElement>("[data-profile-status]");
+      const duplicate=["alex","emma","noah"].some(other=>other!==id&&(state.agentProfiles?.[other]?.handle??other)===handle);
+      if(!/^[a-z][a-z0-9_-]{0,39}$/.test(handle)||duplicate){if(status)status.textContent="Invalid or duplicate handle";return;}
+      const harness=value("profile-harness");if(harness!=="Claude"&&harness!=="Codex")return;
+      state.agentProfiles??={};
+      state.agentProfiles[id]={handle,role:value("profile-role"),harness,model:value("profile-model").trim()||"Default"};
+      persist();render();return;
+    }
+    if(data.profileTest){
+      const id=data.profileTest;
+      const output=root.querySelector<HTMLElement>("[data-profile-test-result]");
+      if(!output)return;
+      const profile=state.agentProfiles?.[id]??{role:id==="alex"?"Architect":id==="emma"?"Developer":"Reviewer",harness:id==="emma"?"Codex":"Claude",model:"Default"};
+      const pack=state.knowledgePack;
+      const prompt=value("profile-test-prompt").trim();
+      if(!pack||!prompt){output.textContent="Connect knowledge and enter a test message first.";return;}
+      const entries=knowledgeForAgent(pack,profile.role,state.agentKnowledge?.[id]??[]);
+      const bridge=(window as unknown as {go?:{main?:{HarnessConsole?:{RunAgentContextTest(name:string,path:string,model:string,root:string,ids:string[],prompt:string):Promise<{output:string;error:string}>}}}}).go?.main?.HarnessConsole;
+      if(!bridge){output.textContent="Open the native desktop app.";return;}
+      const button=root.querySelector<HTMLButtonElement>("[data-profile-test]");if(button)button.disabled=true;
+      output.textContent="Reading selected files and running native harness...";
+      try{const result=await bridge.RunAgentContextTest(profile.harness,localStorage.getItem("agent-path:"+profile.harness)||"",profile.model,pack.root,entries.map(e=>e.id),prompt);output.textContent=(result.error?"Error: "+result.error:"Native run completed. Context sent:\n"+entries.map(e=>e.id).join("\n"))+"\n\n"+result.output;}
+      catch(e){output.textContent=String(e)}finally{if(button)button.disabled=false}
+      return;
+    }
     if("knowledgeSync" in data || "knowledgeLocal" in data){
       const status=root.querySelector<HTMLElement>("[data-knowledge-source-status]");
       if(status)status.textContent="Reading knowledge source...";
