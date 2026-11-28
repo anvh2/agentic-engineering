@@ -266,7 +266,7 @@ func (m *M1Runtime) RunM1Turn(req M1RunRequest) (collaboration.TurnReport, error
 			"Never bypass native permissions, modify another participant's worktree, or accept your own task.\n"+
 			"Engineering Knowledge %s (pack status: %s, revision: %s). "+
 			"Document status 'draft' remains provisional; approved rules remain binding.\n%s\n"+
-			"On-demand references (read only when relevant): %s\n%s",
+			"On-demand references (read only when relevant): %s\n%s\nPeer worktrees: %s",
 		p.Role, p.Handle, knowledge.Version, knowledge.Status, knowledge.Revision,
 		knowledge.Bootstrap, knowledge.Directory, knowledge.Index, peerPaths.String(),
 	)
