@@ -35,7 +35,9 @@ func (h *HarnessConsole) RunPrompt(name,path,dir,prompt string) ConsoleResult { 
 func (h *HarnessConsole) RunIssuePrompt(name,path,dir,key,prompt string) ConsoleResult { if strings.TrimSpace(dir)==""||strings.TrimSpace(key)==""{return ConsoleResult{Error:"Issue repository and key required"}};return h.runPrompt(name,path,dir,prompt,key,"","") }
 func (h *HarnessConsole) runPrompt(name,path,dir,prompt,key,model,knowledgeDir string) ConsoleResult {
  if strings.TrimSpace(prompt)==""||len(prompt)>262144{return ConsoleResult{Error:"Prompt is empty or too long"}}
- ctx,cancel:=context.WithTimeout(context.Background(),20*time.Minute)
+ parent:=h.ctx
+ if parent==nil{parent=context.TODO()}
+ ctx,cancel:=context.WithTimeout(parent,20*time.Minute)
  h.mu.Lock()
  if h.active==nil{h.active=make(map[string]context.CancelFunc)}
  if h.active[name]!=nil{h.mu.Unlock();cancel();return ConsoleResult{Error:"Harness already running"}}
@@ -78,7 +80,9 @@ func(h *HarnessConsole) OpenTerminal(name,path,dir string)error{
 // On-demand files are available to native CLI read tools, never copied into every prompt.
 func(h *HarnessConsole) RunAgentContextTest(name,path,model string,req KnowledgeContextRequest,prompt string) ConsoleResult {
  if strings.TrimSpace(prompt)==""{return ConsoleResult{Error:"Enter a test message"}}
- contextPack,err:=BuildKnowledgeContext(req)
+ ctx:=h.ctx
+ if ctx==nil{ctx=context.TODO()}
+ contextPack,err:=BuildKnowledgeContext(ctx,req)
  if err!=nil{return ConsoleResult{Error:err.Error()}}
  if contextPack.Directory!=""{defer os.RemoveAll(contextPack.Directory)}
  runID:=fmt.Sprintf("%d",time.Now().UnixNano())
