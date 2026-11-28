@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/anvh2/agentic-engineering/app/internal/agent"
 	"github.com/anvh2/agentic-engineering/app/internal/core"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -56,6 +57,9 @@ func (f *fakeCore) ClaimTask(_ context.Context, p core.Principal, id string, rev
 func (f *fakeCore) UpdateTask(_ context.Context, p core.Principal, in core.UpdateTaskInput) (core.Task, error) {
 	return core.Task{ID: in.TaskID, Status: in.Status, Revision: in.ExpectedRevision + 1}, f.record(p)
 }
+func (f *fakeCore) SubmitReview(_ context.Context, p core.Principal, in core.SubmitReviewInput) (core.Review, error) {
+	return core.Review{ObjectiveID: p.ObjectiveID, Verdict: in.Verdict}, f.record(p)
+}
 func handler(t *testing.T, f *fakeCore) http.Handler {
 	t.Helper()
 	h, err := NewHandler(f, "127.0.0.1:43999")
@@ -99,7 +103,7 @@ func TestProtocolAndPrincipal(t *testing.T) {
 			} `json:"tools"`
 		} `json:"result"`
 	}
-	if err := json.Unmarshal(list.Body.Bytes(), &listed); err != nil || len(listed.Result.Tools) != 5 {
+	if err := json.Unmarshal(list.Body.Bytes(), &listed); err != nil || len(listed.Result.Tools) != len(agent.CollaborationTools) {
 		t.Fatalf("tools %s %v", list.Body, err)
 	}
 	for _, token := range []string{"alpha", "beta"} {
@@ -124,6 +128,8 @@ func TestRejectsForgedIdentityAndInvalidArguments(t *testing.T) {
 		{"read_messages", map[string]any{"after": 0, "limit": 201}},
 		{"claim_task", map[string]any{"task_id": "x", "expected_revision": -1}},
 		{"update_task", map[string]any{"task_id": "x", "expected_revision": 1, "status": "accepted", "summary": "trust me"}},
+		{"submit_review", map[string]any{"verdict": "accepted", "summary": "x", "verification": "y"}},
+		{"submit_review", map[string]any{"verdict": "approved", "summary": "x"}},
 	} {
 		t.Run(tc.name+fmt.Sprint(len(tc.args)), func(t *testing.T) {
 			f := &fakeCore{}
@@ -216,7 +222,7 @@ func TestOfficialSDKClient(t *testing.T) {
 	}
 	defer session.Close()
 	listed, err := session.ListTools(ctx, nil)
-	if err != nil || len(listed.Tools) != 5 {
+	if err != nil || len(listed.Tools) != len(agent.CollaborationTools) {
 		t.Fatalf("list %v %v", listed, err)
 	}
 	result, err := session.CallTool(ctx, &sdk.CallToolParams{Name: "get_objective", Arguments: map[string]any{}})

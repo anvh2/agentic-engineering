@@ -24,6 +24,7 @@ type Core interface {
 	GetObjective(context.Context, core.Principal) (core.ObjectiveView, error)
 	ClaimTask(context.Context, core.Principal, string, int64) (core.Task, error)
 	UpdateTask(context.Context, core.Principal, core.UpdateTaskInput) (core.Task, error)
+	SubmitReview(context.Context, core.Principal, core.SubmitReviewInput) (core.Review, error)
 }
 
 const MaxRequestBytes = 64 << 10
@@ -128,8 +129,13 @@ type sendInput struct {
 	IdempotencyKey string `json:"idempotency_key" jsonschema:"Required stable key, at most 128 bytes; reuse only for identical content"`
 }
 type readInput struct {
-	After int64 `json:"after" jsonschema:"Exclusive sequence cursor, zero starts at beginning; explicit cursor permits replay"`
-	Limit int   `json:"limit,omitempty" jsonschema:"Page size, default 50, maximum 200"`
+	After *int64 `json:"after,omitempty" jsonschema:"Exclusive sequence cursor; omit to read only unread messages; zero replays from the beginning"`
+	Limit int    `json:"limit,omitempty" jsonschema:"Page size, default 50, maximum 200"`
+}
+type reviewInput struct {
+	Verdict      core.Verdict `json:"verdict" jsonschema:"approved or changes_requested; a verdict is never Director acceptance"`
+	Summary      string       `json:"summary" jsonschema:"Findings, at most 4 KiB"`
+	Verification string       `json:"verification" jsonschema:"Commands you ran and their observed results, at most 4 KiB"`
 }
 type claimInput struct {
 	TaskID           string `json:"task_id"`
@@ -150,10 +156,14 @@ func registerTools(s *sdk.Server, c Core) {
 		return c.SendMessage(ctx, p, core.SendMessageInput{To: in.To, Body: in.Body, IdempotencyKey: in.IdempotencyKey})
 	})
 	tool(s, "read_messages", "Read a bounded message page. Fetched is not acknowledged or acted upon; messages remain replayable.", func(ctx context.Context, p core.Principal, in readInput) (core.MessagePage, error) {
-		if in.After < 0 || in.Limit < 0 || in.Limit > core.MaxReadLimit {
+		after := core.AfterUnread
+		if in.After != nil {
+			after = *in.After
+		}
+		if (in.After != nil && after < 0) || in.Limit < 0 || in.Limit > core.MaxReadLimit {
 			return core.MessagePage{}, core.ErrInvalidArgument
 		}
-		return c.ReadMessages(ctx, p, in.After, in.Limit)
+		return c.ReadMessages(ctx, p, after, in.Limit)
 	})
 	tool(s, "get_objective", "Read your objective, acceptance criteria, participants and task revisions.", func(ctx context.Context, p core.Principal, _ struct{}) (core.ObjectiveView, error) {
 		return c.GetObjective(ctx, p)
@@ -174,6 +184,15 @@ func registerTools(s *sdk.Server, c Core) {
 			return core.Task{}, core.ErrForbidden
 		}
 		return c.UpdateTask(ctx, p, core.UpdateTaskInput{TaskID: in.TaskID, ExpectedRevision: in.ExpectedRevision, Status: in.Status, Summary: in.Summary})
+	})
+	tool(s, "submit_review", "Reviewer only: record your independent verdict on the submitted work and send it to the assignee.", func(ctx context.Context, p core.Principal, in reviewInput) (core.Review, error) {
+		if in.Summary == "" || in.Verification == "" || len(in.Summary) > core.MaxSummaryBytes || len(in.Verification) > core.MaxSummaryBytes {
+			return core.Review{}, core.ErrInvalidArgument
+		}
+		if in.Verdict != core.VerdictApproved && in.Verdict != core.VerdictChangesRequested {
+			return core.Review{}, core.ErrInvalidArgument
+		}
+		return c.SubmitReview(ctx, p, core.SubmitReviewInput{Verdict: in.Verdict, Summary: in.Summary, Verification: in.Verification})
 	})
 }
 

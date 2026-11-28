@@ -69,6 +69,12 @@ func (ts timeScanner) Scan(v any) error {
 
 func scanTime(t *time.Time) timeScanner { return timeScanner{t} }
 
+// SetMessageNotifier installs a nonblocking callback before serving MCP or
+// starting native turns. The notifier must not be replaced while running.
+func (s *Service) SetMessageNotifier(notify func(objectiveID string)) {
+	s.onMessage = notify
+}
+
 // notifyMessage tells the wake coordinator, if any, that an objective has new
 // mail. It never blocks the caller.
 func (s *Service) notifyMessage(objectiveID string) {

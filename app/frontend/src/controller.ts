@@ -1,8 +1,8 @@
 import { toggleKnowledgeGroup } from "./pages/team";
 import {profiles,conversation,sendAgentChat,stopAgentChat} from "./services/agent-chat";
+import {execution,initIssueRuntime,moveIssue} from "./services/issue-runtime";
 import {updateChatStream} from "./components/chat-view";
-import {executeIssue,explicitTargets,issueChat,stopIssue} from "./services/issue-chat";
-import { saveIssue,statuses,priorities,issues,boardContext,nextIssueKey,projectPrefix,setProjectPrefix } from "./services/work-board";
+import { saveIssue,statuses,priorities,issues,nextIssueKey,projectPrefix,setProjectPrefix } from "./services/work-board";
 import { mountMentions } from "./components/mentions";
 import { group,stopGroup } from "./services/collaboration";
 import { consoles, runPrompt, stopPrompt, openTerminal, currentRepository, browseRepository, subscribeChat } from "./services/harness-console";
@@ -77,10 +77,6 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
   };
   subscribeKnowledgeEvents(()=>{});
   subscribeChat(name=>{if(page==="Chat"||page==="Collaboration")updateChatStream(root,name,consoles[name].output,consoles[name].activity,consoles[name].blocks);if(page==="Chat"&&detail.startsWith("agent:")&&conversation(detail.slice(6),projectFilter).active?.harness===name){const panel=root.querySelector<HTMLDetailsElement>("#agent-session-monitor");if(panel){const template=document.createElement("template");template.innerHTML=renderSessionMonitor({...ctx,nav:{...ctx.nav,detail,projectFilter}});const next=template.content.firstElementChild as HTMLDetailsElement|null;if(next){next.open=panel.open;panel.replaceWith(next);}}}});
-  const updateIssue=()=>{if(page==="Chat"||page==="Objectives")render()};
-  const launch=(issue:import("./services/work-board").Issue,agent:Agent,request:string)=>{void executeIssue(issue,agent,request,state,updateIssue)};
-  const startAssigned=(issue:import("./services/work-board").Issue)=>{if(issue.assignee==="Claude"||issue.assignee==="Codex")launch(issue,issue.assignee,"Implement this issue and report evidence.")};
-  root.addEventListener("issue-start",((e:CustomEvent)=>{startAssigned(e.detail)}) as EventListener);
   const value=(id: string)=>document.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>("#"+id)?.value?.trim()||"";
   root.addEventListener("click",async (event)=>{
     if (!(event.target instanceof Element)) return;
@@ -200,18 +196,15 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
       const panel=root.querySelector<HTMLElement>(".team-properties");if(panel)panel.scrollTop=scroll;
       return;
     }
-    if("issueRepairRepo" in data){const ic=issueChat(detail);if(!ic||ic.running)return;const issue=issues().find(x=>x.id===ic.issueId&&x.project===ic.project);const project=getProject(ic.project);const repos=state.repos.filter(r=>project?.repos.includes(r.id));const repo=issue?.repository?repos.find(r=>r.name===issue.repository):repos.length===1?repos[0]:undefined;if(!repo)return;void browseRepository().then(dir=>{if(!dir)return;repo.path=dir;persist();ic.dir=dir;ic.error="Repository path updated. Retry the request.";render()}).catch(e=>{ic.error=String(e);render()});return;}
-    if("issueRetry" in data){const ic=issueChat(detail);const issue=issues().find(x=>x.id===ic?.issueId&&x.project===projectFilter);const last=ic?.messages.filter(m=>m.author==="You").slice(-1)[0];if(ic&&issue&&last&&!ic.running)launch(issue,ic.agent,last.body);return;}
-    if(data.issueChat){page="Chat";detail=data.issueChat;render();return;}
-    if("issueSend" in data){const ic=issueChat(detail),body=value("issue-chat-prompt");const issue=issues().find(x=>x.id===ic?.issueId&&x.project===projectFilter);if(ic&&issue&&body){const targets=explicitTargets(body);launch(issue,targets[0]||ic.agent,body);}return;}
-    if("issueStop" in data){const ic=issueChat(detail);if(ic)void stopIssue(ic);return;}
     if("boardPrefix" in data){const p=getProject(projectFilter);if(p){const v=window.prompt("Issue prefix (new issues only)",projectPrefix(p.id,p.name));if(v!==null){try{setProjectPrefix(p.id,v);render()}catch(e){window.alert(String(e))}}}return;}
     if(data.boardView){page="Objectives";tab=data.boardView;detail="";render();return;}
     if("boardNew" in data){detail="new-issue:"+(statuses.find(s=>s===data.boardNew)||"Todo");render();return;}
     if(data.boardId){detail=data.boardId;render();return;}
     if("boardClose" in data){detail="";render();return;}
-    if("boardComment" in data){const issue=issues().find(x=>x.id===detail&&x.project===projectFilter),body=value("issue-comment").trim();if(issue&&body){saveIssue({...issue,comments:[...(issue.comments||[]),{body,at:new Date().toISOString()}]});render();const targets=explicitTargets(body);if(targets.length&&body.replace(/@[\w-]+/g,"").trim()){page="Chat";detail="issue:"+issue.project+":"+issue.id;void (async()=>{for(const agent of new Set(targets))await executeIssue(issue,agent,body,state,updateIssue)})()}}return;}
-    if("boardSave" in data){const title=value("issue-title"),status=statuses.find(s=>s===value("issue-status"));if(!title||!status||!getProject(projectFilter))return;const existing=issues().find(x=>x.id===detail&&x.project===projectFilter);try{saveIssue({id:existing?.id||crypto.randomUUID(),issueKey:existing?.issueKey||nextIssueKey(projectFilter,getProject(projectFilter)!.name),project:projectFilter,createdAt:existing?.createdAt||new Date().toISOString(),comments:existing?.comments||[],title,description:value("issue-description"),criteria:value("issue-criteria"),status,assignee:value("issue-assignee"),repository:value("issue-repo"),priority:priorities.find(p=>p===value("issue-priority"))||"No priority"});detail="";render()}catch(e){window.alert(String(e))}return;}
+    if("boardSave" in data){const title=value("issue-title"),status=statuses.find(s=>s===value("issue-status"));if(!title||!status||!getProject(projectFilter))return;const existing=issues().find(x=>x.id===detail&&x.project===projectFilter);const id=existing?.id||crypto.randomUUID();
+      // A new issue is created idle; the runtime rules then apply its requested status.
+      const idle=status==="In Progress"||status==="In Review"||status==="Done"?"Todo":status;
+      try{saveIssue({id,issueKey:existing?.issueKey||nextIssueKey(projectFilter,getProject(projectFilter)!.name),project:projectFilter,createdAt:existing?.createdAt||new Date().toISOString(),comments:existing?.comments||[],title,description:value("issue-description"),criteria:value("issue-criteria"),status:idle,assignee:value("issue-assignee"),reviewer:value("issue-reviewer"),repository:existing?.repository||"",priority:priorities.find(p=>p===value("issue-priority"))||"No priority"});detail="";render();if(idle!==status)moveIssue(id,status,state);}catch(e){window.alert(String(e))}return;}
     if("groupStart" in data||"groupSend" in data){return;}
     if("groupStop" in data){void stopGroup();return;}
     if(data.switchProject){projectFilter=data.switchProject;detail="";tab="";render();return;}
@@ -277,9 +270,12 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
   });
   document.addEventListener("pointerdown",event=>{const menu=root.querySelector<HTMLDetailsElement>(".project-switcher[open]");if(menu&&event.target instanceof Node&&!menu.contains(event.target))menu.open=false;});
   root.addEventListener("keydown",event=>{if((event.key==="Enter"||event.key===" ")&&event.target instanceof Element&&toggleKnowledgeGroup(event.target,ctx)){event.preventDefault();return;}if(event.key==="Escape"){const menu=root.querySelector<HTMLDetailsElement>(".project-switcher[open]");if(menu){menu.open=false;menu.querySelector("summary")?.focus();}}});
-  root.addEventListener("keydown",event=>{if(event.key==="Enter"&&!event.shiftKey&&!event.isComposing&&event.target instanceof HTMLTextAreaElement&&["console-prompt","group-prompt","issue-chat-prompt","agent-chat-prompt"].includes(event.target.id)){event.preventDefault();root.querySelector<HTMLButtonElement>(event.target.id==="agent-chat-prompt"?"[data-agent-send]":event.target.id==="group-prompt"?"[data-group-send]":event.target.id==="issue-chat-prompt"?"[data-issue-send]":"[data-run-prompt]")?.click();}});
+  root.addEventListener("keydown",event=>{if(event.key==="Enter"&&!event.shiftKey&&!event.isComposing&&event.target instanceof HTMLTextAreaElement&&["console-prompt","group-prompt","agent-chat-prompt"].includes(event.target.id)){event.preventDefault();root.querySelector<HTMLButtonElement>(event.target.id==="agent-chat-prompt"?"[data-agent-send]":event.target.id==="group-prompt"?"[data-group-send]":"[data-run-prompt]")?.click();}});
   root.addEventListener("input",(event)=>{if(event.target instanceof HTMLTextAreaElement&&event.target.id==="group-prompt"){group.draft=event.target.value;return;}if(page!=="Chat"||!(event.target instanceof HTMLInputElement||event.target instanceof HTMLTextAreaElement))return;const c=consoles[detail==="Claude"?"Claude":"Codex"];if(c.running)return;if(event.target.id==="console-dir")c.dir=event.target.value;if(event.target.id==="console-prompt")c.prompt=event.target.value;});
-  root.addEventListener("change",(event)=>{const field=event.target;if(page==="Objectives"&&(field instanceof HTMLInputElement||field instanceof HTMLTextAreaElement||field instanceof HTMLSelectElement)){const issue=issues().find(x=>x.id===detail&&x.project===projectFilter);const keys={"issue-title":"title","issue-description":"description","issue-criteria":"criteria","issue-status":"status","issue-assignee":"assignee","issue-repo":"repository","issue-priority":"priority"} as const;const key=keys[field.id as keyof typeof keys];if(issue&&key){const status=root.querySelector<HTMLElement>(".mc-save-status");try{if(key==="title"&&!field.value.trim())throw new Error("Title is required");if(key==="status"&&!statuses.some(s=>s===field.value))throw new Error("Invalid status");const next={...issue,[key]:field.value};saveIssue(next);if(key==="status"&&issue.status!=="In Progress"&&field.value==="In Progress")queueMicrotask(()=>startAssigned(next));if(status)status.textContent="";if(key==="title"){const heading=root.querySelector(".mc-detail-toolbar strong");if(heading)heading.textContent=field.value}}catch(e){if(status)status.textContent=String(e);field.value=issue[key]||""}return;}}
+  root.addEventListener("change",(event)=>{const field=event.target;if(page==="Objectives"&&(field instanceof HTMLInputElement||field instanceof HTMLTextAreaElement||field instanceof HTMLSelectElement)){const issue=issues().find(x=>x.id===detail&&x.project===projectFilter);const keys={"issue-title":"title","issue-description":"description","issue-criteria":"criteria","issue-status":"status","issue-assignee":"assignee","issue-reviewer":"reviewer","issue-repo":"repository","issue-priority":"priority"} as const;const key=keys[field.id as keyof typeof keys];if(issue&&key){const status=root.querySelector<HTMLElement>(".mc-save-status");try{if(key==="title"&&!field.value.trim())throw new Error("Title is required");
+      if(key==="status"){const next=statuses.find(s=>s===field.value);if(!next)throw new Error("Invalid status");queueMicrotask(()=>moveIssue(issue.id,next,state));if(status)status.textContent="";return;}
+      if((key==="assignee"||key==="reviewer")&&execution(issue.id)?.active)throw new Error("Stop the execution before changing agents.");
+      saveIssue({...issue,[key]:field.value});if(status)status.textContent="";if(key==="title"){const heading=root.querySelector(".mc-detail-toolbar strong");if(heading)heading.textContent=field.value}}catch(e){if(status)status.textContent=String(e);field.value=issue[key]||""}return;}}
 
     const el=event.target as HTMLInputElement,data=el.dataset,objective=getObjective(detail);
     if(el instanceof HTMLInputElement&&el.dataset.agentLanguage!==undefined&&page==="Team"){
@@ -314,5 +310,6 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
   });
 
   render();
+  initIssueRuntime(()=>{if((page==="Sessions"||page==="Usage & Cost")&&!modal)render();});
   void scanAgents().then(()=>{if((page==="Overview"||page==="Chat"||page==="Team"&&tab!=="Roles")&&!modal)render();});
 }

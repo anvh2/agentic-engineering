@@ -1,6 +1,6 @@
 export const statuses=["Backlog","Todo","In Progress","In Review","Done"] as const;
 export const priorities=["Urgent","High","Medium","Low","Lowest","No priority"] as const;
-export type Issue={id:string;issueKey?:string;priority?:typeof priorities[number];project:string;title:string;description:string;criteria:string;assignee:string;repository:string;createdAt?:string;comments?:{body:string;at:string}[];status:typeof statuses[number]};
+export type Issue={id:string;issueKey?:string;priority?:typeof priorities[number];project:string;title:string;description:string;criteria:string;assignee:string;reviewer?:string;repository:string;createdAt?:string;comments?:{body:string;at:string}[];execPhase?:string;status:typeof statuses[number]};
 const key="ae-work-board-v1";
 export function issues():Issue[]{try{const v=JSON.parse(localStorage.getItem(key)||"[]");return Array.isArray(v)?v:[]}catch{return []}}
 export function saveIssue(issue:Issue){const all=issues();const i=all.findIndex(x=>x.id===issue.id);if(i<0)all.push(issue);else all[i]=issue;localStorage.setItem(key,JSON.stringify(all))}

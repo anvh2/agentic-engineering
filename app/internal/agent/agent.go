@@ -10,6 +10,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"strings"
 )
 
 // Kind identifies a native CLI.
@@ -19,6 +20,13 @@ const (
 	Claude Kind = "claude"
 	Codex  Kind = "codex"
 )
+
+// ErrCollaborationUnavailable is the NativeError of a turn whose collaboration
+// tool calls all failed.
+const ErrCollaborationUnavailable = "every collaboration tool call failed"
+
+// MaxNativeErrorBytes bounds provider error text kept with a turn.
+const MaxNativeErrorBytes = 600
 
 // MCPServerName is the name the app's MCP server is registered under in each
 // launched session, added beside the user's own servers (never replacing
@@ -54,7 +62,27 @@ type TurnSpec struct {
 	MCPURL       string
 	Token        string
 	Model        string // optional native model selector
+	// AddDirs are further directories of this participant's own workspace:
+	// worktrees of the other linked repositories and its knowledge copy.
+	AddDirs []string
+	// Access selects the native permission mode for an unattended turn.
+	Access Access
 }
+
+// Access is the native permission posture of one turn. Every value keeps the
+// harness's own sandbox and permission system; none of them bypasses it.
+type Access string
+
+const (
+	// AccessNative leaves the user's own permission configuration unchanged.
+	AccessNative Access = ""
+	// AccessImplement lets an unattended turn edit and run commands inside its
+	// workspace sandbox.
+	AccessImplement Access = "implement"
+	// AccessReview lets an unattended turn run commands inside its workspace
+	// sandbox without auto-accepting file edits.
+	AccessReview Access = "review"
+)
 
 // Event is one native structured event, preserved raw with its source order.
 type Event struct {
@@ -79,10 +107,14 @@ type Usage struct {
 	CostUSDEstimate      *float64        `json:"cost_usd_estimate"` // provider-reported API-equivalent estimate; never a bill
 	NormalizationVersion int             `json:"normalization_version"`
 	Raw                  json.RawMessage `json:"raw"`
+	// SessionCumulative marks counters that total the whole native session, not
+	// this turn. Both CLIs report this way after a resume; core stores the
+	// difference from the session's previous report.
+	SessionCumulative bool `json:"session_cumulative"`
 }
 
 // NormalizationVersion is bumped whenever Usage mapping rules change.
-const NormalizationVersion = 1
+const NormalizationVersion = 2
 
 // TurnResult reports what the native stream said. Success is derived from
 // structured events, never from the exit code alone: Codex exits 0 even when
@@ -93,7 +125,8 @@ type TurnResult struct {
 	Usage           []Usage `json:"usage"`
 	// ToolFailures counts failed calls to the app's own MCP tools only (the
 	// signal for a refused pre-approval, evidence E5). Failing native tools,
-	// such as a red test run, are ordinary events and never fail a turn.
+	// such as a red test run, are ordinary events and never fail a turn. A turn
+	// in which every such call failed also carries a NativeError.
 	ToolFailures int    `json:"tool_failures"`
 	NativeError  string `json:"native_error,omitempty"`
 	ExitCode     int    `json:"exit_code"`
@@ -111,4 +144,16 @@ type TurnResult struct {
 type Adapter interface {
 	Kind() Kind
 	Run(ctx context.Context, spec TurnSpec, emit func(Event)) (TurnResult, error)
+}
+
+// nativeError joins a stable prefix with bounded provider text.
+func nativeError(prefix, detail string) string {
+	detail = strings.TrimSpace(detail)
+	if detail == "" {
+		return prefix
+	}
+	if len(detail) > MaxNativeErrorBytes {
+		detail = strings.ToValidUTF8(detail[:MaxNativeErrorBytes], "") + "…"
+	}
+	return prefix + ": " + detail
 }

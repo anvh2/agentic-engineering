@@ -36,6 +36,22 @@ func TestCodexArgsPreserveNativeHarness(t *testing.T) {
 		t.Fatal(joined)
 	}
 }
+func TestCodexArgsIncludeAdditionalDirectoriesBeforeResume(t *testing.T) {
+	s := spec()
+	s.NativeSessionID, s.AddDirs = "native-id", []string{"/repo/second"}
+	args, err := CodexArgs(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--add-dir /repo/second") || strings.Index(joined, "--add-dir") > strings.Index(joined, "resume") {
+		t.Fatal(joined)
+	}
+	s.AddDirs = []string{"relative"}
+	if _, err := CodexArgs(s); err == nil {
+		t.Fatal("relative directory accepted")
+	}
+}
 func TestCodexRejectsUnsafeLaunchInputs(t *testing.T) {
 	for _, change := range []func(*TurnSpec){func(s *TurnSpec) { s.MCPURL = "https://remote.example/mcp" }, func(s *TurnSpec) { s.MCPURL = "http://127.0.0.1:4112/mcp?token=x" }, func(s *TurnSpec) { s.Workdir = "relative" }, func(s *TurnSpec) { s.NativeSessionID = "--last" }, func(s *TurnSpec) { s.Token = "" }} {
 		s := spec()
@@ -55,18 +71,37 @@ func TestCodexUsageNormalizationAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(r.Usage) != 1 || *r.Usage[0].UncachedInput != 30 || *r.Usage[0].CacheRead != 70 || *r.Usage[0].Output != 9 || r.Usage[0].CostUSDEstimate != nil {
+	if len(r.Usage) != 1 || !r.Usage[0].SessionCumulative || *r.Usage[0].UncachedInput != 30 || *r.Usage[0].CacheRead != 70 || *r.Usage[0].Output != 9 || r.Usage[0].CostUSDEstimate != nil {
 		t.Fatalf("usage %+v", r.Usage)
 	}
 }
-func TestCodexZeroExitDoesNotMaskToolFailure(t *testing.T) {
-	s := codexStream{}
-	s.line([]byte(`{"type":"thread.started","thread_id":"native"}`))
-	s.line([]byte(`{"type":"item.completed","item":{"type":"mcp_tool_call","status":"failed","error":{"message":"approval required"}}}`))
-	s.line([]byte(`{"type":"turn.completed"}`))
-	r, err := s.finish(0, false, nil)
-	if err == nil || r.ToolFailures != 1 {
-		t.Fatalf("false success %+v %v", r, err)
+func TestCodexFailureClassification(t *testing.T) {
+	const refused = `{"type":"item.completed","item":{"type":"mcp_tool_call","server":"agentic_engineering","status":"failed","error":{"message":"approval required"}}}`
+	const accepted = `{"type":"item.completed","item":{"type":"mcp_tool_call","server":"agentic_engineering","status":"completed"}}`
+	for _, tc := range []struct {
+		name     string
+		lines    []string
+		failures int
+		failed   bool
+	}{
+		{"every collaboration call refused", []string{refused, `{"type":"turn.completed"}`}, 1, true},
+		{"recovered collaboration call", []string{refused, accepted, `{"type":"turn.completed"}`}, 1, false},
+		{"red native test run", []string{`{"type":"item.completed","item":{"type":"command_execution","status":"failed","exit_code":1}}`, `{"type":"turn.completed"}`}, 0, false},
+		{"other MCP server failure", []string{`{"type":"item.completed","item":{"type":"mcp_tool_call","server":"user","status":"failed"}}`, `{"type":"turn.completed"}`}, 0, false},
+		{"recoverable error event", []string{`{"type":"error","message":"retrying"}`, `{"type":"turn.completed"}`}, 0, false},
+		{"failed turn", []string{`{"type":"turn.failed","error":{"message":"model overloaded"}}`}, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := codexStream{}
+			s.line([]byte(`{"type":"thread.started","thread_id":"native"}`))
+			for _, line := range tc.lines {
+				s.line([]byte(line))
+			}
+			r, err := s.finish(0, false, nil)
+			if (err != nil) != tc.failed || (r.NativeError != "") != tc.failed || r.ToolFailures != tc.failures {
+				t.Fatalf("result %+v, error %v", r, err)
+			}
+		})
 	}
 }
 func TestCodexUnknownAndMalformedUsage(t *testing.T) {

@@ -66,6 +66,9 @@ func (s *Service) writeTask(ctx context.Context, tx *sql.Tx, t *Task) error {
 // ClaimTask makes the caller the owner of an open task. Exactly one of any
 // number of concurrent claimers with the same expected revision succeeds.
 func (s *Service) ClaimTask(ctx context.Context, p Principal, taskID string, expectedRevision int64) (Task, error) {
+	if p.Duty == DutyReviewer {
+		return Task{}, ErrForbidden // The reviewer must stay independent of the work.
+	}
 	var t Task
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		if err := requireLiveTurn(ctx, tx, p); err != nil {
@@ -146,10 +149,18 @@ func (s *Service) SetTaskVerdict(ctx context.Context, objectiveID, taskID string
 		}
 		t.Status = TaskRejected
 		if accepted {
+			if err := requireReviewApproval(ctx, tx, objectiveID); err != nil {
+				return err
+			}
 			t.Status = TaskAccepted
 		}
 		t.Summary = summary
 		return s.writeTask(ctx, tx, &t)
 	})
 	return t, err
+}
+
+// ListTasks is a trusted desktop read of an objective's tasks.
+func (s *Service) ListTasks(ctx context.Context, objectiveID string) ([]Task, error) {
+	return s.listTasks(ctx, s.db, objectiveID)
 }

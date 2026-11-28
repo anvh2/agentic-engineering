@@ -32,6 +32,12 @@ func CodexArgs(spec TurnSpec) ([]string, error) {
 		"-c", "mcp_servers." + MCPServerName + ".bearer_token_env_var=" + strconv.Quote(TokenEnv),
 		"-c", "mcp_servers." + MCPServerName + ".default_tools_approval_mode=\"approve\"",
 	}
+	for _, dir := range spec.AddDirs {
+		if !filepath.IsAbs(dir) {
+			return nil, errors.New("additional directories must be absolute")
+		}
+		args = append(args, "--add-dir", dir)
+	}
 	if spec.Model != "" {
 		args = append(args, "--model", spec.Model)
 	}
@@ -44,9 +50,8 @@ func CodexArgs(spec TurnSpec) ([]string, error) {
 	} else if spec.Instructions != "" {
 		args = append(args, "-c", "developer_instructions="+strconv.Quote(spec.Instructions))
 	}
-	// Shared launcher currently takes argv; stdin support is required before
-	// sensitive task prompts can be passed. Token is still exclusively env-based.
-	args = append(args, "--", spec.Prompt)
+	// Task text is consumed from stdin, not argv (which other processes can read).
+	args = append(args, "-")
 	return args, nil
 }
 
@@ -57,6 +62,8 @@ type codexStream struct {
 	completion []byte
 	token      string
 	emit       func(Event)
+	succeeded  int    // successful calls to this app's MCP tools
+	lastError  string // most recent non-fatal error event
 }
 
 func (s *codexStream) line(line []byte) {
@@ -77,6 +84,7 @@ func (s *codexStream) line(line []byte) {
 		Item     struct {
 			Type   string          `json:"type"`
 			Text   string          `json:"text"`
+			Server string          `json:"server"`
 			Status string          `json:"status"`
 			Error  json.RawMessage `json:"error"`
 		} `json:"item"`
@@ -101,11 +109,25 @@ func (s *codexStream) line(line []byte) {
 		if ev.Item.Type == "agent_message" {
 			s.result.FinalText = ev.Item.Text
 		}
+		if ev.Item.Type != "mcp_tool_call" || ev.Item.Server != MCPServerName {
+			return // A red test run or a denied native command is ordinary work.
+		}
 		if ev.Item.Status == "failed" || (len(ev.Item.Error) > 0 && string(ev.Item.Error) != "null") {
 			s.result.ToolFailures++
+		} else {
+			s.succeeded++
 		}
-	case "turn.failed", "error":
-		s.result.NativeError = "native turn failed"
+	case "error":
+		// Codex reports retries and other recoverable conditions this way.
+		s.lastError = ev.Message
+	case "turn.failed":
+		var failure struct {
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(ev.Error, &failure); err != nil || failure.Message == "" {
+			failure.Message = s.lastError
+		}
+		s.result.NativeError = nativeError("Codex turn failed", failure.Message)
 	case "turn.completed":
 		if s.completed {
 			if !bytes.Equal(s.completion, ev.Usage) {
@@ -141,7 +163,9 @@ func codexUsage(raw json.RawMessage) (Usage, error) {
 		}
 		return &n, nil
 	}
-	u := Usage{Provider: Codex, NormalizationVersion: NormalizationVersion, Raw: append(json.RawMessage(nil), raw...)}
+	// turn.completed reports the thread's running total, including earlier turns.
+	u := Usage{Provider: Codex, NormalizationVersion: NormalizationVersion, SessionCumulative: true,
+		Raw: append(json.RawMessage(nil), raw...)}
 	input, err := get("input_tokens")
 	if err != nil {
 		return u, err
@@ -168,6 +192,12 @@ func codexUsage(raw json.RawMessage) (Usage, error) {
 func (s *codexStream) finish(exit int, interrupted bool, runErr error) (TurnResult, error) {
 	s.result.ExitCode = exit
 	s.result.Interrupted = interrupted
+	if s.result.NativeError == "" && s.result.ToolFailures > 0 && s.succeeded == 0 {
+		s.result.NativeError = ErrCollaborationUnavailable
+	}
+	if s.result.NativeError == "" && !s.completed && s.lastError != "" {
+		s.result.NativeError = nativeError("Codex turn failed", s.lastError)
+	}
 	if runErr != nil {
 		return s.result, errors.New("native process failed")
 	}
@@ -180,7 +210,7 @@ func (s *codexStream) finish(exit int, interrupted bool, runErr error) (TurnResu
 	if !s.completed || s.result.NativeSessionID == "" {
 		return s.result, errors.New("native completion evidence missing")
 	}
-	if s.result.NativeError != "" || s.result.ToolFailures > 0 {
+	if s.result.NativeError != "" {
 		return s.result, errors.New("native turn reported failures")
 	}
 	return s.result, nil

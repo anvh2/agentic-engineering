@@ -114,7 +114,30 @@ func (s *Service) BeginTurn(ctx context.Context, participantID string, trigger T
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO turn_tokens(token_sha256, turn_id, expires_at) VALUES (?, ?, ?)`,
 			sha256Hex(token), l.TurnID, s.now().Add(MaxTurnDuration).Format(time.RFC3339Nano))
-		return err
+		if err != nil {
+			return err
+		}
+		if trigger == TriggerWake {
+			// A wake is a notification, not a message acknowledgement.
+			// Reserve the current message high-water mark in the same
+			// transaction as the turn and wake budget. Failed turns may be
+			// retried only by an explicit Director request.
+			var newest int64
+			if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(m.seq), 0)
+				FROM messages m JOIN participants p ON p.objective_id = m.objective_id
+				WHERE p.id = ? AND m.seq > p.notified_seq
+				AND m.from_handle <> p.handle
+				AND (m.to_handle = '' OR m.to_handle = p.handle)`, participantID).Scan(&newest); err != nil {
+				return err
+			}
+			if newest > 0 {
+				if _, err := tx.ExecContext(ctx, `UPDATE participants
+					SET notified_seq = MAX(notified_seq, ?) WHERE id = ?`, newest, participantID); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return TurnLease{}, err
@@ -139,18 +162,26 @@ func requireLiveTurn(ctx context.Context, tx *sql.Tx, p Principal) error {
 }
 
 // RecordNativeSessionID stores a native id learned mid-turn (Codex reports
-// its thread id at thread.started) so a crash before FinishTurn keeps it.
+// its thread id at thread.started) so a crash before FinishTurn keeps it. Only
+// a running turn may write it.
 func (s *Service) RecordNativeSessionID(ctx context.Context, turnID, nativeID string) error {
 	if nativeID == "" {
 		return nil
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE sessions SET native_session_id = ?
-		WHERE id = (SELECT session_id FROM turns WHERE id = ?) AND (native_session_id = '' OR native_session_id = ?)`, nativeID, turnID, nativeID)
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		return recordNativeSessionID(ctx, tx, turnID, nativeID)
+	})
+}
+
+func recordNativeSessionID(ctx context.Context, tx *sql.Tx, turnID, nativeID string) error {
+	res, err := tx.ExecContext(ctx, `UPDATE sessions SET native_session_id = ?
+		WHERE id = (SELECT session_id FROM turns WHERE id = ? AND state = 'running')
+		AND (native_session_id = '' OR native_session_id = ?)`, nativeID, turnID, nativeID)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
-		return conflict("session already has a different native id")
+		return conflict("session already has a different native id or the turn is not running")
 	}
 	return nil
 }
@@ -178,12 +209,12 @@ func (s *Service) FinishTurn(ctx context.Context, turnID string, o TurnOutcome) 
 	if o.StartErr != nil && nativeErr == "" {
 		nativeErr = o.StartErr.Error()
 	}
-	if r.NativeSessionID != "" {
-		if err := s.RecordNativeSessionID(ctx, turnID, r.NativeSessionID); err != nil {
-			return err
-		}
-	}
 	return s.tx(ctx, func(tx *sql.Tx) error {
+		if r.NativeSessionID != "" {
+			if err := recordNativeSessionID(ctx, tx, turnID, r.NativeSessionID); err != nil {
+				return err
+			}
+		}
 		now := s.ts()
 		res, err := tx.ExecContext(ctx, `UPDATE turns SET state = ?, exit_code = ?, tool_failures = ?, native_error = ?, final_text = ?, log_path = ?, log_sha256 = ?, ended_at = ?
 			WHERE id = ? AND state = 'running'`, state, r.ExitCode, r.ToolFailures, nativeErr, r.FinalText, o.LogPath, o.LogSHA256, now, turnID)
@@ -194,21 +225,19 @@ func (s *Service) FinishTurn(ctx context.Context, turnID string, o TurnOutcome) 
 			return conflict("turn is not running")
 		}
 		for _, u := range r.Usage {
-			kind := "unknown"
-			if u.CostUSDEstimate != nil {
-				kind = "provider_api_equivalent_estimate"
-			}
-			raw := string(u.Raw)
-			if raw == "" {
-				raw = "null"
-			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO usage_records(turn_id, provider, model, uncached_input, cache_read, cache_write, output, reasoning, cost_usd_estimate, cost_kind, normalization_version, raw, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(turn_id, provider, model) DO NOTHING`,
-				turnID, string(u.Provider), u.Model, u.UncachedInput, u.CacheRead, u.CacheWrite, u.Output, u.Reasoning, u.CostUSDEstimate, kind, u.NormalizationVersion, raw, now); err != nil {
+			if err := s.recordUsage(ctx, tx, turnID, u); err != nil {
 				return err
 			}
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE turn_tokens SET revoked_at = ? WHERE turn_id = ? AND revoked_at IS NULL`, now, turnID)
+		if _, err := tx.ExecContext(ctx, `UPDATE turn_tokens SET revoked_at = ? WHERE turn_id = ? AND revoked_at IS NULL`, now, turnID); err != nil {
+			return err
+		}
+		if state != "succeeded" && r.NativeSessionID == "" {
+			// A failed first launch may never have created a native session.
+			// Retire that app session instead of retrying an invented ID.
+			_, err = tx.ExecContext(ctx, `UPDATE sessions SET state = 'failed', closed_at = ?
+				WHERE id = (SELECT session_id FROM turns WHERE id = ?) AND state = 'active'`, now, turnID)
+		}
 		return err
 	})
 }
@@ -243,14 +272,14 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Principal, er
 	}
 	var p Principal
 	var expires string
-	err := s.db.QueryRowContext(ctx, `SELECT t.id, se.id, pa.id, pa.handle, pa.agent, pa.role, o.id, o.project_id, k.expires_at
+	err := s.db.QueryRowContext(ctx, `SELECT t.id, se.id, pa.id, pa.handle, pa.agent, pa.agent_id, pa.agent_name, pa.role, pa.duty, o.id, o.project_id, k.expires_at
 		FROM turn_tokens k
 		JOIN turns t ON t.id = k.turn_id
 		JOIN sessions se ON se.id = t.session_id
 		JOIN participants pa ON pa.id = se.participant_id
 		JOIN objectives o ON o.id = pa.objective_id
 		WHERE k.token_sha256 = ? AND k.revoked_at IS NULL AND t.state = 'running' AND se.state = 'active' AND o.status = 'active'`,
-		sha256Hex(token)).Scan(&p.TurnID, &p.SessionID, &p.ParticipantID, &p.Handle, &p.Agent, &p.Role, &p.ObjectiveID, &p.ProjectID, &expires)
+		sha256Hex(token)).Scan(&p.TurnID, &p.SessionID, &p.ParticipantID, &p.Handle, &p.Agent, &p.AgentID, &p.AgentName, &p.Role, &p.Duty, &p.ObjectiveID, &p.ProjectID, &expires)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Principal{}, ErrUnauthenticated
 	}
