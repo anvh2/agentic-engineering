@@ -45,7 +45,16 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
       if(!/^[a-z][a-z0-9_-]{0,39}$/.test(handle)||duplicate){if(status)status.textContent="Invalid or duplicate handle";return;}
       const harness=value("profile-harness");if(harness!=="Claude"&&harness!=="Codex")return;
       state.agentProfiles??={};
-      state.agentProfiles[id]={...state.agentProfiles[id],handle,role:value("profile-role"),harness,model:value("profile-model").trim()||"Default"};
+      const selectedRole=value("profile-role");
+      state.agentProfiles[id]={...state.agentProfiles[id],handle,role:selectedRole,harness,model:value("profile-model").trim()||"Default"};
+      const pack=state.knowledgePack;
+      if(pack){
+        state.agentKnowledge??={};
+        state.agentKnowledge[id]=(state.agentKnowledge[id]??[]).filter(docID=>{
+          const entry=pack.entries.find(e=>e.id===docID);
+          return entry?.load==="on-demand"&&knowledgeApplicable(entry,selectedRole,state.agentLanguages?.[id]??[]);
+        });
+      }
       persist();render();return;
     }
     if(data.profileChat){
