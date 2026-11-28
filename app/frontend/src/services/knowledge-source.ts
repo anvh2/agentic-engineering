@@ -10,14 +10,28 @@ export interface KnowledgePack {
 type Bridge={go?:{main?:{KnowledgeSource?:{
  SyncGitHub(ref:string):Promise<KnowledgePack>;
  SyncRepository(repository:string,ref:string,manifest:string):Promise<KnowledgePack>;
+ ListGitRefs(repository:string):Promise<Array<{name:string;kind:string}>>;
+ ImportJSON(raw:string):Promise<KnowledgePack>;
  LoadLocal(path:string):Promise<KnowledgePack>;
  ReadEntry(root:string,id:string):Promise<string>;
 }}}};
 const native=()=>(window as unknown as Bridge).go?.main?.KnowledgeSource;
 export const knowledgeAvailable=()=>Boolean(native());
-export async function syncKnowledge(ref:string,repository:string,manifest:string):Promise<KnowledgePack> {
- const adapter=native();if(!adapter)throw new Error("Open the Wails desktop app to connect a knowledge repository.");
- return adapter.SyncRepository(repository,ref,manifest);
+const needsRestart=()=>new Error("Native knowledge adapter is outdated. Stop the app, run wails dev again, then retry.");
+export async function syncKnowledge(repository:string, selectedRef=""):Promise<KnowledgePack> {
+ const adapter=native();
+ if(!adapter?.SyncRepository)throw needsRestart();
+ return adapter.SyncRepository(repository,selectedRef,"manifest.json");
+}
+export async function listKnowledgeRefs(repository:string):Promise<Array<{name:string;kind:string}>> {
+ const adapter=native();
+ if(!adapter?.ListGitRefs)throw needsRestart();
+ return adapter.ListGitRefs(repository);
+}
+export async function importKnowledgeJSON(raw:string):Promise<KnowledgePack> {
+ const adapter=native();
+ if(!adapter?.ImportJSON)throw needsRestart();
+ return adapter.ImportJSON(raw);
 }
 export async function loadKnowledgeDirectory(path:string):Promise<KnowledgePack> {
  const adapter=native();if(!adapter)throw new Error("Open the Wails desktop app to open local knowledge.");
