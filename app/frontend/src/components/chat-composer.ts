@@ -1,0 +1,4 @@
+import {escapeHTML} from "./primitives";
+export function renderChatComposer(o:{id:string;placeholder:string;draft?:string;running:boolean;disabled?:boolean;send:string;stop:string;toolbar?:string;hint?:string;mentions?:boolean}){
+ return `<div class="chat-bottom"><div class="chat-composer ${o.mentions?"mention-composer":""}">${o.mentions?'<div id="mention-menu" class="mention-menu" hidden></div>':""}<textarea id="${o.id}" rows="2" placeholder="${escapeHTML(o.placeholder)}" ${o.running?"disabled":""}>${escapeHTML(o.draft||"")}</textarea><div class="chat-toolbar">${o.toolbar||""}<span class="chat-toolbar-spacer"></span>${o.running?`<button ${o.stop}>Stop</button>`:`<button class="primary" ${o.send} ${o.disabled?"disabled":""} aria-label="Send">↑</button>`}</div></div>${o.hint?`<small>${escapeHTML(o.hint)}</small>`:""}</div>`;
+}

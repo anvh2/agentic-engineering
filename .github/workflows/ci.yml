@@ -1,20 +1,33 @@
 name: CI
-
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
-
 permissions:
   contents: read
-
-concurrency:
-  group: pr-ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 jobs:
   checks:
     name: Project checks
-    uses: ./.github/workflows/validation.yml
-    with:
-      test-lane: fast
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: app/go.mod
+          cache-dependency-path: app/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Frontend
+        working-directory: app/frontend
+        run: |
+          npm install
+          npm run typecheck
+          npm run build
+      - name: Go checks
+        working-directory: app
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          go vet ./...
+          go test -race ./...
+          go build ./...
