@@ -229,6 +229,10 @@ func (h *HarnessConsole) runPrompt(name, path, dir, prompt, key, model, knowledg
 			}
 		},
 	}
+	// Opt-in ACP preview for chat only; issue execution retains its existing worktree runtime.
+	if key == "" && os.Getenv("AE_CHAT_RUNTIME") == "acp" {
+		return runACPChat(ctx, name, path, dir, prompt, stream, onStart)
+	}
 	command.Stdout = stream
 	command.Stderr = &stderr
 	err = command.Start()
