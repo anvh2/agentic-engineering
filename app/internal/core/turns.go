@@ -114,7 +114,30 @@ func (s *Service) BeginTurn(ctx context.Context, participantID string, trigger T
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO turn_tokens(token_sha256, turn_id, expires_at) VALUES (?, ?, ?)`,
 			sha256Hex(token), l.TurnID, s.now().Add(MaxTurnDuration).Format(time.RFC3339Nano))
-		return err
+		if err != nil {
+			return err
+		}
+		if trigger == TriggerWake {
+			// A wake is a notification, not a message acknowledgement.
+			// Reserve the current message high-water mark in the same
+			// transaction as the turn and wake budget. Failed turns may be
+			// retried only by an explicit Director request.
+			var newest int64
+			if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(m.seq), 0)
+				FROM messages m JOIN participants p ON p.objective_id = m.objective_id
+				WHERE p.id = ? AND m.seq > p.notified_seq
+				AND m.from_handle <> p.handle
+				AND (m.to_handle = '' OR m.to_handle = p.handle)`, participantID).Scan(&newest); err != nil {
+				return err
+			}
+			if newest > 0 {
+				if _, err := tx.ExecContext(ctx, `UPDATE participants
+					SET notified_seq = MAX(notified_seq, ?) WHERE id = ?`, newest, participantID); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return TurnLease{}, err
