@@ -12,12 +12,19 @@ type TokenUsage struct {
 	CacheReadTokens  int64  `json:"cacheReadTokens,omitempty"`
 	CacheWriteTokens int64  `json:"cacheWriteTokens,omitempty"`
 	Provider         string `json:"provider"`
+	Scope            string `json:"scope,omitempty"`
 }
 
 type nativeChatEvent struct {
 	Type   string          `json:"type"`
 	Result string          `json:"result"`
 	Usage  json.RawMessage `json:"usage"`
+	ModelUsage map[string]struct {
+		InputTokens int64 `json:"inputTokens"`
+		OutputTokens int64 `json:"outputTokens"`
+		CacheReadInputTokens int64 `json:"cacheReadInputTokens"`
+		CacheCreationInputTokens int64 `json:"cacheCreationInputTokens"`
+	} `json:"modelUsage"`
 	Event  struct {
 		Type         string `json:"type"`
 		Delta        struct{ Type, Text string } `json:"delta"`
@@ -77,6 +84,19 @@ func (s *chatStream) activity(message string) {
 }
 
 func (s *chatStream) recordUsage(event nativeChatEvent) {
+	// Claude result.modelUsage contains invocation-wide totals across models.
+	// result.usage alone may cover only the final model call.
+	if s.name == "Claude" && event.Type == "result" && len(event.ModelUsage) > 0 {
+		aggregate := &TokenUsage{Provider: "Claude", Scope: "invocation"}
+		for _, model := range event.ModelUsage {
+			aggregate.InputTokens += model.InputTokens
+			aggregate.OutputTokens += model.OutputTokens
+			aggregate.CacheReadTokens += model.CacheReadInputTokens
+			aggregate.CacheWriteTokens += model.CacheCreationInputTokens
+		}
+		s.usage = aggregate
+		return
+	}
 	if !(s.name == "Claude" && event.Type == "result") &&
 		!(s.name == "Codex" && event.Type == "turn.completed") {
 		return
@@ -100,6 +120,7 @@ func (s *chatStream) recordUsage(event nativeChatEvent) {
 	}
 	s.usage = &TokenUsage{
 		Provider:         s.name,
+		Scope:            map[bool]string{true: "result", false: "turn"}[s.name == "Claude"],
 		InputTokens:      usage.InputTokens,
 		OutputTokens:     usage.OutputTokens,
 		CacheReadTokens:  cacheRead,
