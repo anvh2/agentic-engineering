@@ -36,6 +36,11 @@ export interface M1TurnReport {
   usage: Array<{provider:string; uncached_input:number|null; cache_read:number|null; cache_write:number|null; output:number|null; cost_usd_estimate:number|null}>;
   evidencePath: string;
   evidenceSha256: string;
+  diffPath?: string;
+  diffSha256?: string;
+  gitHead?: string;
+  gitStatus?: string;
+  gitEvidenceError?: string;
   error?: string;
 }
 export interface M1Creation {
