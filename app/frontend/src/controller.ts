@@ -10,68 +10,15 @@ import type { Agent } from "./types";
 import type { ViewContext } from "./view-context";
 import { demoStore } from "./services/demo-store";
 import { renderLayout } from "./components/layout";
-import { syncKnowledge,listKnowledgeRefs,importKnowledgeJSON,readKnowledgeEntry,knowledgeForAgent } from "./services/knowledge-source";
+import { syncKnowledge,listKnowledgeRefs,importKnowledgeJSON,readKnowledgeEntry,knowledgeApplicable } from "./services/knowledge-source";
+import { subscribeKnowledgeEvents,storeKnowledgeResult } from "./services/knowledge-trace";
 export function mountController(root: HTMLElement, ctx: ViewContext) {
   mountMentions(root);
   const {state,nav,getObjective,getProject}=ctx;
   let {page,projectFilter,detail,tab,modal,roleSelected,docSelected,discussion,usageAgent}=nav;
-  let knowledgeTimer: number | undefined;
-  let knowledgeCompletedAt = 0;
-  const stopKnowledgePlayback=()=>{if(knowledgeTimer!==undefined){window.clearInterval(knowledgeTimer);knowledgeTimer=undefined;knowledgeCompletedAt=0;}};
   const persist=()=>{try{demoStore.save(state)}catch{window.alert("Could not save demo data.");}};
-  const render=()=>{Object.assign(nav,{page,projectFilter,detail,tab,modal,roleSelected,docSelected,discussion,usageAgent});renderLayout(root,ctx);docSelected=nav.docSelected;syncKnowledgePlayback();};
-  const syncKnowledgePlayback=()=>{
-    if(page!=="Team"||!profiles(state).some(a=>a.id===detail)||tab==="Roles"||tab==="Harnesses"){stopKnowledgePlayback();return;}
-    if(knowledgeTimer!==undefined)return;
-    knowledgeTimer=window.setInterval(()=>{
-      if(page!=="Team"||!profiles(state).some(a=>a.id===detail)||tab==="Roles"||tab==="Harnesses"){stopKnowledgePlayback();return;}
-      const match=/^Knowledge (Graph|Timeline|Context) ([0-6])$/.exec(tab);
-      const view=match?.[1]||"Graph",phase=Number(match?.[2]||0);
-      const preview=root.querySelector<HTMLElement>("[data-knowledge-preview]");
-      if(!preview){stopKnowledgePlayback();return;}
-      if(phase===6){
-        if(!knowledgeCompletedAt){
-          preview.querySelectorAll(".knowledge-flow-active,.knowledge-node-active").forEach(el=>{
-            el.classList.remove("knowledge-flow-active","knowledge-node-active");
-            if(el.hasAttribute("data-knowledge-edge"))el.setAttribute("stroke-dasharray","none");
-          });
-          const status=preview.querySelector("[data-knowledge-phase]");
-          if(status)status.textContent="Completed";
-          knowledgeCompletedAt=Date.now();
-        }
-        if(Date.now()-knowledgeCompletedAt<8000)return;
-      }
-      const next=(phase+1)%7;
-      knowledgeCompletedAt=0;
-      const entries=JSON.parse(preview.dataset.knowledgeEntries||"[]") as Array<{phase:number;tokens:number;kind:string}>;
-      const loaded=entries.filter(e=>e.phase<=next),total=loaded.reduce((sum,e)=>sum+e.tokens,0);
-      tab="Knowledge "+view+" "+next;nav.tab=tab;
-      const setText=(selector:string,value:string)=>{const el=preview.querySelector(selector);if(el)el.textContent=value;};
-      setText("[data-knowledge-phase]",["Waiting","Bootstrap","Repository discovery","Planning","Implementation","Debugging","Verification"][next]);
-      setText("[data-knowledge-count]",loaded.length+" / "+entries.length);
-      setText("[data-knowledge-total]",total.toLocaleString());
-      setText("[data-knowledge-total-svg]",total.toLocaleString()+" est. tokens");
-      preview.querySelectorAll("[data-knowledge-edge],[data-knowledge-node]").forEach(el=>{
-        const edge=el.hasAttribute("data-knowledge-edge");
-        const p=Number(el.getAttribute(edge?"data-knowledge-edge":"data-knowledge-node"));
-        el.setAttribute("stroke",p<=next?"#79a98e":"var(--edge)");
-        if(!edge)el.setAttribute("fill",p<=next?"#25332d":"var(--raised)");
-        if(edge)el.setAttribute("stroke-dasharray",p<=next?"none":"4 4");
-        el.classList.toggle(edge?"knowledge-flow-active":"knowledge-node-active",p===next);
-      });
-      preview.querySelectorAll("[data-knowledge-label],[data-knowledge-status]").forEach(el=>{
-        const label=el.hasAttribute("data-knowledge-label");
-        const p=Number(el.getAttribute(label?"data-knowledge-label":"data-knowledge-status"));
-        el.textContent=p<=next?(label?"Loaded · "+el.getAttribute("data-tokens")+" tokens":"Loaded"):p===99?(next===6?"Skipped · Not relevant":"Not selected"):"Available";
-      });
-      for(const kind of ["DNA","Role","Standard","Skill","Reference"]){
-        const n=loaded.filter(e=>e.kind===kind).reduce((sum,e)=>sum+e.tokens,0);
-        setText('[data-knowledge-category="'+kind+'"]',n.toLocaleString()+" tokens");
-        const bar=preview.querySelector<HTMLElement>('[data-knowledge-bar="'+kind+'"]');
-        if(bar)bar.style.width=(total?100*n/total:0)+"%";
-      }
-    },1500);
-  };
+  const render=()=>{Object.assign(nav,{page,projectFilter,detail,tab,modal,roleSelected,docSelected,discussion,usageAgent});renderLayout(root,ctx);docSelected=nav.docSelected;};
+  subscribeKnowledgeEvents(agentId=>{if(page==="Team"&&detail===agentId)render()});
   subscribeChat(name=>{if(page==="Chat"||page==="Collaboration")updateChatStream(root,name,consoles[name].output,consoles[name].activity)});
   const updateIssue=()=>{if(page==="Chat"||page==="Objectives")render()};
   const launch=(issue:import("./services/work-board").Issue,agent:Agent,request:string)=>{void executeIssue(issue,agent,request,state,updateIssue)};
@@ -83,7 +30,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     const el=event.target.closest<HTMLElement>("button,[data-objective],[data-project],[data-session]");
     if(!el)return;
     const data=el.dataset, objective=getObjective(detail), project=getProject(detail);
-    if("agentNew" in data){detail="new-agent";stopKnowledgePlayback();render();return;}
+    if("agentNew" in data){detail="new-agent";render();return;}
     if("agentCreate" in data){
       const name=value("new-agent-name"),handle=value("new-agent-handle").replace(/^@/,"").toLowerCase(),role=value("new-agent-role"),harness=value("new-agent-harness");
       const status=root.querySelector<HTMLElement>("[data-profile-status]");
@@ -177,7 +124,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
       const scroll=root.querySelector<HTMLElement>(".team-properties")?.scrollTop??0;
       const selectedView=/^Knowledge (Graph|Timeline|Context) [0-6]$/.exec(tab)?.[1]||"Graph";
       tab="Knowledge "+selectedView+" 0";
-      stopKnowledgePlayback();persist();render();
+      persist();render();
       const panel=root.querySelector<HTMLElement>(".team-properties");if(panel)panel.scrollTop=scroll;
       return;
     }
@@ -204,7 +151,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     if("agentSend" in data){const id=detail.slice(6);void sendAgentChat(state,id,value("agent-chat-prompt"),()=>{if(page==="Chat"&&detail==="agent:"+id)render()});return;}
     if("agentStop" in data){void stopAgentChat(detail.slice(6));return;}
     if(data.chatHarness){page="Chat";tab="";detail=data.chatHarness;render();return;}
-    if(data.harness){detail=detail===data.harness?"":data.harness;if(page==="Team"&&profiles(state).some(a=>a.id===data.harness)){tab="Knowledge Graph 0";stopKnowledgePlayback();}render();return;}
+    if(data.harness){detail=detail===data.harness?"":data.harness;if(page==="Team"&&profiles(state).some(a=>a.id===data.harness)){tab="Knowledge Graph 0";}render();return;}
     if(data.runPrompt||data.stopPrompt||data.terminal){
       if(group.busy){window.alert("Finish the group conversation first.");return;}
       const name=(data.runPrompt||data.stopPrompt||data.terminal) as Agent;
@@ -214,9 +161,9 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
       const profile=id?(state.agentProfiles?.[id]??{role:id==="alex"?"Architect":id==="emma"?"Developer":"Reviewer",model:"Default",handle:id}):undefined;
       const pack=state.knowledgePack;
       if(data.runPrompt&&profile&&!pack){window.alert("Connect knowledge first");return;}
-      const context=profile&&pack?{root:pack.root,ids:knowledgeForAgent(pack,profile.role,state.agentKnowledge?.[id]??[]).map(e=>e.id),model:profile.model,author:profile.handle}:undefined;
+      const context=profile&&pack?{request:{agentId:id,root:pack.root,role:profile.role,languages:state.agentLanguages?.[id]??[],assigned:state.agentKnowledge?.[id]??[],task:c.prompt},model:profile.model,author:profile.handle}:undefined;
       const pending=data.runPrompt?runPrompt(name,undefined,context):data.stopPrompt?stopPrompt(name):openTerminal(name);
-      render();void pending.catch(e=>{c.error=String(e)}).finally(()=>{if(page==="Chat"&&(detail||"Codex")===name&&!modal)render()});return;
+      render();void pending.then(result=>{if(context&&result&&"runId" in result)storeKnowledgeResult(id,result)}).catch(e=>{c.error=String(e)}).finally(()=>{if(page==="Chat"&&(detail||"Codex")===name&&!modal)render()});return;
     }
     if("rescan" in data || data.checkAgent){
       const pending=data.checkAgent ? scanAgent(data.checkAgent as Agent,value("agent-path-"+data.checkAgent)) : scanAgents();
@@ -261,6 +208,25 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
   root.addEventListener("change",(event)=>{const field=event.target;if(page==="Objectives"&&(field instanceof HTMLInputElement||field instanceof HTMLTextAreaElement||field instanceof HTMLSelectElement)){const issue=issues().find(x=>x.id===detail&&x.project===projectFilter);const keys={"issue-title":"title","issue-description":"description","issue-criteria":"criteria","issue-status":"status","issue-assignee":"assignee","issue-repo":"repository","issue-priority":"priority"} as const;const key=keys[field.id as keyof typeof keys];if(issue&&key){const status=root.querySelector<HTMLElement>(".mc-save-status");try{if(key==="title"&&!field.value.trim())throw new Error("Title is required");if(key==="status"&&!statuses.some(s=>s===field.value))throw new Error("Invalid status");const next={...issue,[key]:field.value};saveIssue(next);if(key==="status"&&issue.status!=="In Progress"&&field.value==="In Progress")queueMicrotask(()=>startAssigned(next));if(status)status.textContent="";if(key==="title"){const heading=root.querySelector(".mc-detail-toolbar strong");if(heading)heading.textContent=field.value}}catch(e){if(status)status.textContent=String(e);field.value=issue[key]||""}return;}}
 
     const el=event.target as HTMLInputElement,data=el.dataset,objective=getObjective(detail);
+    if(el instanceof HTMLInputElement&&el.dataset.agentLanguage!==undefined&&page==="Team"){
+      const agent=profiles(state).find(a=>a.id===detail);
+      const pack=state.knowledgePack;
+      if(!agent||!pack)return;
+      const lang=el.dataset.agentLanguage.toLowerCase();
+      state.agentLanguages??={};
+      const next=new Set(state.agentLanguages[detail]??[]);
+      if(el.checked)next.add(lang);else next.delete(lang);
+      state.agentLanguages[detail]=[...next];
+      state.agentKnowledge??={};
+      state.agentKnowledge[detail]=(state.agentKnowledge[detail]??[]).filter(id=>{
+        const entry=pack.entries.find(e=>e.id===id);
+        return entry&&knowledgeApplicable(entry,agent.role,state.agentLanguages![detail]);
+      });
+      const scroll=root.querySelector<HTMLElement>(".team-properties")?.scrollTop??0;
+      persist();render();
+      const panel=root.querySelector<HTMLElement>(".team-properties");if(panel)panel.scrollTop=scroll;
+      return;
+    }
     if(el.id==="chat-repository"){consoles[detail==="Claude"?"Claude":"Codex"].dir=el.value;render();return;}
     if(el.id==="project-filter"){projectFilter=el.value;detail="";tab="";}
     else if(el.id==="discussion-select")discussion=el.value;
