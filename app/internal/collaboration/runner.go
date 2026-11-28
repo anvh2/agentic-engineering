@@ -210,6 +210,9 @@ func (r *Runner) RunTurn(ctx context.Context, participantID string, trigger core
 		result, logPath, logDigest, err = r.execute(ctx, adapter, spec, lease.TurnID, onEvent)
 	}
 	gitSnapshot, gitSnapshotErr := captureGitEvidence(ctx, lease.Workdir, r.evidenceDir, lease.TurnID)
+	if ctx.Err() != nil {
+		result.Interrupted = true
+	}
 	outcome := core.TurnOutcome{Result: result, StartErr: err, LogPath: logPath, LogSHA256: logDigest}
 	// Finishing must revoke the credential even if the invoking UI operation
 	// was cancelled. A bounded shutdown context is intentionally detached.
