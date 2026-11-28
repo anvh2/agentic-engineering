@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -15,6 +16,7 @@ import (
 const knowledgeBootstrapLimit = 24 * 1024
 
 type KnowledgeContextRequest struct {
+	RepositoryDir string `json:"repositoryDir"`
 	AgentID   string   `json:"agentId"`
 	Root      string   `json:"root"`
 	Role      string   `json:"role"`
@@ -40,6 +42,10 @@ type KnowledgeTraceEvent struct {
 }
 
 type KnowledgeContext struct {
+	PackID string
+	Version string
+	Status string
+	Revision string
 	Bootstrap       string                `json:"bootstrap"`
 	Index           string                `json:"index"`
 	Directory       string                `json:"directory"`
@@ -201,6 +207,12 @@ func BuildKnowledgeContext(ctx context.Context, request KnowledgeContextRequest)
 	pack, err := (&KnowledgeSource{}).LoadLocal(request.Root)
 	if err != nil {
 		return result, fmt.Errorf("load knowledge pack: %w", err)
+	}
+	result.PackID, result.Version, result.Status = pack.ID, pack.Version, pack.Status
+	if _, statErr := os.Stat(filepath.Join(pack.Root, ".git")); statErr == nil {
+		out, gitErr := exec.CommandContext(ctx, "git", "-C", pack.Root, "rev-parse", "HEAD").Output()
+		if gitErr != nil { return result, fmt.Errorf("resolve knowledge revision: %w", gitErr) }
+		result.Revision = strings.TrimSpace(string(out))
 	}
 	entries, err := selectKnowledge(pack, request)
 	if err != nil {
