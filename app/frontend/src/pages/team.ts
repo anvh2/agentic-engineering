@@ -35,14 +35,15 @@ function knowledgePreview(agent:{id:string;name:string;role:string;harness:strin
  const harnessY=bootstrapBottom+48;
  const height=Math.max(harnessY+280,harnessY+local.length*62+75);
  const label=(x:number,y:number,t:string)=>'<text x="'+x+'" y="'+y+'" fill="var(--subtle)" font-size="10">'+esc(t)+'</text>';
- const box=(x:number,y:number,w:number,h:number,t:string,sub:string)=>'<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" rx="7" fill="var(--raised)" stroke="var(--edge)"/><text x="'+(x+12)+'" y="'+(y+22)+'" fill="var(--ink)" font-size="13">'+esc(t)+'</text>'+label(x+12,y+40,sub);
+ const palette={agent:["#252a39","#8496c5"],claude:["#352821","#d49a78"],codex:["#29263b","#a99ad9"],execution:["#242e3b","#79a7d7"],evidence:["#332e23","#c5ac72"]};
+ const box=(x:number,y:number,w:number,h:number,t:string,sub:string,colors:string[])=>'<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" rx="7" fill="'+colors[0]+'" stroke="'+colors[1]+'"/><text x="'+(x+12)+'" y="'+(y+22)+'" fill="var(--ink)" font-size="13">'+esc(t)+'</text>'+label(x+12,y+40,sub);
  const node=(e:typeof entries[number],x:number,y:number,w:number)=>{
   const active=e.phase<=step;
   return '<rect data-knowledge-node="'+e.phase+'" class="'+(active&&e.phase===step?'knowledge-node-active':'')+'" x="'+x+'" y="'+y+'" width="'+w+'" height="52" rx="6" fill="'+(active?'#25332d':'var(--raised)')+'" stroke="'+(active?'#79a98e':'var(--edge)')+'"/><text x="'+(x+10)+'" y="'+(y+19)+'" fill="var(--ink)" font-size="12">'+esc(e.name.length>34?e.name.slice(0,31)+"…":e.name)+'</text><text data-knowledge-label="'+e.phase+'" data-tokens="'+e.tokens+'" x="'+(x+10)+'" y="'+(y+37)+'" fill="var(--subtle)" font-size="10">'+(active?'Loaded · '+e.tokens+' est. tokens':'Available')+'</text>';
  };
  const edge=(phase:number,d:string)=>'<path data-knowledge-edge="'+phase+'" class="'+(phase===step?'knowledge-flow-active':'')+'" d="'+d+'" fill="none" stroke="'+(phase<=step?'#79a98e':'var(--edge)')+'" stroke-dasharray="'+(phase<=step?'none':'4 4')+'"/>';
  const graph='<div class="overflow"><svg role="img" aria-label="Target knowledge runtime flow, simulated preview" viewBox="0 0 660 '+height+'" style="width:100%;min-width:460px;display:block;background:radial-gradient(var(--edge) 1px,transparent 1px);background-size:15px 15px;border:1px solid var(--edge);border-radius:7px">'+
- box(220,18,220,58,agent.name,agent.role+" · "+(agent.harness==="Claude"?"Claude Code":agent.harness))+
+ box(220,18,220,58,agent.name,agent.role+" · "+(agent.harness==="Claude"?"Claude Code":agent.harness),palette.agent)+
  edge(1,"M330 76V99")+
  '<rect x="24" y="99" width="612" height="'+(bootstrapBottom-99)+'" rx="8" fill="#25332d22" stroke="#455c4e"/>'+
  label(40,120,"01 · BOOTSTRAP CONTEXT")+
@@ -50,14 +51,14 @@ function knowledgePreview(agent:{id:string;name:string;role:string;harness:strin
  label(40,bootstrapBottom-20,"Task objective · Compact knowledge index (target)")+
  edge(2,"M330 "+bootstrapBottom+"V"+(harnessY-22)+"H157V"+harnessY)+
  label(24,harnessY-10,"02 · NATIVE HARNESS")+label(362,harnessY-10,"03 · LOCAL KNOWLEDGE")+
- box(24,harnessY,266,60,agent.harness==="Claude"?"Claude Code":agent.harness,"Native read / search tools (target)")+
+ box(24,harnessY,266,60,agent.harness==="Claude"?"Claude Code":agent.harness,"Native read / search tools (target)",agent.harness==="Claude"?palette.claude:palette.codex)+
  local.map((e,i)=>edge(e.phase,"M290 "+(harnessY+30)+"H340V"+(harnessY+i*62+26)+"H362")+node(e,362,harnessY+i*62,274)).join("")+
  (!local.length?label(362,harnessY+25,"No assigned documents"):"")+
  edge(3,"M157 "+(harnessY+60)+"V"+(harnessY+94))+
  label(24,harnessY+86,"04 · EXECUTION")+
- box(24,harnessY+94,266,58,"Task execution","Planning · Implementation")+
+ box(24,harnessY+94,266,58,"Task execution","Planning · Implementation",palette.execution)+
  edge(6,"M157 "+(harnessY+152)+"V"+(harnessY+176))+
- box(24,harnessY+176,266,58,"Response & evidence","Verification · Runtime events (target)")+
+ box(24,harnessY+176,266,58,"Response & evidence","Verification · Runtime events (target)",palette.evidence)+
  '<text x="36" y="'+(harnessY+254)+'" fill="var(--subtle)" font-size="11" data-knowledge-total-svg>'+total.toLocaleString()+' est. tokens</text>'+
  label(24,height-12,"Target architecture · Simulated execution")+'</svg></div>';
  const timeline='<div class="overflow"><table><thead><tr><th>Phase</th><th>Knowledge</th><th>Source</th><th>Status</th></tr></thead><tbody>'+entries.map(e=>'<tr><td>'+esc(phases[e.phase])+'</td><td>'+esc(e.name)+'</td><td>'+esc(e.reason)+'</td><td data-knowledge-status="'+e.phase+'">'+(e.phase<=step?'Loaded':'Available')+'</td></tr>').join("")+'</tbody></table></div>';
