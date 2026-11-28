@@ -77,8 +77,7 @@ func knowledgeAllowed(e KnowledgeEntry,role string,languages []string)bool{
 func compactKnowledgeIndex(entries []KnowledgeEntry)string{
 	var b strings.Builder
 	for _,e:=range entries{
-		fmt.Fprintf(&b,"- %s | %s | %s | %s
-",e.ID,e.Title,e.Kind,e.Description)
+		fmt.Fprintf(&b,"- %s | %s | %s | %s\n",e.ID,e.Title,e.Kind,e.Description)
 	}
 	return b.String()
 }
@@ -116,14 +115,11 @@ func BuildKnowledgeContext(req KnowledgeContextRequest)(KnowledgeContext,error){
 		if e.SHA256!="" && !strings.EqualFold(e.SHA256,hash){return out,fmt.Errorf("knowledge checksum mismatch: %s",e.ID)}
 		event:=KnowledgeTraceEvent{Kind:"knowledge.selected",DocumentID:e.ID,Status:e.Status,SHA256:hash,EstimatedTokens:int64((len(raw)+3)/4)}
 		if e.Load=="bootstrap"{
-			// Frontmatter is kept verbatim, as in the authoritative Markdown source.
+			// Strip metadata frontmatter from the injected body to reduce context.
 			docBody:=knowledgeMarkdownBody(raw)
             bytes+=len(docBody)
 			if bytes>knowledgeBootstrapLimit{return out,errors.New("knowledge bootstrap body exceeds 24 KB limit")}
-			fmt.Fprintf(&body,"
---- %s (%s) ---
-%s
-",e.Title,e.ID,string(docBody))
+			fmt.Fprintf(&body,"\n--- %s (%s) ---\n%s\n",e.Title,e.ID,string(docBody))
 			out.Loaded=append(out.Loaded,e.ID)
 			event.Kind="knowledge.injected"
 		}else{
