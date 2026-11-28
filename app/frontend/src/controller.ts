@@ -1,3 +1,4 @@
+import {sendAgentChat,profiles} from "./services/agent-chat";
 import {updateChatStream} from "./components/chat-view";
 import {executeIssue,explicitTargets,issueChat,stopIssue} from "./services/issue-chat";
 import { saveIssue,statuses,priorities,issues,boardContext,nextIssueKey,projectPrefix,setProjectPrefix } from "./services/work-board";
@@ -96,7 +97,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
       const id=data.profileChat;
       const profile=state.agentProfiles?.[id]??{role:id==="alex"?"Architect":id==="emma"?"Developer":"Reviewer",harness:id==="emma"?"Codex":"Claude",model:"Default",handle:id};
       if(consoles[profile.harness as Agent].running){window.alert("Harness already running");return;}
-      page="Chat";detail=profile.harness;tab="Agent:"+id;render();return;
+      page="Chat";detail="agent:"+id;tab="";render();return;
     }
     if("knowledgeSync" in data || "knowledgeLocal" in data){
       const status=root.querySelector<HTMLElement>("[data-knowledge-source-status]");
@@ -166,6 +167,9 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     if("browseRepo" in data){const name=detail==="Claude"?"Claude":"Codex";void browseRepository().then(dir=>{if(dir){consoles[name].dir=dir;if(page==="Chat")render();}}).catch(e=>{consoles[name].error=String(e);render()});return;}
     if("currentRepo" in data){const name=detail==="Claude"?"Claude":"Codex";void currentRepository().then(dir=>{if(!dir){window.alert("No Git repository found in the app working directory. Enter the local path.");return;}consoles[name].dir=dir;if(page==="Chat")render();}).catch(e=>window.alert(String(e)));return;}
     if("reviewPrompt" in data){const c=consoles[detail==="Claude"?"Claude":"Codex"];if(!c.dir.trim()){window.alert("Select a real repository directory before reviewing code.");return;}c.prompt="Review this repository without modifying files. Inspect the current branch, architecture, correctness, security, maintainability and tests. Report prioritized findings with file references and distinguish verified evidence from assumptions.";render();return;}
+    if(data.agentChat){page="Chat";detail="agent:"+data.agentChat;tab="";render();return;}
+    if("agentSend" in data){const id=detail.slice(6);void sendAgentChat(state,id,value("agent-chat-prompt"),()=>{if(page==="Chat"&&detail==="agent:"+id)render()});return;}
+    if("agentStop" in data){for(const a of profiles(state))if(consoles[a.harness].running)void stopPrompt(a.harness);return;}
     if(data.chatHarness){page="Chat";tab="";detail=data.chatHarness;render();return;}
     if(data.harness){detail=detail===data.harness?"":data.harness;if(page==="Team"&&["alex","emma","noah"].includes(data.harness)){tab="Knowledge Graph 0";stopKnowledgePlayback();}render();return;}
     if(data.runPrompt||data.stopPrompt||data.terminal){
@@ -185,7 +189,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
       const pending=data.checkAgent ? scanAgent(data.checkAgent as Agent,value("agent-path-"+data.checkAgent)) : scanAgents();
       render(); void pending.then(()=>{if(page==="Team" && tab!=="Roles" && !modal)render();else if(page==="Overview"&&!modal)render();});return;
     }
-    if(data.page){page=data.page;detail=page==="Chat"?"Codex":"";tab="";}
+    if(data.page){page=data.page;detail=page==="Chat"?"agent:group":"";tab="";}
     else if(data.objective){page="Objectives";detail=data.objective;tab="";}
     else if(data.project){page="Projects";detail=data.project;tab="";}
     else if(data.session){page="Sessions";detail=data.session;tab="";}
@@ -219,7 +223,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
   });
   document.addEventListener("pointerdown",event=>{const menu=root.querySelector<HTMLDetailsElement>(".project-switcher[open]");if(menu&&event.target instanceof Node&&!menu.contains(event.target))menu.open=false;});
   root.addEventListener("keydown",event=>{if(event.key==="Escape"){const menu=root.querySelector<HTMLDetailsElement>(".project-switcher[open]");if(menu){menu.open=false;menu.querySelector("summary")?.focus();}}});
-  root.addEventListener("keydown",event=>{if(event.key==="Enter"&&!event.shiftKey&&!event.isComposing&&event.target instanceof HTMLTextAreaElement&&["console-prompt","group-prompt","issue-chat-prompt"].includes(event.target.id)){event.preventDefault();root.querySelector<HTMLButtonElement>(event.target.id==="group-prompt"?"[data-group-send]":event.target.id==="issue-chat-prompt"?"[data-issue-send]":"[data-run-prompt]")?.click();}});
+  root.addEventListener("keydown",event=>{if(event.key==="Enter"&&!event.shiftKey&&!event.isComposing&&event.target instanceof HTMLTextAreaElement&&["console-prompt","group-prompt","issue-chat-prompt","agent-chat-prompt"].includes(event.target.id)){event.preventDefault();root.querySelector<HTMLButtonElement>(event.target.id==="agent-chat-prompt"?"[data-agent-send]":event.target.id==="group-prompt"?"[data-group-send]":event.target.id==="issue-chat-prompt"?"[data-issue-send]":"[data-run-prompt]")?.click();}});
   root.addEventListener("input",(event)=>{if(event.target instanceof HTMLTextAreaElement&&event.target.id==="group-prompt"){group.draft=event.target.value;return;}if(page!=="Chat"||!(event.target instanceof HTMLInputElement||event.target instanceof HTMLTextAreaElement))return;const c=consoles[detail==="Claude"?"Claude":"Codex"];if(c.running)return;if(event.target.id==="console-dir")c.dir=event.target.value;if(event.target.id==="console-prompt")c.prompt=event.target.value;});
   root.addEventListener("change",(event)=>{const field=event.target;if(page==="Objectives"&&(field instanceof HTMLInputElement||field instanceof HTMLTextAreaElement||field instanceof HTMLSelectElement)){const issue=issues().find(x=>x.id===detail&&x.project===projectFilter);const keys={"issue-title":"title","issue-description":"description","issue-criteria":"criteria","issue-status":"status","issue-assignee":"assignee","issue-repo":"repository","issue-priority":"priority"} as const;const key=keys[field.id as keyof typeof keys];if(issue&&key){const status=root.querySelector<HTMLElement>(".mc-save-status");try{if(key==="title"&&!field.value.trim())throw new Error("Title is required");if(key==="status"&&!statuses.some(s=>s===field.value))throw new Error("Invalid status");const next={...issue,[key]:field.value};saveIssue(next);if(key==="status"&&issue.status!=="In Progress"&&field.value==="In Progress")queueMicrotask(()=>startAssigned(next));if(status)status.textContent="";if(key==="title"){const heading=root.querySelector(".mc-detail-toolbar strong");if(heading)heading.textContent=field.value}}catch(e){if(status)status.textContent=String(e);field.value=issue[key]||""}return;}}
 
