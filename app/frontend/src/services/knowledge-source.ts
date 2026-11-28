@@ -1,7 +1,7 @@
 // File-first source adapter. GitHub is cloned through the user's native Git credentials.
 // No MCP, network requests from the frontend, or model calls are required.
 export interface KnowledgeEntry {
- id:string; title?:string; description?:string; path:string; kind:string; load?:string; bytes:number; tokens:number;
+ id:string; title?:string; description?:string; path:string; kind:string; load?:string; status?:string; roles?:string[]; languages?:string[]; sha256?:string; bytes:number; tokens:number;
 }
 export interface KnowledgePack {
  schemaVersion:number; id:string; version:string; status:string; language:string;
@@ -54,6 +54,11 @@ export const knowledgeDisplayName=(e:KnowledgeEntry):string=>{
  if(e.kind==="guides")return /^readme\.md$/i.test(name)?humanize(parent)+" Guide":humanize(name.replace(/^\d+-/,""));
  return humanize(name);
 };
+export function knowledgeApplicable(e:KnowledgeEntry,role:string,languages:string[]):boolean {
+ const roles=e.roles?.map(v=>v.toLowerCase())??[];
+ const langs=e.languages?.map(v=>v.toLowerCase())??[];
+ return (!roles.length||roles.includes(role.toLowerCase())) && (!langs.length||languages.some(l=>langs.includes(l.toLowerCase())));
+}
 export const knowledgePhase=(e:KnowledgeEntry):number=>{
  if(e.kind==="engineering"||e.kind==="roles")return 1;
  if(e.id.includes("testing")||e.id.includes("code-review"))return 6;
@@ -61,12 +66,10 @@ export const knowledgePhase=(e:KnowledgeEntry):number=>{
  if(e.kind==="references"||e.kind==="guides")return 4;
  return 3;
 };
-// Only workspace DNA, this agent's role and its explicit selections are eligible.
-export function knowledgeForAgent(pack:KnowledgePack|undefined,role:string,assigned:string[]):KnowledgeEntry[]{
+// Manifest metadata is authoritative. Bootstrap applies by role and language;
+// on-demand material is included only when explicitly assigned to the agent.
+export function knowledgeForAgent(pack:KnowledgePack|undefined,role:string,assigned:string[],languages:string[]=[]):KnowledgeEntry[]{
  if(!pack)return [];
- const roleSlug=role.toLowerCase().replace(/\s+/g,"-");
- const included=new Set(assigned);
- return pack.entries.filter(e=>e.kind==="engineering" ||
-   e.kind==="roles" && e.path.includes("/roles/"+roleSlug+"/") ||
-   e.kind!=="roles" && included.has(e.id));
+ const selected=new Set(assigned);
+ return pack.entries.filter(e=>knowledgeApplicable(e,role,languages)&&(e.load==="bootstrap"||selected.has(e.id)));
 }

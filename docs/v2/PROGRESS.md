@@ -1,3 +1,14 @@
+> **Current addendum — 2026-11-28, Agentic Engineering v2 Knowledge Runtime (draft PR #77).** The November 26 report below is a historical checkpoint, not the current stop-work directive. Engineering Director has authorized continuation on Knowledge Runtime.
+>
+> - Source of truth: `anvh2/engineering-knowledge/main` v1.0.0, including document-level `status`, `roles`, `languages`, and `load` applicability. The pack being approved does not approve its draft entries.
+> - Implemented in `app/`: Go selector + 24 KB bootstrap body cap; agent role/language and direct on-demand assignments; run-scoped local knowledge materialization; native CLI execution events; provider-reported usage parsing; Team Graph/Timeline/Context from actual emitted events rather than a timer.
+> - Standards baseline: V2 app code is **actively maintained, not legacy**. Existing code touched by this work is refactored to meet engineering-knowledge standards; no GEN-06 legacy exemption.
+> - Usage: Claude `result.modelUsage` invocation totals are preferred over partial `result.usage`. Codex `turn.completed.usage` is reported separately, with cached input included in input. Byte-based context estimates are explicitly not provider usage.
+> - **Still not verified:** actual native Claude/Codex document reads on an authenticated macOS desktop, app-level E2E, per-document read telemetry, trace persistence, and session resume. A knowledge file marked available must not be marked read without native evidence.
+> - Verification: GitHub Actions on PR #77 exercise frontend typecheck/build, Go vet, race tests and build. Consult the latest run before claiming current-head success. No merge into master has been performed.
+>
+---
+
 # Agentic Engineering V2 — Progress Report
 
 - **Author:** Claude Code (Opus 5.5), current implementation lead after Codex's handoff (2026-11-26 16:13 UTC).
