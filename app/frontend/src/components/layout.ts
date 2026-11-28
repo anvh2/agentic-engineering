@@ -9,7 +9,7 @@ import { renderDialog } from "./dialog";
 // Product domains, not runtime components. Keep page IDs stable for existing handlers.
 const groups = [
  {name:"Home", pages:["Overview"]},
- {name:"Work", pages:["Objectives","Projects","Decisions"]},
+ {name:"Work", pages:["Objectives","M1","Projects","Decisions"]},
  {name:"Team", pages:["Team"]},
  {name:"Chat", pages:["Chat"]},
  {name:"Knowledge", pages:["Engineering DNA"]},
@@ -17,7 +17,7 @@ const groups = [
  {name:"Settings",pages:["Settings"]}
 ];
 const pageLabels:Record<string,string> = {
- Collaboration:"Project Chat", Objectives:"Working", Team:"Agents",
+ Collaboration:"Project Chat", M1:"M1 Runtime", Objectives:"Working", Team:"Agents",
  "Engineering DNA":"Engineering DNA & skills", Sessions:"Executions"
 };
 function pageLabel(name:string){return pageLabels[name]||name;}
@@ -31,6 +31,7 @@ const paths:Record<string,string> = {
  Settings:'<circle cx="12" cy="12" r="3"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4M5 5l3 3m8 8 3 3M5 19l3-3m8-8 3-3"/>',
  Overview:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
  Objectives:'<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>',
+ M1:'<path d="m4 6 6 6-6 6m10 0h6"/>',
  Projects:'<path d="M3 5h7l2 3h9v12H3Z"/>',
  Decisions:'<path d="M12 3v18M5 7h14M5 7l-3 7h6Zm14 0-3 7h6Z"/>',
  Sessions:'<path d="m4 6 6 6-6 6m10 0h6"/>',
