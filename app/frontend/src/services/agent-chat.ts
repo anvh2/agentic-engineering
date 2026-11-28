@@ -7,6 +7,7 @@ export const conversations:Record<string,{messages:Message[];running:boolean;err
 export function conversation(id:string){return conversations[id]??=( {messages:[],running:false,error:""});}
 export async function sendAgentChat(state:AppState,id:string,prompt:string,update:()=>void){
  const c=conversation(id);if(c.running||!prompt.trim())return;
+ if(id==="group"){c.error="Group collaboration is temporarily disabled.";update();return;}
  const pack=state.knowledgePack;if(!pack){c.error="Connect knowledge first.";update();return;}
  const all=profiles(state);const mentions=[...prompt.matchAll(/@([\w-]+)/g)].map(m=>m[1].toLowerCase());
  const targets=id==="group"?all.filter(a=>!mentions.length||mentions.includes(a.handle)):all.filter(a=>a.id===id);
