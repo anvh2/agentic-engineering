@@ -74,7 +74,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     },1500);
   };
   subscribeKnowledgeEvents(()=>{});
-  subscribeChat(name=>{if(page==="Chat"||page==="Collaboration")updateChatStream(root,name,consoles[name].output,consoles[name].activity)});
+  subscribeChat(name=>{if(page==="Chat"||page==="Collaboration")updateChatStream(root,name,consoles[name].output,consoles[name].activity,consoles[name].logs)});
   const updateIssue=()=>{if(page==="Chat"||page==="Objectives")render()};
   const launch=(issue:import("./services/work-board").Issue,agent:Agent,request:string)=>{void executeIssue(issue,agent,request,state,updateIssue)};
   const startAssigned=(issue:import("./services/work-board").Issue)=>{if(issue.assignee==="Claude"||issue.assignee==="Codex")launch(issue,issue.assignee,"Implement this issue and report evidence.")};
