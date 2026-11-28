@@ -1,12 +1,18 @@
 import type {ViewContext} from "../view-context";
 import {escapeHTML as e} from "../components/primitives";
 import {m1} from "../services/m1-runtime";
+import {profiles} from "../services/agent-chat";
 
 const val=(v:unknown)=>e(String(v??""));
-export function renderM1(_ctx:ViewContext):string {
+export function renderM1(ctx:ViewContext):string {
+ const agents=profiles(ctx.state);
+ const developer=agents.find(a=>a.role==="Developer")?.id??agents[0]?.id??"";
+ const reviewer=agents.find(a=>a.role==="Reviewer"&&a.id!==developer)?.id??agents.find(a=>a.id!==developer)?.id??"";
+ const choices=(selected:string)=>agents.map(a=>`<option value="${val(a.id)}" ${a.id===selected?"selected":""}>${val(a.name)} · @${val(a.handle)} · ${val(a.role)}</option>`).join("");
+ const source=ctx.state.knowledgePack;
  const snapshot=m1.snapshot;
  const active=m1.running;
- const header=`<header class="issues-toolbar"><strong>M1 · Collaboration runtime</strong><small>Core / MCP / native Claude & Codex</small></header>`;
+ const header=`<header class="issues-toolbar"><strong>M1 · Collaboration runtime</strong><small>Team agents · native harness execution</small></header>`;
  const error=m1.error?`<p role="alert" style="color:var(--danger, #cc7777)">${val(m1.error)}</p>`:"";
  const note='<p class="note">Real execution (not preview data). Native permissions remain active. Agents may submit, but only the Director accepts after independent verification.</p>';
  const setup=`<section class="panel" style="max-width:960px;padding:16px;display:grid;gap:10px">
@@ -19,11 +25,13 @@ export function renderM1(_ctx:ViewContext):string {
 Verify code and tests
 Independent code review</textarea></label>
   <div style="display:flex;flex-wrap:wrap;gap:12px">
-   <label>Developer <select id="m1-developer"><option>Claude</option><option selected>Codex</option></select></label>
-   <label>Reviewer <select id="m1-reviewer"><option selected>Claude</option><option>Codex</option></select></label>
+   <label>Implementation agent <select id="m1-developer">${choices(developer)}</select></label>
+   <label>Review agent <select id="m1-reviewer">${choices(reviewer)}</select></label>
    <label>Automatic wake budget <input id="m1-wake" type="number" min="0" max="20" value="0" style="max-width:90px"></label>
   </div>
-  <div><button data-m1-create class="primary" ${m1.busy?'disabled':''}>Create isolated objective</button></div>
+  <p class="note">Agents and their role, model, harness and knowledge assignments come from Team. Configuration is captured when the objective is created.</p>
+  ${source?`<p class="note">Knowledge source: ${val(source.id)} · v${val(source.version)}</p>`:'<p role="alert">Connect an Engineering Knowledge source before creating an objective.</p>'}
+  <div><button data-m1-create class="primary" ${m1.busy||agents.length<2||!source?'disabled':''}>Create isolated objective</button></div>
   </section>`;
  if(!snapshot)return `<section class="board-shell">${header}${error}${note}${setup}</section>`;
  const participants=snapshot.participants.map(p=>{
@@ -34,7 +42,7 @@ Independent code review</textarea></label>
       return `${val(u.provider)} · input ${val(input)} · output ${val(u.output??"not reported")} · cost ${u.cost_usd_estimate==null?"unknown":'$'+val(u.cost_usd_estimate)} (API-equivalent)`;
    }).join(" | "):"Usage not yet reported";
    return `<article class="panel" style="padding:16px;min-width:0">
-    <h3>${val(p.handle)} <small>${val(p.agent)} / ${val(p.role)}</small></h3>
+    <h3>${val(p.name||p.handle)} <small>@${val(p.handle)} · ${val(p.role)} · ${val(p.agent)} harness</small></h3>
     <small style="overflow-wrap:anywhere">Worktree: ${val(p.workdir)}</small>
     <label>Task prompt<textarea rows="3" id="m1-prompt-${val(p.id)}" placeholder="Use get_objective, claim_task, implement/review and send your handoff."></textarea></label>
     <div style="display:flex;gap:8px"><button class="primary" data-m1-run="${val(p.id)}" ${active?'disabled':''}>Run ${val(p.role)}</button>${run?'<button data-m1-stop>Cancel</button>':''}</div>
@@ -65,7 +73,7 @@ Independent code review</textarea></label>
  return `<section class="board-shell">${header}${error}${note}
   <div class="between" style="gap:12px"><h3>${val(snapshot.objective.title)}</h3><button data-m1-refresh>Refresh evidence</button></div>
   <p>${val(snapshot.objective.acceptance_criteria)}</p>
-  <label>Engineering Knowledge v1.0.0 root <input id="m1-knowledge" placeholder="/Users/you/.../engineering-knowledge" value="${val(m1.knowledgeRoot)}"></label>
+  ${snapshot.participants.some(p=>!p.agentId)?`<label>Legacy objective knowledge root <input id="m1-knowledge" placeholder="/Users/you/.../engineering-knowledge" value="${val(m1.knowledgeRoot)}"></label>`:'<p class="note">Knowledge configuration is attached to each Team agent at objective creation.</p>'}
   <section style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px">${participants}</section>
   <section class="panel" style="padding:16px"><h3>Task board / Director acceptance</h3>${tasks}</section>
   <section class="panel" style="padding:16px"><h3>Collaboration messages</h3>

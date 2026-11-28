@@ -5,7 +5,7 @@ const safe=(x:unknown)=>e(String(x??""));
 export function renderM1TurnTimeline():string {
  const turns=m1.snapshot?.turns??[];
  if(!m1.objectiveID)return '<section class="panel"><h3>Live M1 executions</h3><p>Create an objective in Work → M1 Runtime to see persisted native turns.</p></section>';
- const rows=turns.map(t=>`<tr><td>${safe(t.turnId)}</td><td>${safe(t.handle)}<small>${safe(t.role)}</small></td>
+ const rows=turns.map(t=>`<tr><td>${safe(t.turnId)}</td><td>${safe(t.name||t.handle)}<small>@${safe(t.handle)} · ${safe(t.role)}</small></td>
    <td>${safe(t.trigger)}</td><td>${safe(t.state)}</td>
    <td>${safe(t.startedAt)}</td><td>${safe(t.toolFailures)}</td>
    <td><small style="overflow-wrap:anywhere">${safe(t.logPath)}</small></td></tr>`).join("");
@@ -22,7 +22,7 @@ export function renderM1UsageSummary():string {
    records.reduce((acc,x)=>acc+(x.usage[key]??0),0);
  const recorded=records.filter(x=>x.usage.costUsd!==null);
  const estimate=recorded.reduce((acc,x)=>acc+(x.usage.costUsd??0),0);
- const rows=records.map(x=>`<tr><td>${safe(x.turn.handle)}</td><td>${safe(x.usage.provider)}</td>
+ const rows=records.map(x=>`<tr><td>${safe(x.turn.name||x.turn.handle)}</td><td>${safe(x.usage.provider)}</td>
    <td>${safe(x.usage.model||"not reported")}</td>
    <td>${safe(x.usage.uncachedInput??"unknown")}</td>
    <td>${safe(x.usage.cacheRead??"unknown")}</td>

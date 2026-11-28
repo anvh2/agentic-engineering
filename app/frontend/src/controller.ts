@@ -88,7 +88,18 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     if(!el)return;
     const data=el.dataset, objective=getObjective(detail), project=getProject(detail);
     if("m1Create" in data){
-      const developer=value("m1-developer") as Agent,reviewer=value("m1-reviewer") as Agent;
+      const selected=(id:string)=>{
+        const agent=profiles(state).find(a=>a.id===id);
+        if(!agent)return null;
+        return {id:agent.id,name:agent.name,handle:agent.handle,role:agent.role,
+          harness:agent.harness,model:agent.model,
+          knowledgeRoot:state.knowledgePack?.root??"",
+          languages:[...(state.agentLanguages?.[agent.id]??[])],
+          assigned:[...(state.agentKnowledge?.[agent.id]??[])]};
+      };
+      const developer=selected(value("m1-developer")),reviewer=selected(value("m1-reviewer"));
+      if(!developer||!reviewer||developer.id===reviewer.id){m1.error="Select two different agents from Team.";render();return;}
+      if(!state.knowledgePack?.root){m1.error="Connect an Engineering Knowledge source first.";render();return;}
       await createM1({repository:value("m1-repo"),title:value("m1-title"),description:value("m1-description"),
         acceptanceCriteria:value("m1-criteria"),developer,reviewer,
         wakeBudget:Number(value("m1-wake"))||0,

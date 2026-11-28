@@ -2,9 +2,12 @@ import type { Agent } from "../types";
 
 export interface M1Participant {
   id: string;
+  agentId?: string;
+  name?: string;
+  model?: string;
   objectiveId: string;
   handle: string;
-  agent: "claude" | "codex";
+  agent: "claude" | "codex"; // native harness, not Team agent
   role: string;
   workdir: string;
 }
@@ -21,6 +24,8 @@ export interface M1Task {
 export interface M1Message {seq: number; from: string; to?: string; body: string; created_at: string}
 export interface M1TurnSummary {
   turnId:string;
+  agentId?:string;
+  name?:string;
   sessionId:string;
   participantId:string;
   handle:string;
@@ -66,8 +71,29 @@ export interface M1Creation {
   participants:M1Participant[];
   tasks:M1Task[];
 }
+export interface M1AgentSelection {
+  id: string;
+  name: string;
+  handle: string;
+  role: string;
+  harness: Agent;
+  model: string;
+  knowledgeRoot: string;
+  languages: string[];
+  assigned: string[];
+}
+export interface M1CreateInput {
+  repository:string;
+  title:string;
+  description:string;
+  acceptanceCriteria:string;
+  developer:M1AgentSelection;
+  reviewer:M1AgentSelection;
+  wakeBudget:number;
+  tasks:string[];
+}
 interface M1Bridge {
-  CreateM1Objective(req: {repository:string;title:string;description:string;acceptanceCriteria:string;developer:Agent;reviewer:Agent;wakeBudget:number;tasks:string[]}): Promise<M1Creation>;
+  CreateM1Objective(req: M1CreateInput): Promise<M1Creation>;
   RunM1Turn(req: {participantId:string;prompt:string;knowledgeRoot:string;assigned:string[]}): Promise<M1TurnReport>;
   CancelM1Turn(participantID:string): Promise<void>;
   GetM1Snapshot(objectiveID:string): Promise<M1Snapshot>;
@@ -100,7 +126,7 @@ export async function refreshM1() {
   try{m1.snapshot=await native().GetM1Snapshot(m1.objectiveID);m1.error="";}
   catch(e){m1.error=String(e);m1.snapshot=null;}
 }
-export async function createM1(req:{repository:string;title:string;description:string;acceptanceCriteria:string;developer:Agent;reviewer:Agent;wakeBudget:number;tasks:string[]}) {
+export async function createM1(req:M1CreateInput) {
   m1.busy=true;m1.error="";
   try {
     const created=await native().CreateM1Objective(req);
