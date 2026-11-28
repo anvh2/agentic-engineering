@@ -257,10 +257,19 @@ func (r *Runner) execute(ctx context.Context, adapter agent.Adapter, spec agent.
 	digest := sha256.New()
 	writer := io.MultiWriter(file, digest)
 	var writeErr error
+	lastNativeID := ""
 	emit := func(ev agent.Event) {
 		// Provider events are already token-redacted by their adapters.
-		if writeErr != nil {
-			return
+		if writeErr != nil { return }
+		if ev.NativeID != "" && ev.NativeID != lastNativeID {
+			// Persist native session identity before subsequent provider work.
+			// In particular Codex may emit thread.started then crash, and the
+			// next process must never create a duplicate session by guessing.
+			if err := r.service.RecordNativeSessionID(ctx, turnID, ev.NativeID); err != nil {
+				writeErr = fmt.Errorf("record native session identity: %w", err)
+				return
+			}
+			lastNativeID = ev.NativeID
 		}
 		var data []byte
 		data, writeErr = json.Marshal(ev)
