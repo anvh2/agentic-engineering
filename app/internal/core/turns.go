@@ -194,7 +194,7 @@ func (s *Service) FinishTurn(ctx context.Context, turnID string, o TurnOutcome) 
 	switch {
 	case r.Interrupted:
 		state = "interrupted"
-	case o.StartErr != nil, r.NativeError != "", r.ExitCode != 0:
+	case o.StartErr != nil, r.NativeError != "", r.ExitCode != 0, r.ToolFailures > 0:
 		state = "failed"
 	}
 	nativeErr := r.NativeError
