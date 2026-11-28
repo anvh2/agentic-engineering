@@ -229,8 +229,11 @@ func (h *HarnessConsole) runPrompt(name, path, dir, prompt, key, model, knowledg
 			}
 		},
 	}
-	// Opt-in ACP preview for chat only; issue execution retains its existing worktree runtime.
-	if key == "" && os.Getenv("AE_CHAT_RUNTIME") == "acp" {
+	// Chat uses ACP by default; issue execution retains its isolated worktree runtime.
+	if key == "" && os.Getenv("AE_CHAT_RUNTIME") != "legacy" {
+		if model != "" && model != "Default" {
+			return ConsoleResult{Error: "ACP model selection is not implemented; select Default"}
+		}
 		return runACPChat(ctx, name, path, dir, prompt, stream, onStart)
 	}
 	command.Stdout = stream
