@@ -12,7 +12,7 @@ export async function browseRepository(){return await bridge()?.BrowseRepository
 export async function currentRepository(){return await bridge()?.CurrentRepository()||""}
 export async function runPrompt(name:Agent,override?:string,context?:{request:{repositoryDir?:string;agentId:string;root:string;role:string;languages:string[];assigned:string[];task:string};model:string;author:string}){
  const c=consoles[name];if(c.running||!(override??c.prompt).trim())return;
- const prompt=override??c.prompt;if(override===undefined){c.prompt="";c.messages.push({author:"You",body:prompt});}c.running=true;c.error="";c.output="";c.blocks=[];c.activity="Starting native CLI…";
+ const prompt=override??c.prompt;if(override===undefined){c.prompt="";c.messages.push({author:"You",body:prompt});}c.running=true;c.error="";c.output="";c.blocks=[];c.activity="Connecting to agent…";
  try{const b=bridge();if(!b)throw Error("Native desktop required");const r=context?await b.RunAgentContextTest(name,agentStatus(name).path,context.model,context.request,prompt):await b.RunPrompt(name,agentStatus(name).path,override===undefined?c.dir:"",prompt);c.output="";c.error=r.error;if(r.output&&override===undefined)c.messages.push({author:context?.author??name,body:r.output,blocks:structuredClone(c.blocks)});return r}catch(e){c.error=String(e);return {output:"",error:c.error}}finally{c.running=false;c.activity=""}
 }
 export async function stopPrompt(name:Agent){await bridge()?.StopPrompt(name)}
