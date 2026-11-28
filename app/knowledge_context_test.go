@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -35,7 +36,7 @@ func TestBuildKnowledgeContextSelectsByRoleAndLanguage(t *testing.T){
 	for _,e:=range entries{docs[e.Path]="# "+e.ID}
 	docs["knowledge/ENGINEERING.md"]="---\ntitle: Core\n---\n# DNA"
 	root:=writeKnowledgeFixture(t,entries,docs)
-	ctx,err:=BuildKnowledgeContext(KnowledgeContextRequest{AgentID:"emma",Root:root,Role:"Developer",Languages:[]string{"go"},Assigned:[]string{"skill"}})
+	ctx,err:=BuildKnowledgeContext(context.Background(),KnowledgeContextRequest{AgentID:"emma",Root:root,Role:"Developer",Languages:[]string{"go"},Assigned:[]string{"skill"}})
 	if err!=nil{t.Fatal(err)}
 	defer os.RemoveAll(ctx.Directory)
 	if len(ctx.Loaded)!=3{t.Fatalf("bootstrap=%v",ctx.Loaded)}
@@ -55,20 +56,20 @@ func TestBuildKnowledgeContextSelectsByRoleAndLanguage(t *testing.T){
 func TestBuildKnowledgeContextRejectsInvalidAssignment(t *testing.T){
 	e:=[]KnowledgeEntry{{ID:"dna",Path:"dna.md",Load:"bootstrap"},{ID:"review",Path:"review.md",Load:"on-demand",Roles:[]string{"reviewer"}}}
 	root:=writeKnowledgeFixture(t,e,map[string]string{"dna.md":"Hello","review.md":"Review"})
-	_,err:=BuildKnowledgeContext(KnowledgeContextRequest{Root:root,Role:"developer",Assigned:[]string{"review"}})
+	_,err:=BuildKnowledgeContext(context.Background(),KnowledgeContextRequest{Root:root,Role:"developer",Assigned:[]string{"review"}})
 	if err==nil{t.Fatal("expected rejection for foreign role")}
-	_,err=BuildKnowledgeContext(KnowledgeContextRequest{Root:root,Role:"developer",Assigned:[]string{"missing"}})
+	_,err=BuildKnowledgeContext(context.Background(),KnowledgeContextRequest{Root:root,Role:"developer",Assigned:[]string{"missing"}})
 	if err==nil{t.Fatal("expected rejection for missing assignment")}
 }
 func TestBuildKnowledgeContextEnforcesBodyBudget(t *testing.T){
 	content:="---\ntitle: Test\n---\n"+strings.Repeat("x",knowledgeBootstrapLimit+1)
 	root:=writeKnowledgeFixture(t,[]KnowledgeEntry{{ID:"dna",Path:"dna.md",Load:"bootstrap"}},map[string]string{"dna.md":content})
-	_,err:=BuildKnowledgeContext(KnowledgeContextRequest{Root:root})
+	_,err:=BuildKnowledgeContext(context.Background(),KnowledgeContextRequest{Root:root})
 	if err==nil||!strings.Contains(err.Error(),"24 KB"){t.Fatalf("expected bootstrap limit error, got %v",err)}
 }
 func TestBuildKnowledgeContextVerifiesHash(t *testing.T){
 	root:=writeKnowledgeFixture(t,[]KnowledgeEntry{{ID:"dna",Path:"dna.md",Load:"bootstrap",SHA256:"0000"}},map[string]string{"dna.md":"real"})
-	_,err:=BuildKnowledgeContext(KnowledgeContextRequest{Root:root})
+	_,err:=BuildKnowledgeContext(context.Background(),KnowledgeContextRequest{Root:root})
 	if err==nil||!strings.Contains(err.Error(),"checksum"){t.Fatalf("expected checksum error, got %v",err)}
 }
 func TestChatStreamNativeUsage(t *testing.T){
