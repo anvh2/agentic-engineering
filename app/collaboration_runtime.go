@@ -27,13 +27,25 @@ type M1Runtime struct {
 	startErr error
 }
 
+type M1AgentSelection struct {
+	ID string `json:"id"`
+	Name string `json:"name"`
+	Handle string `json:"handle"`
+	Role string `json:"role"`
+	Harness string `json:"harness"`
+	Model string `json:"model"`
+	KnowledgeRoot string `json:"knowledgeRoot"`
+	Languages []string `json:"languages"`
+	Assigned []string `json:"assigned"`
+}
+
 type M1CreateRequest struct {
 	Repository string `json:"repository"`
 	Title string `json:"title"`
 	Description string `json:"description"`
 	AcceptanceCriteria string `json:"acceptanceCriteria"`
-	Developer string `json:"developer"` // Claude or Codex
-	Reviewer string `json:"reviewer"`   // the other provider
+	Developer M1AgentSelection `json:"developer"`
+	Reviewer M1AgentSelection `json:"reviewer"`
 	WakeBudget int `json:"wakeBudget"`
 	Tasks []string `json:"tasks"`
 }
@@ -118,8 +130,15 @@ func (m *M1Runtime) CreateM1Objective(req M1CreateRequest) (M1Objective, error) 
 		return M1Objective{}, err
 	}
 	ctx := m.ctx
-	if req.Developer == req.Reviewer || !m1ValidProvider(req.Developer) || !m1ValidProvider(req.Reviewer) {
-		return M1Objective{}, errors.New("assign Claude and Codex to different Developer/Reviewer roles")
+	if req.Developer.ID == "" || req.Reviewer.ID == "" || req.Developer.ID == req.Reviewer.ID ||
+		!m1ValidProvider(req.Developer.Harness) || !m1ValidProvider(req.Reviewer.Harness) {
+		return M1Objective{}, errors.New("select two distinct Team agents with supported harnesses")
+	}
+	if req.Developer.Handle == req.Reviewer.Handle {
+		return M1Objective{}, errors.New("Team agents must have distinct handles")
+	}
+	if req.Developer.KnowledgeRoot == "" || req.Reviewer.KnowledgeRoot == "" {
+		return M1Objective{}, errors.New("connect engineering-knowledge in Team before creating an objective")
 	}
 	if strings.TrimSpace(req.Title) == "" || strings.TrimSpace(req.AcceptanceCriteria) == "" ||
 		len(req.Tasks) == 0 || len(req.Tasks) > 20 || req.WakeBudget < 0 || req.WakeBudget > 20 {
@@ -135,9 +154,7 @@ func (m *M1Runtime) CreateM1Objective(req M1CreateRequest) (M1Objective, error) 
 		return M1Objective{}, err
 	}
 	var participants []core.ParticipantInput
-	for _, assignment := range []struct{ name, role string }{
-		{req.Developer, "Developer"}, {req.Reviewer, "Reviewer"},
-	} {
+	for _, assignment := range []M1AgentSelection{req.Developer, req.Reviewer} {
 		worktree, err := m1AddWorktree(ctx, repository)
 		if err != nil {
 			// Preserve previously created worktrees for inspection instead
@@ -145,7 +162,10 @@ func (m *M1Runtime) CreateM1Objective(req M1CreateRequest) (M1Objective, error) 
 			return M1Objective{}, err
 		}
 		participants = append(participants, core.ParticipantInput{
-			Agent: strings.ToLower(assignment.name), Role: assignment.role,
+			Agent: strings.ToLower(assignment.Harness), AgentID: assignment.ID,
+			Name: assignment.Name, Handle: assignment.Handle, Role: assignment.Role,
+			Model: assignment.Model, KnowledgeRoot: assignment.KnowledgeRoot,
+			Languages: assignment.Languages, Assigned: assignment.Assigned,
 			Workdir: worktree,
 		})
 	}
@@ -222,8 +242,12 @@ func (m *M1Runtime) RunM1Turn(req M1RunRequest) (collaboration.TurnReport, error
 	if err != nil {
 		return collaboration.TurnReport{}, err
 	}
-	if strings.TrimSpace(req.KnowledgeRoot) == "" {
-		return collaboration.TurnReport{}, errors.New("select local engineering-knowledge v1.0.0 root")
+	root := p.KnowledgeRoot
+	if p.AgentID == "" { // Legacy objective from before Team identity persistence.
+		root = req.KnowledgeRoot
+	}
+	if strings.TrimSpace(root) == "" {
+		return collaboration.TurnReport{}, errors.New("agent knowledge source is not configured")
 	}
 	if strings.TrimSpace(req.Prompt) == "" || len(req.Prompt) > 64<<10 {
 		return collaboration.TurnReport{}, errors.New("enter a bounded task prompt")
@@ -237,8 +261,8 @@ func (m *M1Runtime) RunM1Turn(req M1RunRequest) (collaboration.TurnReport, error
 		return collaboration.TurnReport{}, fmt.Errorf("%s native login not verified: %s", name, status.Diagnostic)
 	}
 	knowledge, err := BuildKnowledgeContext(m.ctx, KnowledgeContextRequest{
-		RepositoryDir: p.Workdir, AgentID: p.Handle, Root: req.KnowledgeRoot,
-		Role: p.Role, Languages: []string{"go", "typescript"}, Assigned: req.Assigned,
+		RepositoryDir: p.Workdir, AgentID: p.AgentID, Root: root,
+		Role: p.Role, Languages: p.Languages, Assigned: p.Assigned,
 	})
 	if err != nil {
 		return collaboration.TurnReport{}, err
@@ -260,14 +284,14 @@ func (m *M1Runtime) RunM1Turn(req M1RunRequest) (collaboration.TurnReport, error
 		}
 	}
 	instructions := fmt.Sprintf(
-		"You are the %s agent (%s) in a human-directed engineering objective. "+
+		"You are %s, acting as %s (@%s) in a human-directed engineering objective. "+
 			"Use the authenticated agentic_engineering MCP tools to read your objective, claim and update tasks, "+
 			"send evidence-based handoffs and read messages. A submission is not acceptance. "+
 			"Never bypass native permissions, modify another participant's worktree, or accept your own task.\n"+
 			"Engineering Knowledge %s (pack status: %s, revision: %s). "+
 			"Document status 'draft' remains provisional; approved rules remain binding.\n%s\n"+
 			"On-demand references (read only when relevant): %s\n%s\nPeer worktrees: %s",
-		p.Role, p.Handle, knowledge.Version, knowledge.Status, knowledge.Revision,
+		p.Name, p.Role, p.Handle, knowledge.Version, knowledge.Status, knowledge.Revision,
 		knowledge.Bootstrap, knowledge.Directory, knowledge.Index, peerPaths.String(),
 	)
 	prompt := req.Prompt

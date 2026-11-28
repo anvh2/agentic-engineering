@@ -190,7 +190,7 @@ func (r *Runner) RunTurn(ctx context.Context, participantID string, trigger core
 	report := TurnReport{TurnID: lease.TurnID, SessionID: lease.SessionID,
 		Participant: lease.Handle, Provider: p.Agent, State: "failed"}
 	spec := agent.TurnSpec{Binary: binary, Workdir: lease.Workdir,
-		Prompt: prompt, Instructions: lease.Instructions,
+		Prompt: prompt, Instructions: lease.Instructions, Model: nativeModel(p.Model),
 		MCPURL: r.endpoint.URL, Token: lease.Token}
 	if lease.NewSession && kind == agent.Claude {
 		spec.NewSessionID = lease.NativeSessionID
@@ -329,4 +329,12 @@ func (r *Runner) wakeLoop(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// nativeModel maps the Team UI's "Default" to the harness default model.
+func nativeModel(model string) string {
+	if model == "Default" {
+		return ""
+	}
+	return model
 }
