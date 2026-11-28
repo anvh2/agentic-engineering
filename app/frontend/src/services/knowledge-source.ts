@@ -5,18 +5,19 @@ export interface KnowledgeEntry {
 }
 export interface KnowledgePack {
  schemaVersion:number; id:string; version:string; status:string; language:string;
- entries:KnowledgeEntry[]; root:string; ref:string;
+ entries:KnowledgeEntry[]; root:string; ref:string; repository?:string; manifest?:string;
 }
 type Bridge={go?:{main?:{KnowledgeSource?:{
  SyncGitHub(ref:string):Promise<KnowledgePack>;
+ SyncRepository(repository:string,ref:string,manifest:string):Promise<KnowledgePack>;
  LoadLocal(path:string):Promise<KnowledgePack>;
  ReadEntry(root:string,id:string):Promise<string>;
 }}}};
 const native=()=>(window as unknown as Bridge).go?.main?.KnowledgeSource;
 export const knowledgeAvailable=()=>Boolean(native());
-export async function syncKnowledge(ref:string):Promise<KnowledgePack> {
+export async function syncKnowledge(ref:string,repository:string,manifest:string):Promise<KnowledgePack> {
  const adapter=native();if(!adapter)throw new Error("Open the Wails desktop app to connect a knowledge repository.");
- return adapter.SyncGitHub(ref);
+ return adapter.SyncRepository(repository,ref,manifest);
 }
 export async function loadKnowledgeDirectory(path:string):Promise<KnowledgePack> {
  const adapter=native();if(!adapter)throw new Error("Open the Wails desktop app to open local knowledge.");
