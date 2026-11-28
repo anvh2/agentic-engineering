@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash"
 	"io"
 	"os"
 	"path/filepath"
@@ -56,6 +55,11 @@ type TurnReport struct {
 	Usage []agent.Usage `json:"usage"`
 	EvidencePath string `json:"evidencePath"`
 	EvidenceSHA256 string `json:"evidenceSha256"`
+	DiffPath string `json:"diffPath,omitempty"`
+	DiffSHA256 string `json:"diffSha256,omitempty"`
+	GitHead string `json:"gitHead,omitempty"`
+	GitStatus string `json:"gitStatus,omitempty"`
+	GitEvidenceError string `json:"gitEvidenceError,omitempty"`
 	Error string `json:"error,omitempty"`
 }
 
@@ -205,6 +209,7 @@ func (r *Runner) RunTurn(ctx context.Context, participantID string, trigger core
 	if err == nil {
 		result, logPath, logDigest, err = r.execute(ctx, adapter, spec, lease.TurnID, onEvent)
 	}
+	gitSnapshot, gitSnapshotErr := captureGitEvidence(ctx, lease.Workdir, r.evidenceDir, lease.TurnID)
 	outcome := core.TurnOutcome{Result: result, StartErr: err, LogPath: logPath, LogSHA256: logDigest}
 	// Finishing must revoke the credential even if the invoking UI operation
 	// was cancelled. A bounded shutdown context is intentionally detached.
@@ -219,6 +224,13 @@ func (r *Runner) RunTurn(ctx context.Context, participantID string, trigger core
 	report.Usage = result.Usage
 	report.EvidencePath = logPath
 	report.EvidenceSHA256 = logDigest
+	report.DiffPath = gitSnapshot.DiffPath
+	report.DiffSHA256 = gitSnapshot.DiffSHA256
+	report.GitHead = gitSnapshot.Head
+	report.GitStatus = gitSnapshot.Status
+	if gitSnapshotErr != nil {
+		report.GitEvidenceError = gitSnapshotErr.Error()
+	}
 	if err != nil {
 		report.Error = err.Error()
 	} else if result.Interrupted {
@@ -272,54 +284,3 @@ func (r *Runner) execute(ctx context.Context, adapter agent.Adapter, spec agent.
 	return result, path, hex.EncodeToString(digest.Sum(nil)), runErr
 }
 
-// Explicitly retain the SHA-256 hash type in the writer contract to avoid
-// accidentally hashing a different representation than the persisted bytes.
-var _ hash.Hash = sha256.New()
-
- 
-// wakeLoop is one lifecycle-owned worker, never an unbounded goroutine per
-// message. It only resumes agents that have already been bootstrapped by a
-// human turn, and BeginTurn enforces the durable wake budget.
-func (r *Runner) wakeLoop(ctx context.Context) {
-	defer r.wg.Done()
-	ticker := time.NewTicker(15 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-r.wakeSignal:
-		case <-ticker.C:
-		}
-		participants, err := r.service.PendingWakeParticipants(ctx, 8)
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			fmt.Fprintln(os.Stderr, "M1 list pending wakes:", err)
-			continue
-		}
-		for _, participant := range participants {
-			if err := ctx.Err(); err != nil {
-				return
-			}
-			name := "Claude"
-			if participant.Agent == string(agent.Codex) {
-				name = "Codex"
-			}
-			status := discovery.Scan(name, "")
-			if status.State != "Connected" {
-				continue // Do not bypass native authentication or burn the wake budget.
-			}
-			_, err := r.RunTurn(ctx, participant.ID, core.TriggerWake,
-				"You have a new collaboration message. Call read_messages, inspect your objective and assigned tasks, "+
-					"and respond through authenticated MCP. Never accept your own work.",
-				"", agent.Binary{Kind: agent.Kind(participant.Agent), Path: status.Path, Version: status.Version}, nil)
-			if err != nil && ctx.Err() == nil {
-				// Unavailable/busy recipients are retried on the next bounded
-				// poll; uncertainty never triggers a second native side effect.
-				fmt.Fprintln(os.Stderr, "M1 wake:", err)
-			}
-		}
-	}
-}
