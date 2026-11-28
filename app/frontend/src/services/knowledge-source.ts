@@ -1,7 +1,7 @@
 // File-first source adapter. GitHub is cloned through the user's native Git credentials.
 // No MCP, network requests from the frontend, or model calls are required.
 export interface KnowledgeEntry {
- id:string; path:string; kind:string; load?:string; bytes:number; tokens:number;
+ id:string; title?:string; description?:string; path:string; kind:string; load?:string; bytes:number; tokens:number;
 }
 export interface KnowledgePack {
  schemaVersion:number; id:string; version:string; status:string; language:string;
@@ -26,12 +26,18 @@ export async function readKnowledgeEntry(pack:KnowledgePack,id:string):Promise<s
  const adapter=native();if(!adapter)throw new Error("Native file adapter is unavailable.");
  return adapter.ReadEntry(pack.root,id);
 }
+export const knowledgeRoleName=(e:KnowledgeEntry):string=> (e.path.split("/").slice(-2,-1)[0]||e.id).replace(/-/g," ").replace(/\b\w/g,c=>c.toUpperCase());
 export const knowledgeDisplayName=(e:KnowledgeEntry):string=>{
+ if(e.title?.trim())return e.title.trim();
  if(e.kind==="engineering")return "Engineering DNA";
  const name=e.path.split("/").pop()||e.id;
  if(e.kind==="roles")return e.path.split("/").slice(-2,-1)[0]?.replace(/-/g," ").replace(/\b\w/g,c=>c.toUpperCase())||name;
  if(e.kind==="skills"||e.kind==="standards")return (e.path.split("/").slice(-2,-1)[0]||name).split("-").map(s=>s==="go"?"Go":s.charAt(0).toUpperCase()+s.slice(1)).join(" ");
- return name.replace(/\.md$/i,"").replace(/-/g," ");
+ const humanize=(v:string)=>v.replace(/\.md$/i,"").replace(/-/g," ").replace(/\b\w/g,c=>c.toUpperCase());
+ const parent=e.path.split("/").slice(-2,-1)[0]||"";
+ if(e.kind==="references")return humanize(parent)+" Reference";
+ if(e.kind==="guides")return /^readme\.md$/i.test(name)?humanize(parent)+" Guide":humanize(name.replace(/^\d+-/,""));
+ return humanize(name);
 };
 export const knowledgePhase=(e:KnowledgeEntry):number=>{
  if(e.kind==="engineering"||e.kind==="roles")return 1;
