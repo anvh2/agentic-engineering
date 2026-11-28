@@ -19,6 +19,7 @@ import (
 
 	"github.com/anvh2/agentic-engineering/app/internal/agent"
 	"github.com/anvh2/agentic-engineering/app/internal/core"
+	"github.com/anvh2/agentic-engineering/app/internal/discovery"
 	"github.com/anvh2/agentic-engineering/app/internal/mcp"
 	"github.com/anvh2/agentic-engineering/app/internal/storage"
 )
@@ -34,6 +35,8 @@ type Runner struct {
 	endpoint *mcp.Endpoint
 	evidenceDir string
 	agents map[agent.Kind]agent.Adapter
+	wakeSignal chan struct{}
+	wakeCancel context.CancelFunc
 
 	mu sync.Mutex
 	active map[string]context.CancelFunc
@@ -78,14 +81,27 @@ func Open(ctx context.Context, dbPath, evidenceDir string) (*Runner, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("start MCP listener: %w", err)
 	}
-	return &Runner{
+	r := &Runner{
 		service: service, db: db, endpoint: endpoint, evidenceDir: evidenceDir,
 		active: make(map[string]context.CancelFunc),
+		wakeSignal: make(chan struct{}, 1),
 		agents: map[agent.Kind]agent.Adapter{
 			agent.Claude: agent.ClaudeAdapter{},
 			agent.Codex: agent.CodexAdapter{},
 		},
-	}, nil
+	}
+	wakeCtx, cancel := context.WithCancel(ctx)
+	r.wakeCancel = cancel
+	service.SetMessageNotifier(func(string) {
+		// Coalesce notifications; SQLite is the durable queue of record.
+		select {
+		case r.wakeSignal <- struct{}{}:
+		default:
+		}
+	})
+	r.wg.Add(1)
+	go r.wakeLoop(wakeCtx)
+	return r, nil
 }
 
 func (r *Runner) Service() *core.Service { return r.service }
@@ -106,6 +122,9 @@ func (r *Runner) Cancel(participantID string) {
 func (r *Runner) Close(ctx context.Context) error {
 	r.mu.Lock()
 	r.closing = true
+	if r.wakeCancel != nil {
+		r.wakeCancel()
+	}
 	for _, cancel := range r.active {
 		cancel()
 	}
@@ -256,3 +275,51 @@ func (r *Runner) execute(ctx context.Context, adapter agent.Adapter, spec agent.
 // Explicitly retain the SHA-256 hash type in the writer contract to avoid
 // accidentally hashing a different representation than the persisted bytes.
 var _ hash.Hash = sha256.New()
+
+ 
+// wakeLoop is one lifecycle-owned worker, never an unbounded goroutine per
+// message. It only resumes agents that have already been bootstrapped by a
+// human turn, and BeginTurn enforces the durable wake budget.
+func (r *Runner) wakeLoop(ctx context.Context) {
+	defer r.wg.Done()
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.wakeSignal:
+		case <-ticker.C:
+		}
+		participants, err := r.service.PendingWakeParticipants(ctx, 8)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			fmt.Fprintln(os.Stderr, "M1 list pending wakes:", err)
+			continue
+		}
+		for _, participant := range participants {
+			if err := ctx.Err(); err != nil {
+				return
+			}
+			name := "Claude"
+			if participant.Agent == string(agent.Codex) {
+				name = "Codex"
+			}
+			status := discovery.Scan(name, "")
+			if status.State != "Connected" {
+				continue // Do not bypass native authentication or burn the wake budget.
+			}
+			_, err := r.RunTurn(ctx, participant.ID, core.TriggerWake,
+				"You have a new collaboration message. Call read_messages, inspect your objective and assigned tasks, "+
+					"and respond through authenticated MCP. Never accept your own work.",
+				"", agent.Binary{Kind: agent.Kind(participant.Agent), Path: status.Path, Version: status.Version}, nil)
+			if err != nil && ctx.Err() == nil {
+				// Unavailable/busy recipients are retried on the next bounded
+				// poll; uncertainty never triggers a second native side effect.
+				fmt.Fprintln(os.Stderr, "M1 wake:", err)
+			}
+		}
+	}
+}
