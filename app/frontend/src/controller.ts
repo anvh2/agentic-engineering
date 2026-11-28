@@ -34,7 +34,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
             if(el.hasAttribute("data-knowledge-edge"))el.setAttribute("stroke-dasharray","none");
           });
           const status=preview.querySelector("[data-knowledge-phase]");
-          if(status)status.textContent="Completed · 6/6";
+          if(status)status.textContent="Completed";
           knowledgeCompletedAt=Date.now();
         }
         if(Date.now()-knowledgeCompletedAt<8000)return;
@@ -45,7 +45,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
       const loaded=entries.filter(e=>e.phase<=next),total=loaded.reduce((sum,e)=>sum+e.tokens,0);
       tab="Knowledge "+view+" "+next;nav.tab=tab;
       const setText=(selector:string,value:string)=>{const el=preview.querySelector(selector);if(el)el.textContent=value;};
-      setText("[data-knowledge-phase]",["Waiting","Bootstrap","Repository discovery","Planning","Implementation","Debugging","Verification"][next]+" · "+next+"/6");
+      setText("[data-knowledge-phase]",["Waiting","Bootstrap","Repository discovery","Planning","Implementation","Debugging","Verification"][next]);
       setText("[data-knowledge-count]",loaded.length+" / "+entries.length);
       setText("[data-knowledge-total]",total.toLocaleString());
       setText("[data-knowledge-total-svg]",total.toLocaleString()+" est. tokens");
@@ -60,7 +60,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
       preview.querySelectorAll("[data-knowledge-label],[data-knowledge-status]").forEach(el=>{
         const label=el.hasAttribute("data-knowledge-label");
         const p=Number(el.getAttribute(label?"data-knowledge-label":"data-knowledge-status"));
-        el.textContent=p<=next?(label?"Simulated load · "+el.getAttribute("data-tokens")+" tokens":"Simulated load"):p===99?(next===6?"Skipped · Not relevant":"Not selected"):"Available";
+        el.textContent=p<=next?(label?"Loaded · "+el.getAttribute("data-tokens")+" tokens":"Loaded"):p===99?(next===6?"Skipped · Not relevant":"Not selected"):"Available";
       });
       for(const kind of ["DNA","Role","Context","Standard","Skill"]){
         const n=loaded.filter(e=>e.kind===kind).reduce((sum,e)=>sum+e.tokens,0);
