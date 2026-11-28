@@ -1,9 +1,9 @@
-import {sendAgentChat,stopAgentChat} from "./services/agent-chat";
+import {profiles,sendAgentChat,stopAgentChat} from "./services/agent-chat";
 import {updateChatStream} from "./components/chat-view";
 import {executeIssue,explicitTargets,issueChat,stopIssue} from "./services/issue-chat";
 import { saveIssue,statuses,priorities,issues,boardContext,nextIssueKey,projectPrefix,setProjectPrefix } from "./services/work-board";
 import { mountMentions } from "./components/mentions";
-import { group,groupSend,stopGroup } from "./services/collaboration";
+import { group,stopGroup } from "./services/collaboration";
 import { consoles, runPrompt, stopPrompt, openTerminal, currentRepository, browseRepository, subscribeChat } from "./services/harness-console";
 import { scanAgent, scanAgents } from "./services/agent-connection";
 import type { Agent } from "./types";
@@ -21,10 +21,10 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
   const persist=()=>{try{demoStore.save(state)}catch{window.alert("Could not save demo data.");}};
   const render=()=>{Object.assign(nav,{page,projectFilter,detail,tab,modal,roleSelected,docSelected,discussion,usageAgent});renderLayout(root,ctx);docSelected=nav.docSelected;syncKnowledgePlayback();};
   const syncKnowledgePlayback=()=>{
-    if(page!=="Team"||!["alex","emma","noah"].includes(detail)||tab==="Roles"||tab==="Harnesses"){stopKnowledgePlayback();return;}
+    if(page!=="Team"||!profiles(state).some(a=>a.id===detail)||tab==="Roles"||tab==="Harnesses"){stopKnowledgePlayback();return;}
     if(knowledgeTimer!==undefined)return;
     knowledgeTimer=window.setInterval(()=>{
-      if(page!=="Team"||!["alex","emma","noah"].includes(detail)||tab==="Roles"||tab==="Harnesses"){stopKnowledgePlayback();return;}
+      if(page!=="Team"||!profiles(state).some(a=>a.id===detail)||tab==="Roles"||tab==="Harnesses"){stopKnowledgePlayback();return;}
       const match=/^Knowledge (Graph|Timeline|Context) ([0-6])$/.exec(tab);
       const view=match?.[1]||"Graph",phase=Number(match?.[2]||0);
       const preview=root.querySelector<HTMLElement>("[data-knowledge-preview]");
@@ -83,19 +83,27 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     const el=event.target.closest<HTMLElement>("button,[data-objective],[data-project],[data-session]");
     if(!el)return;
     const data=el.dataset, objective=getObjective(detail), project=getProject(detail);
+    if("agentNew" in data){detail="new-agent";stopKnowledgePlayback();render();return;}
+    if("agentCreate" in data){
+      const name=value("new-agent-name"),handle=value("new-agent-handle").replace(/^@/,"").toLowerCase(),role=value("new-agent-role"),harness=value("new-agent-harness");
+      const status=root.querySelector<HTMLElement>("[data-profile-status]");
+      if(!name||name.length>80||!role||!/^[a-z][a-z0-9_-]{0,39}$/.test(handle)||profiles(state).some(a=>a.handle===handle)|| (harness!=="Claude"&&harness!=="Codex")){if(status)status.textContent="Enter a name, unique valid handle, role and harness.";return;}
+      const id=crypto.randomUUID();state.agentProfiles??={};state.agentProfiles[id]={name,handle,role,harness,model:value("new-agent-model")||"Default"};
+      detail=id;tab="Knowledge Graph 0";persist();render();return;
+    }
     if(data.profileSave){
       const id=data.profileSave,handle=value("profile-handle").trim().replace(/^@/,"").toLowerCase();
       const status=root.querySelector<HTMLElement>("[data-profile-status]");
-      const duplicate=["alex","emma","noah"].some(other=>other!==id&&(state.agentProfiles?.[other]?.handle??other)===handle);
+      const duplicate=profiles(state).some(other=>other.id!==id&&other.handle===handle);
       if(!/^[a-z][a-z0-9_-]{0,39}$/.test(handle)||duplicate){if(status)status.textContent="Invalid or duplicate handle";return;}
       const harness=value("profile-harness");if(harness!=="Claude"&&harness!=="Codex")return;
       state.agentProfiles??={};
-      state.agentProfiles[id]={handle,role:value("profile-role"),harness,model:value("profile-model").trim()||"Default"};
+      state.agentProfiles[id]={...state.agentProfiles[id],handle,role:value("profile-role"),harness,model:value("profile-model").trim()||"Default"};
       persist();render();return;
     }
     if(data.profileChat){
       const id=data.profileChat;
-      const profile=state.agentProfiles?.[id]??{role:id==="alex"?"Architect":id==="emma"?"Developer":"Reviewer",harness:id==="emma"?"Codex":"Claude",model:"Default",handle:id};
+      const profile=profiles(state).find(a=>a.id===id);if(!profile)return;
       if(consoles[profile.harness as Agent].running){window.alert("Harness already running");return;}
       page="Chat";detail="agent:"+id;tab="";render();return;
     }
@@ -134,7 +142,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
       if(picker){picker.hidden=!picker.hidden;picker.open=!picker.hidden;}return;
     }
     if("assignmentDone" in data){
-      if(page!=="Team"||!["alex","emma","noah"].includes(detail))return;
+      if(page!=="Team"||!profiles(state).some(a=>a.id===detail))return;
       const picker=el.closest("details");if(!picker)return;
       const choices=Array.from(picker.querySelectorAll<HTMLInputElement>("[data-assignment-doc]"));
       const keys=new Set(choices.map(c=>c.dataset.assignmentDoc));
@@ -160,18 +168,18 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     if("boardClose" in data){detail="";render();return;}
     if("boardComment" in data){const issue=issues().find(x=>x.id===detail&&x.project===projectFilter),body=value("issue-comment").trim();if(issue&&body){saveIssue({...issue,comments:[...(issue.comments||[]),{body,at:new Date().toISOString()}]});render();const targets=explicitTargets(body);if(targets.length&&body.replace(/@[\w-]+/g,"").trim()){page="Chat";detail="issue:"+issue.project+":"+issue.id;void (async()=>{for(const agent of new Set(targets))await executeIssue(issue,agent,body,state,updateIssue)})()}}return;}
     if("boardSave" in data){const title=value("issue-title"),status=statuses.find(s=>s===value("issue-status"));if(!title||!status||!getProject(projectFilter))return;const existing=issues().find(x=>x.id===detail&&x.project===projectFilter);try{saveIssue({id:existing?.id||crypto.randomUUID(),issueKey:existing?.issueKey||nextIssueKey(projectFilter,getProject(projectFilter)!.name),project:projectFilter,createdAt:existing?.createdAt||new Date().toISOString(),comments:existing?.comments||[],title,description:value("issue-description"),criteria:value("issue-criteria"),status,assignee:value("issue-assignee"),repository:value("issue-repo"),priority:priorities.find(p=>p===value("issue-priority"))||"No priority"});detail="";render()}catch(e){window.alert(String(e))}return;}
-    if("groupStart" in data||"groupSend" in data){void groupSend("groupStart" in data?"Hello Claude and Codex! Please introduce yourselves and greet each other.":value("group-prompt"),()=>{if(page==="Collaboration")render()},boardContext(projectFilter));return;}
+    if("groupStart" in data||"groupSend" in data){return;}
     if("groupStop" in data){void stopGroup();return;}
     if(data.switchProject){projectFilter=data.switchProject;detail="";tab="";render();return;}
     if("clearRepo" in data){consoles[detail==="Claude"?"Claude":"Codex"].dir="";render();return;}
     if("browseRepo" in data){const name=detail==="Claude"?"Claude":"Codex";void browseRepository().then(dir=>{if(dir){consoles[name].dir=dir;if(page==="Chat")render();}}).catch(e=>{consoles[name].error=String(e);render()});return;}
     if("currentRepo" in data){const name=detail==="Claude"?"Claude":"Codex";void currentRepository().then(dir=>{if(!dir){window.alert("No Git repository found in the app working directory. Enter the local path.");return;}consoles[name].dir=dir;if(page==="Chat")render();}).catch(e=>window.alert(String(e)));return;}
     if("reviewPrompt" in data){const c=consoles[detail==="Claude"?"Claude":"Codex"];if(!c.dir.trim()){window.alert("Select a real repository directory before reviewing code.");return;}c.prompt="Review this repository without modifying files. Inspect the current branch, architecture, correctness, security, maintainability and tests. Report prioritized findings with file references and distinguish verified evidence from assumptions.";render();return;}
-    if(data.agentChat){page="Chat";detail="agent:"+data.agentChat;tab="";render();return;}
+    if(data.agentChat){if(!profiles(state).some(a=>a.id===data.agentChat))return;page="Chat";detail="agent:"+data.agentChat;tab="";render();return;}
     if("agentSend" in data){const id=detail.slice(6);void sendAgentChat(state,id,value("agent-chat-prompt"),()=>{if(page==="Chat"&&detail==="agent:"+id)render()});return;}
     if("agentStop" in data){void stopAgentChat(detail.slice(6));return;}
     if(data.chatHarness){page="Chat";tab="";detail=data.chatHarness;render();return;}
-    if(data.harness){detail=detail===data.harness?"":data.harness;if(page==="Team"&&["alex","emma","noah"].includes(data.harness)){tab="Knowledge Graph 0";stopKnowledgePlayback();}render();return;}
+    if(data.harness){detail=detail===data.harness?"":data.harness;if(page==="Team"&&profiles(state).some(a=>a.id===data.harness)){tab="Knowledge Graph 0";stopKnowledgePlayback();}render();return;}
     if(data.runPrompt||data.stopPrompt||data.terminal){
       if(group.busy){window.alert("Finish the group conversation first.");return;}
       const name=(data.runPrompt||data.stopPrompt||data.terminal) as Agent;
@@ -189,7 +197,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
       const pending=data.checkAgent ? scanAgent(data.checkAgent as Agent,value("agent-path-"+data.checkAgent)) : scanAgents();
       render(); void pending.then(()=>{if(page==="Team" && tab!=="Roles" && !modal)render();else if(page==="Overview"&&!modal)render();});return;
     }
-    if(data.page){page=data.page;detail=page==="Chat"?"agent:group":"";tab="";}
+    if(data.page){page=data.page==="Collaboration"?"Chat":data.page;detail=page==="Chat"?"agent:"+profiles(state)[0].id:"";tab="";}
     else if(data.objective){page="Objectives";detail=data.objective;tab="";}
     else if(data.project){page="Projects";detail=data.project;tab="";}
     else if(data.session){page="Sessions";detail=data.session;tab="";}
