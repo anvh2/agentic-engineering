@@ -1,7 +1,7 @@
 import type {AppState,Agent} from "../types";
 import {knowledgeForAgent} from "./knowledge-source";
 import {runPrompt,consoles,stopPrompt} from "./harness-console";
-export const profiles=(state:AppState)=>["alex","emma","noah"].map(id=>({id,name:id[0].toUpperCase()+id.slice(1),handle:id,role:id==="alex"?"Architect":id==="emma"?"Developer":"Reviewer",harness:(id==="emma"?"Codex":"Claude") as Agent,model:"Default",...state.agentProfiles?.[id]}));
+export const profiles=(state:AppState)=>[...new Set(["alex","emma","noah",...Object.keys(state.agentProfiles??{})])].map(id=>({id,name:id[0].toUpperCase()+id.slice(1),handle:id,role:id==="alex"?"Architect":id==="emma"?"Developer":"Reviewer",harness:(id==="emma"?"Codex":"Claude") as Agent,model:"Default",...state.agentProfiles?.[id]}));
 type Message={author:string;body:string};
 export const conversations:Record<string,{messages:Message[];running:boolean;error:string;active?:{harness:Agent;name:string};cancelled?:boolean}>={};
 export function conversation(id:string){return conversations[id]??=( {messages:[],running:false,error:""});}
