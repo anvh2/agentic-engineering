@@ -291,7 +291,7 @@ func (m *M1Runtime) RunM1Turn(req M1RunRequest) (collaboration.TurnReport, error
 			"Engineering Knowledge %s (pack status: %s, revision: %s). "+
 			"Document status 'draft' remains provisional; approved rules remain binding.\n%s\n"+
 			"On-demand references (read only when relevant): %s\n%s\nPeer worktrees: %s",
-		p.Name, p.Role, p.Handle, knowledge.Version, knowledge.Status, knowledge.Revision,
+		m1DisplayName(p), p.Role, p.Handle, knowledge.Version, knowledge.Status, knowledge.Revision,
 		knowledge.Bootstrap, knowledge.Directory, knowledge.Index, peerPaths.String(),
 	)
 	prompt := req.Prompt
@@ -334,7 +334,8 @@ func (m *M1Runtime) GetM1Snapshot(objectiveID string) (M1Snapshot, error) {
 	}
 	first := participants[0]
 	objective, err := r.Service().GetObjective(m.ctx, core.Principal{
-		ObjectiveID: objectiveID, Handle: first.Handle, Agent: first.Agent, Role: first.Role,
+		ObjectiveID: objectiveID, Handle: first.Handle, Agent: first.Agent,
+		AgentID: first.AgentID, AgentName: first.Name, Role: first.Role,
 	})
 	if err != nil {
 		return M1Snapshot{}, err
@@ -380,4 +381,11 @@ func (m *M1Runtime) SetM1Verdict(req M1VerdictRequest) (core.Task, error) {
 	}
 	return r.Service().SetTaskVerdict(m.ctx, req.ObjectiveID, req.TaskID,
 		req.ExpectedRevision, req.Accepted, summary)
+}
+
+func m1DisplayName(p core.ParticipantRecord) string {
+	if p.Name != "" {
+		return p.Name
+	}
+	return p.Handle // legacy objectives did not store a Team agent name
 }
