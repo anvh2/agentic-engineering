@@ -24,46 +24,67 @@ import (
 )
 
 const (
-	turnDeadline = 4 * time.Hour
+	turnDeadline   = 4 * time.Hour
 	finishDeadline = 10 * time.Second
 )
 
 type Runner struct {
-	service *core.Service
-	db *sql.DB
-	endpoint *mcp.Endpoint
+	service     *core.Service
+	db          *sql.DB
+	endpoint    *mcp.Endpoint
 	evidenceDir string
-	agents map[agent.Kind]agent.Adapter
-	wakeSignal chan struct{}
-	wakeCancel context.CancelFunc
+	agents      map[agent.Kind]agent.Adapter
+	wakeSignal  chan struct{}
+	wakeCancel  context.CancelFunc
 
-	mu sync.Mutex
-	active map[string]context.CancelFunc
+	mu      sync.Mutex
+	active  map[string]context.CancelFunc
 	closing bool
-	wg sync.WaitGroup
+	observe func(objectiveID string)
+	wg      sync.WaitGroup
 }
 
+// TurnReport is the outcome of one native turn. Usage is read from core, which
+// converts the harness's session totals into per-turn values.
 type TurnReport struct {
-	TurnID string `json:"turnId"`
-	SessionID string `json:"sessionId"`
-	Participant string `json:"participant"`
-	Provider string `json:"provider"`
-	State string `json:"state"`
-	FinalText string `json:"finalText"`
+	TurnID          string `json:"turnId"`
+	SessionID       string `json:"sessionId"`
+	Participant     string `json:"participant"`
+	Provider        string `json:"provider"`
+	State           string `json:"state"`
+	FinalText       string `json:"finalText"`
 	NativeSessionID string `json:"nativeSessionId"`
-	ToolFailures int `json:"toolFailures"`
-	Usage []agent.Usage `json:"usage"`
-	EvidencePath string `json:"evidencePath"`
-	EvidenceSHA256 string `json:"evidenceSha256"`
-	DiffPath string `json:"diffPath,omitempty"`
-	DiffSHA256 string `json:"diffSha256,omitempty"`
-	GitHead string `json:"gitHead,omitempty"`
-	GitStatus string `json:"gitStatus,omitempty"`
-	GitEvidenceError string `json:"gitEvidenceError,omitempty"`
-	Error string `json:"error,omitempty"`
+	ToolFailures    int    `json:"toolFailures"`
+	EvidencePath    string `json:"evidencePath"`
+	EvidenceSHA256  string `json:"evidenceSha256"`
+	Error           string `json:"error,omitempty"`
 }
 
-func Open(ctx context.Context, dbPath, evidenceDir string) (*Runner, error) {
+// TurnRequest describes one turn the trusted desktop runtime wants to run.
+type TurnRequest struct {
+	ParticipantID string
+	Trigger       core.Trigger
+	Prompt        string
+	// Instructions is applied only when the turn creates a native session.
+	Instructions string
+	Binary       agent.Binary
+	Access       agent.Access
+	AddDirs      []string
+	// OnStart runs once the turn is durable, before the native process starts.
+	OnStart func(turnID, sessionID string)
+	// OnEvent receives native events in order, synchronously.
+	OnEvent func(agent.Event)
+}
+
+// Option configures Open.
+type Option func(*Runner)
+
+// WithAdapter replaces the adapter of one harness kind.
+func WithAdapter(adapter agent.Adapter) Option {
+	return func(r *Runner) { r.agents[adapter.Kind()] = adapter }
+}
+
+func Open(ctx context.Context, dbPath, evidenceDir string, options ...Option) (*Runner, error) {
 	if !filepath.IsAbs(dbPath) || !filepath.IsAbs(evidenceDir) {
 		return nil, errors.New("collaboration paths must be absolute")
 	}
@@ -87,16 +108,25 @@ func Open(ctx context.Context, dbPath, evidenceDir string) (*Runner, error) {
 	}
 	r := &Runner{
 		service: service, db: db, endpoint: endpoint, evidenceDir: evidenceDir,
-		active: make(map[string]context.CancelFunc),
+		active:     make(map[string]context.CancelFunc),
 		wakeSignal: make(chan struct{}, 1),
 		agents: map[agent.Kind]agent.Adapter{
 			agent.Claude: agent.ClaudeAdapter{},
-			agent.Codex: agent.CodexAdapter{},
+			agent.Codex:  agent.CodexAdapter{},
 		},
+	}
+	for _, option := range options {
+		option(r)
 	}
 	wakeCtx, cancel := context.WithCancel(ctx)
 	r.wakeCancel = cancel
-	service.SetMessageNotifier(func(string) {
+	service.SetMessageNotifier(func(objectiveID string) {
+		r.mu.Lock()
+		observe := r.observe
+		r.mu.Unlock()
+		if observe != nil {
+			observe(objectiveID)
+		}
 		// Coalesce notifications; SQLite is the durable queue of record.
 		select {
 		case r.wakeSignal <- struct{}{}:
@@ -111,6 +141,13 @@ func Open(ctx context.Context, dbPath, evidenceDir string) (*Runner, error) {
 func (r *Runner) Service() *core.Service { return r.service }
 
 func (r *Runner) MCPURL() string { return r.endpoint.URL }
+
+// OnMessage installs a nonblocking observer of new collaboration messages.
+func (r *Runner) OnMessage(observe func(objectiveID string)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.observe = observe
+}
 
 func (r *Runner) Cancel(participantID string) {
 	r.mu.Lock()
@@ -147,12 +184,14 @@ func (r *Runner) Close(ctx context.Context) error {
 		return err
 	}
 	err := r.endpoint.Close(ctx)
-	if closeErr := r.db.Close(); err == nil { err = closeErr }
+	if closeErr := r.db.Close(); err == nil {
+		err = closeErr
+	}
 	return err
 }
 
-func (r *Runner) RunTurn(ctx context.Context, participantID string, trigger core.Trigger,
-	prompt, instructions string, binary agent.Binary, onEvent func(agent.Event)) (TurnReport, error) {
+func (r *Runner) RunTurn(ctx context.Context, req TurnRequest) (TurnReport, error) {
+	participantID, binary := req.ParticipantID, req.Binary
 	p, err := r.service.GetParticipantRecord(ctx, participantID)
 	if err != nil {
 		return TurnReport{}, err
@@ -183,15 +222,18 @@ func (r *Runner) RunTurn(ctx context.Context, participantID string, trigger core
 		r.wg.Done()
 	}()
 
-	lease, err := r.service.BeginTurn(ctx, participantID, trigger, prompt, instructions, binary)
+	lease, err := r.service.BeginTurn(ctx, participantID, req.Trigger, req.Prompt, req.Instructions, binary)
 	if err != nil {
 		return TurnReport{}, err
 	}
 	report := TurnReport{TurnID: lease.TurnID, SessionID: lease.SessionID,
 		Participant: lease.Handle, Provider: p.Agent, State: "failed"}
+	if req.OnStart != nil {
+		req.OnStart(lease.TurnID, lease.SessionID)
+	}
 	spec := agent.TurnSpec{Binary: binary, Workdir: lease.Workdir,
-		Prompt: prompt, Instructions: lease.Instructions, Model: nativeModel(p.Model),
-		MCPURL: r.endpoint.URL, Token: lease.Token}
+		Prompt: req.Prompt, Instructions: lease.Instructions, Model: nativeModel(p.Model),
+		MCPURL: r.endpoint.URL, Token: lease.Token, Access: req.Access, AddDirs: req.AddDirs}
 	if lease.NewSession && kind == agent.Claude {
 		spec.NewSessionID = lease.NativeSessionID
 	} else {
@@ -203,14 +245,13 @@ func (r *Runner) RunTurn(ctx context.Context, participantID string, trigger core
 		err = errors.New("native session identity unavailable; cannot resume")
 	}
 	var (
-		result agent.TurnResult
-		logPath string
+		result    agent.TurnResult
+		logPath   string
 		logDigest string
 	)
 	if err == nil {
-		result, logPath, logDigest, err = r.execute(ctx, adapter, spec, lease.TurnID, onEvent)
+		result, logPath, logDigest, err = r.execute(ctx, adapter, spec, lease.TurnID, req.OnEvent)
 	}
-	gitSnapshot, gitSnapshotErr := captureGitEvidence(ctx, lease.Workdir, r.evidenceDir, lease.TurnID)
 	if ctx.Err() != nil {
 		result.Interrupted = true
 	}
@@ -225,27 +266,19 @@ func (r *Runner) RunTurn(ctx context.Context, participantID string, trigger core
 	report.FinalText = result.FinalText
 	report.NativeSessionID = result.NativeSessionID
 	report.ToolFailures = result.ToolFailures
-	report.Usage = result.Usage
 	report.EvidencePath = logPath
 	report.EvidenceSHA256 = logDigest
-	report.DiffPath = gitSnapshot.DiffPath
-	report.DiffSHA256 = gitSnapshot.DiffSHA256
-	report.GitHead = gitSnapshot.Head
-	report.GitStatus = gitSnapshot.Status
-	if gitSnapshotErr != nil {
-		report.GitEvidenceError = gitSnapshotErr.Error()
-	}
 	if result.Interrupted || ctx.Err() != nil {
 		report.State = "interrupted"
 		report.Error = "turn interrupted"
 	} else if err != nil {
-		report.Error = "native turn failed; inspect local evidence"
-	} else if result.ExitCode == 0 && result.NativeError == "" && result.ToolFailures == 0 {
+		report.Error = "native turn failed: " + err.Error()
+	} else if result.ExitCode == 0 && result.NativeError == "" {
 		report.State = "succeeded"
 	} else {
 		report.Error = result.NativeError
 		if report.Error == "" {
-			report.Error = "native turn failed"
+			report.Error = fmt.Sprintf("native process exited with code %d", result.ExitCode)
 		}
 	}
 	return report, nil
@@ -264,7 +297,9 @@ func (r *Runner) execute(ctx context.Context, adapter agent.Adapter, spec agent.
 	lastNativeID := ""
 	emit := func(ev agent.Event) {
 		// Provider events are already token-redacted by their adapters.
-		if writeErr != nil { return }
+		if writeErr != nil {
+			return
+		}
 		if ev.NativeID != "" && ev.NativeID != lastNativeID {
 			// Persist native session identity before subsequent provider work.
 			// In particular Codex may emit thread.started then crash, and the
@@ -297,7 +332,6 @@ func (r *Runner) execute(ctx context.Context, adapter agent.Adapter, spec agent.
 	return result, path, hex.EncodeToString(digest.Sum(nil)), runErr
 }
 
-
 func (r *Runner) wakeLoop(ctx context.Context) {
 	defer r.wg.Done()
 	ticker := time.NewTicker(15 * time.Second)
@@ -311,19 +345,27 @@ func (r *Runner) wakeLoop(ctx context.Context) {
 		}
 		pending, err := r.service.PendingWakeParticipants(ctx, 8)
 		if err != nil {
-			if ctx.Err() != nil { return }
+			if ctx.Err() != nil {
+				return
+			}
 			fmt.Fprintln(os.Stderr, "M1 pending wakes:", err)
 			continue
 		}
 		for _, p := range pending {
-			if ctx.Err() != nil { return }
+			if ctx.Err() != nil {
+				return
+			}
 			name := "Claude"
-			if p.Agent == string(agent.Codex) { name = "Codex" }
+			if p.Agent == string(agent.Codex) {
+				name = "Codex"
+			}
 			status := discovery.Scan(name, "")
-			if status.State != "Connected" { continue }
-			_, err := r.RunTurn(ctx, p.ID, core.TriggerWake,
-				"You have a collaboration message. Read messages and your objective through authenticated MCP, then act only within native permissions.",
-				"", agent.Binary{Kind: agent.Kind(p.Agent),Path: status.Path,Version: status.Version}, nil)
+			if status.State != "Connected" {
+				continue
+			}
+			_, err := r.RunTurn(ctx, TurnRequest{ParticipantID: p.ID, Trigger: core.TriggerWake,
+				Prompt: "You have a collaboration message. Read messages and your objective through authenticated MCP, then act only within native permissions.",
+				Binary: agent.Binary{Kind: agent.Kind(p.Agent), Path: status.Path, Version: status.Version}})
 			if err != nil && ctx.Err() == nil {
 				fmt.Fprintln(os.Stderr, "M1 wake:", err)
 			}

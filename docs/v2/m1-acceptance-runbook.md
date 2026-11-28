@@ -1,69 +1,44 @@
 # M1 collaboration acceptance runbook (Issue #78)
 
-Author: ChatGPT / GPT-6, 2026-11-28 UTC. Status: **implementation candidate awaiting native macOS acceptance**. The CI result must be recorded at the exact commit; mock and socket tests are not proof of two authenticated native model turns.
+Status: **implementation candidate; owner E2E and Director acceptance pending**. Record the CI result at the exact commit. Scripted or socket tests are not proof of authenticated native model turns.
 
 ## Baseline and invariants
 
-- Base: merged PR #77. Candidate: PR #79 `feat/v2-agent-runtime`.
-- Engineering knowledge: local `engineering-knowledge` pack **1.0.0**. Approved rule-level decisions remain binding; documents explicitly marked `draft` are not silently promoted.
-- Desktop: Wails v2, Go 1.25, Node 22. MCP binds randomly allocated IPv4 loopback port and requires per-turn bearer tokens; credentials must never be committed, passed in argv, or recorded in evidence files.
-- Native permissions stay enabled. Do not pass `--dangerously-skip-permissions`, alter global CLI config, or disable approvals. No existing processes are terminated and worktrees are preserved for inspection.
-- Work > **M1 Runtime** is backed by the SQLite core, unlike historical demo cards. Insight pages show a distinct *Live M1* section, not fabricated history.
-- Agent submission is not independent verification, review, or Director acceptance.
+- Candidate: PR #79 `feat/v2-agent-runtime`. Engineering knowledge pack **1.0.0**; draft documents stay provisional.
+- Desktop: Wails v2, Go 1.25, Node 22. MCP binds a random IPv4 loopback port and requires per-turn bearer tokens.
+- **Execution** runs from **Work > Working**. The Go runtime is the only authority for execution state, which is held in memory: after a restart an unfinished or unaccepted issue shows *Interrupted by restart* and needs Retry. Turns, messages, tasks, reviews and usage stay in `collaboration.sqlite`.
+- Migration 003 adds participant duty, reviews and session-cumulative usage. A pre-migration `.bak` snapshot is written next to the database; older builds refuse the migrated database.
+- **Native permissions:** no bypass flag is used. Unattended turns run inside each harness's own sandbox: Codex `--sandbox workspace-write`; Claude `--settings` sandbox with `allowUnsandboxedCommands: false`, plus `--permission-mode acceptEdits` for the assignee only. User hooks and deny rules still apply. This permission posture needs Director approval (decision D1).
+- Agent submission and reviewer approval are not acceptance. Only **Accept** in the desktop UI moves an issue to Done.
 
-## CI / local verification
+## Flow
 
-Run from checkout at the exact reviewed PR head:
+1. Team: create two agents (any names, roles and harnesses). Connect an Engineering Knowledge source.
+2. Projects: link one or more local Git repository roots. Every linked repository is inherited by its issues; the default repository is the primary working directory.
+3. Working: create an issue, select Assignee and Reviewer, move it to In Progress.
+4. The runtime creates one worktree per participant and repository under `<repository>/.worktrees/`, from the current `HEAD`. Uncommitted changes in your checkout are not included.
+5. Assignee implements, runs tests, submits the task and messages the reviewer through MCP. The runtime captures the change (including new files and any agent commit) as a snapshot commit.
+6. Reviewer gets exactly that snapshot in its own worktrees and records `submit_review`. Requested changes return to the assignee, for at most three review rounds.
+7. The issue moves to In Review. A Director comment with an `@handle` starts that agent; a code change withdraws the approval and requires a new review.
+8. **Accept** verifies the assignee worktrees still match the approved snapshot, then marks the task accepted. Apply the change with the `git cherry-pick` command shown under Changes & evidence.
+
+## Verification
 
 ```bash
-cd app/frontend
-npm ci
-npm run typecheck
-npm run build
-cd ..
-go version
-go vet ./...
-go test -race ./...
-go build ./...
+cd app/frontend && npm ci && npm run typecheck && npm run build
+cd .. && gofmt -l internal main.go issue_runtime.go && go vet ./... && go test -race ./... && go build ./...
 wails dev
 ```
 
-Record command, exit status, commit SHA and log path. When CI has not completed, report `pending`, never `passed`. Local native launch requires authenticated Claude and Codex with their native login; `discovery.Scan` verifies login before execution. The Go CI checks do **not** prove Wails DMG packaging.
-
-## Live acceptance matrix
-
-**Run A — Codex Developer → Claude Reviewer**
-
-1. In Work > M1 Runtime, select an isolated *test repository root* with no unrelated uncommitted changes. Create a new objective with explicit acceptance criteria and task list. Set Developer **Codex**, Reviewer **Claude**; set a small bounded wake budget (for example 2). Select local engineering-knowledge v1.0.0.
-2. Start the Codex Developer turn: ask it to read `get_objective`, claim the implementation task, make a small verifiable code edit in *its own worktree*, run applicable tests, submit the task with actual command/exit evidence, and `send_message` to Claude Reviewer.
-3. Start Claude Reviewer manually if it has not yet established a session. Reviewer reads MCP messages and objective, inspects the developer worktree **read-only**, checks the patch and tests, then communicates findings by `send_message`. Reviewer cannot claim independent verification that did not occur or update the developer's owned task.
-4. When a revision is needed, the Director sends feedback or rejects a submitted task; Developer performs a new turn with corrections and renewed test evidence. Observe durable messages, revision increments, native session continuity, event JSONL, Git patch/status digest and usage on Insights.
-5. Enter **actual** test/build result and **actual** independent reviewer evidence; explicitly accept (or reject) as Director. Verify accepted status is not set merely because an agent requested acceptance.
-
-**Run B — Claude Developer → Codex Reviewer**
-
-Repeat with a new objective and reversed roles. Confirm MCP tools actually succeed (not merely provider process exit 0), native login is authenticated for both, the reviewer cannot change the developer worktree, and messages remain scoped to this objective.
-
-**Failure and recovery**
-
-- Missing/unauthed provider: execution refuses to start; no fabricated success.
-- Cancel in-flight turn: only its owned process group is interrupted; token revoked; state `interrupted` (not accepted).
-- Restart app during an in-flight turn: `RecoverInterrupted` marks unfinished turns interrupted; revoked token remains unauthorized. Do not retry uncertain side effects automatically.
-- Explicit concurrent turn of same participant: rejected without racing native session.
-- MCP without bearer, forged host/origin or wrong objective: refused; confirmed via real socket integration tests; verify native clients' actual authenticated MCP calls in live logs.
-- Automatic wake: never exceeds configured SQLite wake budget; disabled when budget zero; no cross-objective delivery or model polling. Bootstrap each agent once manually before wakes can resume it.
-- Observe failure handling when native events are invalid or incomplete, rate/port failure, nonzero exit, and Git evidence unavailable.
+To keep a test run away from your real collaboration data, start with `AE_DATA_DIR=/absolute/empty/directory wails dev`.
 
 ## Evidence report template
 
-- Commit SHA / CI run URL / `go vet`, `go test -race`, `go build` / frontend build result:
-- macOS version / architecture / Wails build result:
-- Native Claude binary/version/auth status and MCP tool call:
-- Native Codex binary/version/auth status and MCP tool call:
-- Run A objective/task IDs, worktree, diff hash, test result, reviewer findings, message IDs and human verdict:
-- Run B same fields:
-- Failure and restart scenarios:
-- Known gaps, unverified claims, security exceptions (must not be silently approved):
-- Director decision: **accepted / rejected / pending**, with timestamp.
+- Commit SHA / CI run URL / Go and frontend results:
+- macOS version / Wails build result:
+- Native Claude and Codex versions and login status:
+- Per issue: assignee and reviewer harness, snapshot commits, observed test commands, review verdict, usage, Director decision:
+- Stop, retry and restart observations:
+- Known gaps and unverified claims:
 
-Keep raw logs and evidence paths **outside Git tracking**, protect them with 0600 permissions, and review them for private data before sharing. Mark Issue #78 complete only after both live role assignments and explicit Director acceptance.
+Keep raw logs and evidence outside Git, mode 0600, and review them for private data before sharing.

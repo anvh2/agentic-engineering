@@ -100,3 +100,23 @@ details[open]>summary>.wk-disclosure{transform:rotate(90deg)}
 .wk-shell .wk-mentions button:hover,.wk-shell .wk-mentions button:focus-visible{background:#343438}
 .wk-shell .wk-mentions .wk-avatar{width:20px;height:20px;flex-basis:20px;font-size:10px}
 .wk-shell .wk-mentions small{margin-left:auto;overflow:hidden;text-overflow:ellipsis}
+
+/* Live execution sections. */
+.wk-run-status{display:grid;gap:6px;margin:0 0 12px}
+.wk-status-line{display:flex;align-items:center;gap:8px}.wk-status-line small{margin-left:auto}
+.wk-run-actions{display:flex;gap:8px}.wk-run-actions:empty{display:none}
+.wk-run-actions button{background:#29292e}.wk-shell .wk-run-actions .wk-primary{background:#e2e2e7;color:#161618}.wk-run-actions button:disabled{opacity:.5;cursor:default}
+.wk-error{color:#ef8a8f;font-size:12px;overflow-wrap:anywhere;margin:0;white-space:pre-wrap}
+.wk-notice{color:#e4c37a;font-size:12px;overflow-wrap:anywhere;margin:0}
+.wk-run-state{margin-left:auto;flex-shrink:0}.wk-run-state[data-state=succeeded]{color:#79b98e}.wk-run-state[data-state=failed],.wk-run-state[data-state=interrupted]{color:#ef8a8f}.wk-run-state[data-state=running]{color:#62a1e9}
+.wk-execution-head .wk-run-state+.wk-disclosure{margin-left:0}
+.wk-run,.wk-command{padding:4px 0;min-width:0}.wk-run summary,.wk-command summary{display:flex;gap:8px;align-items:baseline;cursor:pointer;font-size:12px}
+.wk-run>small,.wk-evidence-body small,.wk-evidence-body section>strong{display:block;overflow-wrap:anywhere;margin-top:3px}
+.wk-command summary span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wk-shell pre{background:#18181a;border:1px solid #29292d;border-radius:6px;padding:8px;font-size:11px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;margin:6px 0}
+.wk-shell code{font-size:11px;overflow-wrap:anywhere}
+.wk-evidence-body h4{font-size:12px;font-weight:500;margin:14px 0 4px}.wk-evidence-body section{margin-bottom:10px}
+.wk-files{list-style:none;padding:0;margin:4px 0}.wk-files li{display:flex;justify-content:space-between;gap:8px;font-size:12px}.wk-files li span{overflow-wrap:anywhere;min-width:0}
+.wk-activity>span:nth-child(2){min-width:0;overflow-wrap:anywhere}.wk-activity b{font-weight:500;color:#d0d0d6}.wk-activity time{flex-shrink:0}.wk-message>div{min-width:0}
+.wk-card-phase{font-size:11px;color:#9999a3}.wk-card-phase[data-phase=failed],.wk-card-phase[data-phase=lost]{color:#ef8a8f}.wk-card-phase[data-phase=in_review]{color:#e4c37a}
+.wk-column>.wk-notice{margin:0 0 10px;text-align:left}

@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/coder/acp-go-sdk v0.13.5
+	github.com/go-logr/logr v1.4.3
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/wailsapp/wails/v2 v2.10.2
 	modernc.org/sqlite v1.40.0

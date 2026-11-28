@@ -19,11 +19,11 @@ func (CodexAdapter) Run(ctx context.Context, spec TurnSpec, emit func(Event)) (T
 	}
 	stream := &codexStream{token: spec.Token, emit: emit}
 	outcome, err := RunProcess(ctx, ProcessSpec{
-		Path: spec.Binary.Path,
-		Args: args,
-		Env: CleanEnv(map[string]string{TokenEnv: spec.Token}),
-		Dir: spec.Workdir,
-		Stdin: []byte(spec.Prompt),
+		Path:   spec.Binary.Path,
+		Args:   args,
+		Env:    CleanEnv(map[string]string{TokenEnv: spec.Token}),
+		Dir:    spec.Workdir,
+		Stdin:  []byte(spec.Prompt),
 		OnLine: stream.line,
 	})
 	if err != nil {
@@ -38,7 +38,7 @@ func (CodexAdapter) Run(ctx context.Context, spec TurnSpec, emit func(Event)) (T
 	result, err := stream.finish(outcome.ExitCode, outcome.Interrupted, nil)
 	if err != nil {
 		// Interrupted and provider-reported failures are durable outcomes.
-		if result.Interrupted || result.ExitCode != 0 || result.NativeError != "" || result.ToolFailures != 0 {
+		if result.Interrupted || result.ExitCode != 0 || result.NativeError != "" {
 			return result, nil
 		}
 		if errors.Is(ctx.Err(), context.Canceled) {

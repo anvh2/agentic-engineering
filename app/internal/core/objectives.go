@@ -3,9 +3,9 @@ package core
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"path/filepath"
-	"encoding/json"
 	"regexp"
 	"strings"
 )
@@ -32,16 +32,20 @@ func (s *Service) CreateProject(ctx context.Context, name, description string) (
 // ParticipantInput assigns an agent in a role. Workdir is the worktree the
 // participant's sessions run in; it must be absolute.
 type ParticipantInput struct {
-	Agent string // native harness: claude or codex
+	Agent   string // native harness: claude or codex
 	AgentID string
-	Name string
-	Handle string
-	Role string
-	Model string
+	Name    string
+	Handle  string
+	Role    string
+	// Duty assigns implementation or independent review. An objective with a
+	// reviewer needs exactly one assignee and cannot be accepted without that
+	// reviewer's approval.
+	Duty          Duty
+	Model         string
 	KnowledgeRoot string
-	Languages []string
-	Assigned []string
-	Workdir string
+	Languages     []string
+	Assigned      []string
+	Workdir       string
 }
 
 var participantHandlePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,39}$`)
@@ -101,6 +105,9 @@ func (s *Service) CreateObjective(ctx context.Context, in ObjectiveInput) (Objec
 			rec.ID, in.ProjectID, in.Title, in.Description, in.AcceptanceCriteria, budget, now, now); err != nil {
 			return err
 		}
+		if err := validateDuties(in.Participants); err != nil {
+			return err
+		}
 		seenAgentIDs := make(map[string]bool, len(in.Participants))
 		for _, p := range in.Participants {
 			if p.Agent != "claude" && p.Agent != "codex" {
@@ -134,16 +141,20 @@ func (s *Service) CreateObjective(ctx context.Context, in ObjectiveInput) (Objec
 				return invalid("duplicate participant %q", h)
 			}
 			languages, err := json.Marshal(p.Languages)
-			if err != nil { return err }
+			if err != nil {
+				return err
+			}
 			assigned, err := json.Marshal(p.Assigned)
-			if err != nil { return err }
+			if err != nil {
+				return err
+			}
 			id := newID("par")
 			rec.Participants[h] = id
 			if _, err := tx.ExecContext(ctx, `INSERT INTO participants
-				(id, objective_id, handle, agent, role, workdir, created_at, agent_id, agent_name, model, knowledge_root, languages_json, assigned_json)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				(id, objective_id, handle, agent, role, workdir, created_at, agent_id, agent_name, model, knowledge_root, languages_json, assigned_json, duty)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				id, rec.ID, h, p.Agent, p.Role, p.Workdir, now, p.AgentID, p.Name,
-				p.Model, p.KnowledgeRoot, string(languages), string(assigned)); err != nil {
+				p.Model, p.KnowledgeRoot, string(languages), string(assigned), string(p.Duty)); err != nil {
 				return err
 			}
 		}
@@ -177,15 +188,15 @@ func (s *Service) GetObjective(ctx context.Context, p Principal) (ObjectiveView,
 	if err != nil {
 		return v, err
 	}
-	v.You = Participant{Handle: p.Handle, Agent: p.Agent, AgentID: p.AgentID, Name: p.AgentName, Role: p.Role}
-	rows, err := s.db.QueryContext(ctx, `SELECT handle, agent, agent_id, agent_name, role FROM participants WHERE objective_id = ? ORDER BY handle`, p.ObjectiveID)
+	v.You = Participant{Handle: p.Handle, Agent: p.Agent, AgentID: p.AgentID, Name: p.AgentName, Role: p.Role, Duty: p.Duty}
+	rows, err := s.db.QueryContext(ctx, `SELECT handle, agent, agent_id, agent_name, role, duty FROM participants WHERE objective_id = ? ORDER BY handle`, p.ObjectiveID)
 	if err != nil {
 		return v, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var pt Participant
-		if err := rows.Scan(&pt.Handle, &pt.Agent, &pt.AgentID, &pt.Name, &pt.Role); err != nil {
+		if err := rows.Scan(&pt.Handle, &pt.Agent, &pt.AgentID, &pt.Name, &pt.Role, &pt.Duty); err != nil {
 			return v, err
 		}
 		v.Participants = append(v.Participants, pt)
@@ -195,4 +206,21 @@ func (s *Service) GetObjective(ctx context.Context, p Principal) (ObjectiveView,
 	}
 	v.Tasks, err = s.listTasks(ctx, s.db, p.ObjectiveID)
 	return v, err
+}
+
+func validateDuties(participants []ParticipantInput) error {
+	counts := map[Duty]int{}
+	for _, p := range participants {
+		if p.Duty != "" && p.Duty != DutyAssignee && p.Duty != DutyReviewer {
+			return invalid("unknown duty %q", p.Duty)
+		}
+		counts[p.Duty]++
+	}
+	if counts[DutyReviewer] > 1 || counts[DutyAssignee] > 1 {
+		return invalid("an objective has at most one assignee and one reviewer")
+	}
+	if counts[DutyReviewer] == 1 && counts[DutyAssignee] == 0 {
+		return invalid("a reviewer requires an independent assignee")
+	}
+	return nil
 }

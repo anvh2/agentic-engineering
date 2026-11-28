@@ -49,6 +49,7 @@ type Principal struct {
 	AgentID       string // stable Team agent identity
 	AgentName     string
 	Role          string
+	Duty          Duty
 }
 
 // Message is a durable collaboration message. Seq is a per-database monotonic
@@ -82,11 +83,12 @@ type MessagePage struct {
 // Participant is an agent assigned to an objective in a role. Sessions are
 // attempts of a participant, so mail survives a replacement session.
 type Participant struct {
-	Handle string `json:"handle"`
-	Agent  string `json:"agent"` // native harness
+	Handle  string `json:"handle"`
+	Agent   string `json:"agent"` // native harness
 	AgentID string `json:"agentId,omitempty"`
-	Name string `json:"name,omitempty"`
-	Role   string `json:"role"`
+	Name    string `json:"name,omitempty"`
+	Role    string `json:"role"`
+	Duty    Duty   `json:"duty,omitempty"` // "assignee" or "reviewer" on this objective
 }
 
 // ObjectiveView is the scoped objective an agent may read.
