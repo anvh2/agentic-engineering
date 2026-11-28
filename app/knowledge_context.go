@@ -71,9 +71,6 @@ func knowledgeApplicable(e KnowledgeEntry,role string,languages []string)bool{
 	}
 	return true
 }
-func knowledgeAllowed(e KnowledgeEntry,role string,languages []string)bool{
-	return knowledgeApplicable(e,role,languages)
-}
 func compactKnowledgeIndex(entries []KnowledgeEntry)string{
 	var b strings.Builder
 	for _,e:=range entries{
@@ -93,7 +90,7 @@ func BuildKnowledgeContext(req KnowledgeContextRequest)(KnowledgeContext,error){
 	for _,id:=range req.Assigned{assigned[id]=true}
 	eligible:=make([]KnowledgeEntry,0)
 	for _,e:=range pack.Entries{
-		if !knowledgeAllowed(e,req.Role,req.Languages){continue}
+		if !knowledgeApplicable(e,req.Role,req.Languages){continue}
 		if e.Load=="bootstrap" || assigned[e.ID] {eligible=append(eligible,e)}
 	}
 	// Reject IDs absent from the source or not applicable to this role/language.
@@ -141,7 +138,11 @@ func BuildKnowledgeContext(req KnowledgeContextRequest)(KnowledgeContext,error){
 		source,err:=knowledgeSafeFile(pack.Root,e.Path);if err!=nil{return out,err}
 		raw,err:=os.ReadFile(source);if err!=nil{return out,err}
 		// Paths are validated by knowledgeSafeFile. This directory contains no unassigned documents.
-		target:=filepath.Join(dir,e.Path)
+		clean := filepath.Clean(e.Path)
+		if filepath.IsAbs(e.Path) || clean=="." || clean==".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) || strings.HasPrefix(clean, ".git"+string(os.PathSeparator)) {
+			return KnowledgeContext{}, fmt.Errorf("unsafe on-demand document path: %s",e.ID)
+		}
+		target:=filepath.Join(dir,clean)
 		if err:=os.MkdirAll(filepath.Dir(target),0700);err!=nil{return out,err}
 		if err:=os.WriteFile(target,raw,0600);err!=nil{return out,err}
 	}
