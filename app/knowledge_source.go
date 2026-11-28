@@ -153,8 +153,7 @@ func (s *KnowledgeSource) ListGitRefs(rawURL string)([]GitRef,error){
  cmd.Env=append(os.Environ(),"GIT_TERMINAL_PROMPT=0")
  out,err:=cmd.Output();if err!=nil{return nil,fmt.Errorf("cannot list Git branches/tags: %w",err)}
  refs:=make([]GitRef,0,64)
- for _,line:=range strings.Split(string(out),"
-"){
+ for _,line:=range strings.Split(string(out),"\n"){
   fields:=strings.Fields(line);if len(fields)!=2{continue}
   kind,name:="",""
   if strings.HasPrefix(fields[1],"refs/heads/"){kind="branch";name=strings.TrimPrefix(fields[1],"refs/heads/")}
