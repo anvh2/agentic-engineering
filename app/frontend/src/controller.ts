@@ -24,13 +24,35 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
       if(page!=="Team"||!["alex","emma","noah"].includes(detail)||tab==="Roles"||tab==="Harnesses"){stopKnowledgePlayback();return;}
       const match=/^Knowledge (Graph|Timeline|Context) ([0-6])$/.exec(tab);
       const view=match?.[1]||"Graph",phase=Number(match?.[2]||0);
-      const scrolls:Array<[number,number]>=[];
-      for(let node:Element|null=root.querySelector(".team-view .team-profile");node;node=node.parentElement)scrolls.push([node.scrollTop,node.scrollLeft]);
-      const x=window.scrollX,y=window.scrollY;
-      tab="Knowledge "+view+" "+((phase+1)%7);render();
-      let node:Element|null=root.querySelector(".team-view .team-profile");
-      for(const [top,left] of scrolls){if(!node)break;node.scrollTop=top;node.scrollLeft=left;node=node.parentElement;}
-      window.scrollTo(x,y);
+      const preview=root.querySelector<HTMLElement>("[data-knowledge-preview]");
+      if(!preview){stopKnowledgePlayback();return;}
+      const next=(phase+1)%7;
+      const entries=JSON.parse(preview.dataset.knowledgeEntries||"[]") as Array<{phase:number;tokens:number;kind:string}>;
+      const loaded=entries.filter(e=>e.phase<=next),total=loaded.reduce((sum,e)=>sum+e.tokens,0);
+      tab="Knowledge "+view+" "+next;nav.tab=tab;
+      const setText=(selector:string,value:string)=>{const el=preview.querySelector(selector);if(el)el.textContent=value;};
+      setText("[data-knowledge-phase]",["Waiting","Bootstrap","Repository discovery","Planning","Implementation","Debugging","Verification"][next]+" · "+next+"/6");
+      setText("[data-knowledge-count]",loaded.length+" / "+entries.length);
+      setText("[data-knowledge-total]",total.toLocaleString());
+      setText("[data-knowledge-total-svg]",total.toLocaleString()+" est. tokens");
+      preview.querySelectorAll("[data-knowledge-edge],[data-knowledge-node]").forEach(el=>{
+        const edge=el.hasAttribute("data-knowledge-edge");
+        const p=Number(el.getAttribute(edge?"data-knowledge-edge":"data-knowledge-node"));
+        el.setAttribute("stroke",p<=next?"#92a0ae":"var(--edge)");
+        if(edge)el.setAttribute("stroke-dasharray",p<=next?"none":"4 4");
+        el.classList.toggle(edge?"knowledge-flow-active":"knowledge-node-active",p===next);
+      });
+      preview.querySelectorAll("[data-knowledge-label],[data-knowledge-status]").forEach(el=>{
+        const label=el.hasAttribute("data-knowledge-label");
+        const p=Number(el.getAttribute(label?"data-knowledge-label":"data-knowledge-status"));
+        el.textContent=p<=next?(label?"Simulated load · "+el.getAttribute("data-tokens")+" tokens":"Simulated load"):p===99?"Not selected":"Available";
+      });
+      for(const kind of ["DNA","Role","Context","Standard","Skill"]){
+        const n=loaded.filter(e=>e.kind===kind).reduce((sum,e)=>sum+e.tokens,0);
+        setText('[data-knowledge-category="'+kind+'"]',n.toLocaleString()+" tokens");
+        const bar=preview.querySelector<HTMLElement>('[data-knowledge-bar="'+kind+'"]');
+        if(bar)bar.style.width=(total?100*n/total:0)+"%";
+      }
     },1500);
   };
   subscribeChat(name=>{if(page==="Chat"||page==="Collaboration")updateChatStream(root,name,consoles[name].output,consoles[name].activity)});
@@ -82,7 +104,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     else if(data.project){page="Projects";detail=data.project;tab="";}
     else if(data.session){page="Sessions";detail=data.session;tab="";}
     else if("back" in data){detail="";tab="";}
-    else if(data.tab){tab=data.tab;if(!/^Knowledge (Graph|Timeline|Context) [0-6]$/.test(tab))detail="";}
+    else if(data.tab){const view=/^Knowledge (Graph|Timeline|Context) [0-6]$/.exec(data.tab);if(view){const phase=/^Knowledge (Graph|Timeline|Context) ([0-6])$/.exec(tab)?.[2]||"0";tab="Knowledge "+view[1]+" "+phase;}else{tab=data.tab;detail="";}}
     else if(data.open)modal=data.open;
     else if("cancel" in data)modal="";
     else if("create" in data){
