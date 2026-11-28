@@ -217,10 +217,10 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     if("currentRepo" in data){const name=detail==="Claude"?"Claude":"Codex";void currentRepository().then(dir=>{if(!dir){window.alert("No Git repository found in the app working directory. Enter the local path.");return;}consoles[name].dir=dir;if(page==="Chat")render();}).catch(e=>window.alert(String(e)));return;}
     if("reviewPrompt" in data){const c=consoles[detail==="Claude"?"Claude":"Codex"];if(!c.dir.trim()){window.alert("Select a real repository directory before reviewing code.");return;}c.prompt="Review this repository without modifying files. Inspect the current branch, architecture, correctness, security, maintainability and tests. Report prioritized findings with file references and distinguish verified evidence from assumptions.";render();return;}
     if(data.agentChat){if(!profiles(state).some(a=>a.id===data.agentChat))return;page="Chat";detail="agent:"+data.agentChat;tab="";render();return;}
-    if("agentBrowseRepo" in data){const id=detail.slice(6),c=conversation(id);if(c.running)return;void browseRepository().then(dir=>{if(dir){c.repositoryDir=dir;render()}}).catch(e=>{c.error=String(e);render()});return;}
-    if("agentClearRepo" in data){const c=conversation(detail.slice(6));if(!c.running){c.repositoryDir=undefined;render()}return;}
+    if("agentBrowseRepo" in data){const id=detail.slice(6),c=conversation(id,projectFilter);if(c.running)return;void browseRepository().then(dir=>{if(dir){c.repositoryDir=dir;render()}}).catch(e=>{c.error=String(e);render()});return;}
+    if("agentClearRepo" in data){const c=conversation(detail.slice(6),projectFilter);if(!c.running){c.repositoryDir=undefined;render()}return;}
     if("agentSend" in data){const id=detail.slice(6);void sendAgentChat(state,id,value("agent-chat-prompt"),()=>{if(page==="Chat"&&detail==="agent:"+id)render()},projectFilter);return;}
-    if("agentStop" in data){void stopAgentChat(detail.slice(6));return;}
+    if("agentStop" in data){void stopAgentChat(detail.slice(6),projectFilter);return;}
     if(data.chatHarness){page="Chat";tab="";detail=data.chatHarness;render();return;}
     if(data.harness){stopKnowledgePlayback();detail=detail===data.harness?"":data.harness;if(page==="Team"&&profiles(state).some(a=>a.id===data.harness)){tab="Knowledge Graph 0";}render();return;}
     if(data.runPrompt||data.stopPrompt||data.terminal){

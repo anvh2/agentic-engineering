@@ -8,7 +8,7 @@ import type { ViewContext } from "../view-context";
 import { renderConsole } from "../components/harness-console";
 export function renderChat(ctx:ViewContext):string {
  if(ctx.nav.detail.startsWith("agent:")){
- const id=ctx.nav.detail.slice(6),c=conversation(id),a=profiles(ctx.state).find(a=>a.id===id);
+ const id=ctx.nav.detail.slice(6),c=conversation(id,ctx.nav.projectFilter),a=profiles(ctx.state).find(a=>a.id===id);
  const title=id==="group"?"Group":a?.name||"Agent";
  return renderChatView({title,subtitle:id==="group"?profiles(ctx.state).map(a=>a.name).join(" · "):a?.role+" · "+a?.harness,messages:c.messages,live:c.active?[{agent:c.active.harness,author:c.active.name,body:consoles[c.active.harness].output,blocks:consoles[c.active.harness].blocks,activity:consoles[c.active.harness].activity||"Waiting for native CLI…"}]:[],error:c.error,composer:renderChatComposer({id:"agent-chat-prompt",placeholder:"Message "+title+"…",running:c.running,disabled:c.running,send:"data-agent-send",stop:"data-agent-stop",hint:"Enter to send · Shift+Enter for a new line"})});
  }

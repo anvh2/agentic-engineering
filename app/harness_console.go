@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sort"
 	"sync"
 	"time"
 
@@ -29,12 +30,15 @@ type ConsoleResult struct {
 	RunID                  string                `json:"runId,omitempty"`
 	EstimatedContextTokens int64                 `json:"estimatedContextTokens,omitempty"`
 	KnowledgeEvents        []KnowledgeTraceEvent `json:"knowledgeEvents,omitempty"`
+	SessionID              string                `json:"sessionId,omitempty"`
+	SessionReused          bool                  `json:"sessionReused,omitempty"`
 }
 
 type HarnessConsole struct {
 	ctx    context.Context
 	mu     sync.Mutex
 	active map[string]context.CancelFunc
+	acpSessions acpSessionPool
 }
 
 func consoleTarget(name, path, dir string) (string, string, error) {
@@ -88,14 +92,14 @@ func (h *HarnessConsole) CurrentRepository() string {
 }
 
 func (h *HarnessConsole) RunPrompt(name, path, dir, prompt string) ConsoleResult {
-	return h.runPrompt(name, path, dir, prompt, "", "", "", nil)
+	return h.runPrompt(name, path, dir, prompt, "", "", "", nil, "console", "")
 }
 
 func (h *HarnessConsole) RunIssuePrompt(name, path, dir, key, prompt string) ConsoleResult {
 	if strings.TrimSpace(dir) == "" || strings.TrimSpace(key) == "" {
 		return ConsoleResult{Error: "issue repository and key required"}
 	}
-	return h.runPrompt(name, path, dir, prompt, key, "", "", nil)
+	return h.runPrompt(name, path, dir, prompt, key, "", "", nil, "", "")
 }
 
 func (h *HarnessConsole) beginRun(name string) (context.Context, func(), error) {
@@ -175,7 +179,7 @@ func nativeArgs(name, key, model string, standalone bool) []string {
 // runPrompt controls the native process lifetime; onStart is invoked only after
 // the CLI has successfully started, so the trace never claims an injection for
 // an unavailable executable.
-func (h *HarnessConsole) runPrompt(name, path, dir, prompt, key, model, knowledgeDir string, onStart func()) ConsoleResult {
+func (h *HarnessConsole) runPrompt(name, path, dir, prompt, key, model, knowledgeDir string, onStart func(bool), conversationKey, followUp string) ConsoleResult {
 	if strings.TrimSpace(prompt) == "" || len(prompt) > nativePromptLimit {
 		return ConsoleResult{Error: "prompt is empty or too long"}
 	}
@@ -193,7 +197,7 @@ func (h *HarnessConsole) runPrompt(name, path, dir, prompt, key, model, knowledg
 		if err != nil {
 			return ConsoleResult{Error: err.Error()}
 		}
-		// Session data is ephemeral by design until persistent sessions are introduced.
+		// One-shot fallback workspace: the named conversation path is stable.
 		defer func() { _ = os.RemoveAll(dir) }()
 	}
 	path, dir, err = consoleTarget(name, path, dir)
@@ -234,14 +238,14 @@ func (h *HarnessConsole) runPrompt(name, path, dir, prompt, key, model, knowledg
 		if model != "" && model != "Default" {
 			return ConsoleResult{Error: "ACP model selection is not implemented; select Default"}
 		}
-		return runACPChat(ctx, name, path, dir, prompt, stream, onStart)
+		return h.acpSessions.run(ctx, name, path, dir, prompt, conversationKey, followUp, stream, onStart)
 	}
 	command.Stdout = stream
 	command.Stderr = &stderr
 	err = command.Start()
 	if err == nil {
 		if onStart != nil {
-			onStart()
+			onStart(false)
 		}
 		err = command.Wait()
 	}
@@ -274,10 +278,11 @@ func (h *HarnessConsole) StopPrompt(name string) {
 
 func (h *HarnessConsole) stopAll() {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	for _, cancel := range h.active {
 		cancel()
 	}
+	h.mu.Unlock()
+	h.acpSessions.closeAll()
 }
 
 func (h *HarnessConsole) OpenTerminal(name, path, dir string) error {
@@ -301,6 +306,18 @@ func (h *HarnessConsole) OpenTerminal(name, path, dir string) error {
 // RunAgentContextTest chooses exactly the applicable bootstrap documents and
 // exposes only assigned on-demand files via the native harness workspace.
 func (h *HarnessConsole) RunAgentContextTest(name, path, model string, request KnowledgeContextRequest, prompt string) ConsoleResult {
+	return h.runAgentContext(name, path, model, "", request, prompt)
+}
+
+// RunAgentContextChat reuses one ACP session per project/agent conversation.
+func (h *HarnessConsole) RunAgentContextChat(name, path, model, conversationKey string, request KnowledgeContextRequest, prompt string) ConsoleResult {
+	if strings.TrimSpace(conversationKey) == "" {
+		return ConsoleResult{Error: "conversation key required"}
+	}
+	return h.runAgentContext(name, path, model, conversationKey, request, prompt)
+}
+
+func (h *HarnessConsole) runAgentContext(name, path, model, conversationKey string, request KnowledgeContextRequest, prompt string) ConsoleResult {
 	if strings.TrimSpace(prompt) == "" {
 		return ConsoleResult{Error: "enter a test message"}
 	}
@@ -350,15 +367,46 @@ func (h *HarnessConsole) RunAgentContextTest(name, path, model string, request K
 		}
 		defer func() { _ = os.RemoveAll(knowledge.Directory) }()
 	}
-	started := func() {
-		for _, event := range initial {
-			if event.Kind == "knowledge.injected" {
-				record(event)
+	// Stable workspace for a chat without a selected repository. Temporary
+	// knowledge files remain scoped to each individual turn.
+	if conversationKey != "" && strings.TrimSpace(request.RepositoryDir) == "" {
+		cache, cacheErr := os.UserCacheDir()
+		if cacheErr != nil {
+			return ConsoleResult{Error: cacheErr.Error()}
+		}
+		digest := sha256.Sum256([]byte(name + "\x00" + conversationKey))
+		request.RepositoryDir = filepath.Join(cache, "agentic-engineering", "acp-chat", fmt.Sprintf("%x", digest[:12]))
+		if mkdirErr := os.MkdirAll(request.RepositoryDir, 0700); mkdirErr != nil {
+			return ConsoleResult{Error: mkdirErr.Error()}
+		}
+	}
+	var followUp strings.Builder
+	if knowledge.Directory != "" {
+		fmt.Fprintf(&followUp, "Current on-demand directory: %s\\nAvailable document IDs and paths:\\n%s\\nPrevious temporary paths may have expired.\\n", knowledge.Directory, knowledge.Index)
+	}
+	followUp.WriteString("--- User request ---\\n" + prompt)
+	// Rotate the ACP session when the pack, bootstrap rules, role or assigned
+	// documents change. Task text and temporary file paths are excluded.
+	if conversationKey != "" {
+		languages := append([]string(nil), request.Languages...)
+		assigned := append([]string(nil), request.Assigned...)
+		sort.Strings(languages)
+		sort.Strings(assigned)
+		identity := strings.Join([]string{request.Root, request.AgentID, request.Role, knowledge.PackID, knowledge.Version, knowledge.Revision, knowledge.Bootstrap, strings.Join(languages, ","), strings.Join(assigned, ",")}, "\x00")
+		fingerprint := sha256.Sum256([]byte(identity))
+		conversationKey += fmt.Sprintf(":%x", fingerprint[:])
+	}
+	started := func(reused bool) {
+		if !reused {
+			for _, event := range initial {
+				if event.Kind == "knowledge.injected" {
+					record(event)
+				}
 			}
 		}
 		record(KnowledgeTraceEvent{Kind: "execution.started"})
 	}
-	result := h.runPrompt(name, path, request.RepositoryDir, contextText.String(), "", model, knowledge.Directory, started)
+	result := h.runPrompt(name, path, request.RepositoryDir, contextText.String(), "", model, knowledge.Directory, started, conversationKey, followUp.String())
 	result.RunID = runID
 	result.EstimatedContextTokens = int64((contextText.Len() + 3) / 4)
 	if result.Usage != nil {

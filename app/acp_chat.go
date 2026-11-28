@@ -3,9 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"sync"
 
 	"github.com/coder/acp-go-sdk"
@@ -25,6 +22,9 @@ func (c *desktopACPClient) RequestPermission(_ context.Context, _ acp.RequestPer
 func (c *desktopACPClient) SessionUpdate(_ context.Context, n acp.SessionNotification) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.stream == nil {
+		return nil
+	}
 	u := n.Update
 	switch {
 	case u.AgentMessageChunk != nil:
@@ -43,51 +43,12 @@ func (c *desktopACPClient) SessionUpdate(_ context.Context, n acp.SessionNotific
 	return nil
 }
 
-func runACPChat(ctx context.Context, name, nativePath, dir, prompt string, stream *chatStream, onStart func()) ConsoleResult {
-	binary := "claude-agent-acp"
-	if name == "Codex" {
-		binary = "codex-acp"
-	}
-	// Use the same desktop PATH as native discovery; never download at runtime.
-	path := filepath.Dir(nativePath)+":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:"+os.Getenv("PATH")
-	var executable string
-	for _, base := range filepath.SplitList(path) {
-		candidate := filepath.Join(base, binary)
-		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0111 != 0 {
-			executable = candidate
-			break
-		}
-	}
-	if executable == "" {
-		return ConsoleResult{Error: "ACP adapter not installed: "+binary}
-	}
-	stream.activity("Starting "+name+" ACP…")
-	cmd := exec.CommandContext(ctx, executable)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "PATH="+path, "INITIAL_AGENT_MODE=read-only")
-	cmd.Stderr = os.Stderr
-	stdin, err := cmd.StdinPipe()
-	if err != nil { return ConsoleResult{Error: err.Error()} }
-	stdout, err := cmd.StdoutPipe()
-	if err != nil { return ConsoleResult{Error: err.Error()} }
-	if err := cmd.Start(); err != nil { return ConsoleResult{Error: err.Error()} }
-	defer func(){ _ = cmd.Process.Kill(); _ = cmd.Wait() }()
-	client := &desktopACPClient{stream:stream}
-	conn := acp.NewClientSideConnection(client, stdin, stdout)
-	init, err := conn.Initialize(ctx, acp.InitializeRequest{ProtocolVersion:acp.ProtocolVersionNumber})
-	if err != nil { return ConsoleResult{Error:fmt.Sprintf("ACP initialize: %v",err)} }
-	if init.ProtocolVersion != acp.ProtocolVersionNumber { return ConsoleResult{Error:"Unsupported ACP protocol"} }
-	stream.activity("Creating ACP session…")
-	session, err := conn.NewSession(ctx, acp.NewSessionRequest{Cwd:dir, McpServers:[]acp.McpServer{}})
-	if err != nil { return ConsoleResult{Error:fmt.Sprintf("ACP session: %v",err)} }
-	stream.activity("ACP session connected")
-	if onStart != nil { onStart() }
-	response, err := conn.Prompt(ctx, acp.PromptRequest{SessionId:session.SessionId, Prompt:[]acp.ContentBlock{acp.TextBlock(prompt)}})
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	result := ConsoleResult{Output:stream.answer.String()}
-	if ctx.Err() != nil { result.Error = "ACP prompt cancelled or timed out" } else if err != nil { result.Error = fmt.Sprintf("ACP prompt: %v",err) } else if fmt.Sprint(response.StopReason) != "end_turn" { result.Error = fmt.Sprintf("ACP stopped: %v", response.StopReason) }
-	return result
+// An adapter is long-lived for a conversation; callbacks are scoped to the
+// currently executing turn. A nil stream discards late idle notifications.
+func (c *desktopACPClient) setStream(stream *chatStream) {
+	c.mu.Lock()
+	c.stream = stream
+	c.mu.Unlock()
 }
 
 func (c *desktopACPClient) WriteTextFile(_ context.Context, _ acp.WriteTextFileRequest) (acp.WriteTextFileResponse, error) {
