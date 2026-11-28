@@ -7,6 +7,7 @@ import { group,stopGroup } from "./services/collaboration";
 import { consoles, runPrompt, stopPrompt, openTerminal, currentRepository, browseRepository, subscribeChat } from "./services/harness-console";
 import { scanAgent, scanAgents } from "./services/agent-connection";
 import type { Agent } from "./types";
+import { renderSessionMonitor } from "./pages/chat";
 import type { ViewContext } from "./view-context";
 import { demoStore } from "./services/demo-store";
 import { renderLayout } from "./components/layout";
@@ -74,7 +75,7 @@ export function mountController(root: HTMLElement, ctx: ViewContext) {
     },1500);
   };
   subscribeKnowledgeEvents(()=>{});
-  subscribeChat(name=>{if(page==="Chat"||page==="Collaboration")updateChatStream(root,name,consoles[name].output,consoles[name].activity,consoles[name].blocks)});
+  subscribeChat(name=>{if(page==="Chat"||page==="Collaboration")updateChatStream(root,name,consoles[name].output,consoles[name].activity,consoles[name].blocks);if(page==="Chat"&&detail.startsWith("agent:")&&conversation(detail.slice(6),projectFilter).active?.harness===name){const panel=root.querySelector<HTMLDetailsElement>("#agent-session-monitor");if(panel){const template=document.createElement("template");template.innerHTML=renderSessionMonitor({...ctx,nav:{...ctx.nav,detail,projectFilter}});const next=template.content.firstElementChild as HTMLDetailsElement|null;if(next){next.open=panel.open;panel.replaceWith(next);}}}});
   const updateIssue=()=>{if(page==="Chat"||page==="Objectives")render()};
   const launch=(issue:import("./services/work-board").Issue,agent:Agent,request:string)=>{void executeIssue(issue,agent,request,state,updateIssue)};
   const startAssigned=(issue:import("./services/work-board").Issue)=>{if(issue.assignee==="Claude"||issue.assignee==="Codex")launch(issue,issue.assignee,"Implement this issue and report evidence.")};

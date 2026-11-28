@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 
@@ -29,6 +30,7 @@ func (c *desktopACPClient) SessionUpdate(_ context.Context, n acp.SessionNotific
 	}
 	if n.Update.UsageUpdate != nil {
 		c.usage = n.Update.UsageUpdate
+		c.emitMonitor()
 	}
 	if c.stream == nil {
 		return nil
@@ -53,9 +55,16 @@ func (c *desktopACPClient) SessionUpdate(_ context.Context, n acp.SessionNotific
 
 // An adapter is long-lived for a conversation; callbacks are scoped to the
 // currently executing turn. A nil stream discards late idle notifications.
+func (c *desktopACPClient) emitMonitor() {
+	if c.stream == nil || c.stream.emit == nil { return }
+	body, err := json.Marshal(c.usage)
+	if err == nil { c.stream.emit("acp-usage", string(body)) }
+}
+
 func (c *desktopACPClient) setStream(stream *chatStream) {
 	c.mu.Lock()
 	c.stream = stream
+	c.emitMonitor()
 	c.mu.Unlock()
 }
 
