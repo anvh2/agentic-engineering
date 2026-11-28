@@ -92,3 +92,11 @@ details[open]>summary>.wk-disclosure{transform:rotate(90deg)}
 @keyframes wk-reveal{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:translateY(0)}}
 @media(max-width:850px){.wk-detail.wk-detail-collapsed{grid-template-columns:minmax(0,1fr)}.wk-detail-collapsed>aside.wk-properties{display:none}}
 @media(prefers-reduced-motion:reduce){.wk-detail,.wk-disclosure,.wk-composer,.wk-select>span:last-child{transition:none}.wk-execution-body{animation:none}}
+
+/* Mention popover and single composer focus ring. */
+.wk-shell .wk-composer textarea,.wk-shell .wk-composer textarea:focus{border:0;outline:0;box-shadow:none;background:transparent}
+.wk-shell .wk-mentions{top:auto;bottom:calc(100% + 6px);min-width:220px;max-width:100%;padding:4px;border-radius:7px;box-shadow:0 8px 24px #0005}
+.wk-shell .wk-mentions button{display:flex;align-items:center;justify-content:flex-start;gap:8px;width:100%;padding:6px 8px;border:0;border-radius:4px;background:transparent;text-align:left;font-size:12px;font-weight:400}
+.wk-shell .wk-mentions button:hover,.wk-shell .wk-mentions button:focus-visible{background:#343438}
+.wk-shell .wk-mentions .wk-avatar{width:20px;height:20px;flex-basis:20px;font-size:10px}
+.wk-shell .wk-mentions small{margin-left:auto;overflow:hidden;text-overflow:ellipsis}
