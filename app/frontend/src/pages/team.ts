@@ -29,26 +29,62 @@ function knowledgePreview(agent:{id:string;name:string;role:string;harness:strin
  const view=match?.[1]||"Graph",step=Number(match?.[2]||0);
  const loaded=entries.filter(e=>e.phase<=step);
  const total=loaded.reduce((sum,e)=>sum+e.tokens,0);
- const motion="";
- const selectedIDs=new Set(eligible.map(e=>e.id));
- const applicable=pack.entries.filter(e=>knowledgeApplicable(e,agent.role,ctx.state.agentLanguages?.[agent.id]??[]));
- const groups=new Map<string,{title:string;docs:typeof applicable}>();
- for(const e of applicable){
-  const id=e.group||e.kind;
-  const group=groups.get(id)||{title:pack.groups?.find(g=>g.id===id)?.title||id,docs:[]};
-  group.docs.push(e);groups.set(id,group);
- }
- const groupCards=(bootstrap:boolean)=>Array.from(groups.values()).map(g=>{
-  const docs=g.docs.filter(e=>(e.load==="bootstrap")===bootstrap);
-  if(!docs.length)return "";
-  const chosen=docs.filter(e=>selectedIDs.has(e.id));
-  const tokens=chosen.reduce((sum,e)=>sum+e.tokens,0);
-  return '<details class="panel" style="margin:6px 0;padding:10px"><summary style="cursor:pointer"><strong>'+esc(g.title)+'</strong><br><small class="muted">'+chosen.length+'/'+docs.length+' selected · '+tokens.toLocaleString()+' est. tokens</small></summary>'+docs.map(e=>'<div class="between space"><span>'+esc(knowledgeDisplayName(e))+'</span><small class="muted">'+(selectedIDs.has(e.id)?(bootstrap?"Bootstrap planned":"Selected"):"Available")+' · '+e.tokens+' est.</small></div>').join("")+'</details>';
- }).join("");
- const graph='<div style="border:1px solid var(--edge);border-radius:7px;padding:12px;background:radial-gradient(var(--edge) 1px,transparent 1px);background-size:15px 15px"><div class="panel" style="max-width:240px;margin:auto;text-align:center"><strong>'+esc(agent.name)+'</strong><p class="muted">'+esc(agent.role+" · "+agent.harness)+'</p></div><div style="text-align:center">↓</div><section class="panel"><small class="muted">01 · BOOTSTRAP CONTEXT</small>'+groupCards(true)+'</section><div style="text-align:center">↓</div><div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);gap:12px"><div><small class="muted">02 · NATIVE HARNESS</small><div class="panel">'+esc(agent.harness)+'</div><div style="text-align:center">↓</div><small class="muted">04 · EXECUTION</small><div class="panel">Task execution</div><div style="text-align:center">↓</div><div class="panel">Response &amp; evidence</div></div><div><small class="muted">03 · LOCAL KNOWLEDGE</small>'+groupCards(false)+'</div></div></div>';
+ const motion='<style>@keyframes knowledge-flow{from{stroke-dasharray:5 7;stroke-dashoffset:24}to{stroke-dasharray:5 7;stroke-dashoffset:0}}@keyframes knowledge-node{from{opacity:.45}to{opacity:1}}.knowledge-flow-active{animation:knowledge-flow .65s linear 2}.knowledge-node-active{animation:knowledge-node .65s ease-out}[data-knowledge-node],[data-knowledge-edge]{transition:stroke .35s ease,fill .35s ease}[data-knowledge-bar]{transition:width .4s ease}@media(prefers-reduced-motion:reduce){.knowledge-flow-active,.knowledge-node-active{animation:none}}</style>';
+ // Grouping is presentation-only; entries and their playback phases remain unchanged.
+ const groupEntries=(items:typeof entries)=>{
+  const groups=new Map<string,{title:string;docs:typeof entries}>();
+  for(const e of items){
+   const id=eligible.find(doc=>doc.id===e.id)?.group;
+   const metadata=pack.groups?.find(g=>g.id===id);
+   const key=metadata?.id??"";
+   const group=groups.get(key)??{title:metadata?.title||"Ungrouped",docs:[]};
+   group.docs.push(e);groups.set(key,group);
+  }
+  return [...groups.values()];
+ };
+ const foundation=groupEntries(entries.filter(e=>e.phase===1));
+ const local=groupEntries(entries.filter(e=>e.phase!==1));
+ const groupHeight=112;
+ const bootstrapBottom=170+Math.max(1,Math.ceil(foundation.length/2))*(groupHeight+10);
+ const harnessY=bootstrapBottom+48;
+ const height=Math.max(harnessY+280,harnessY+local.length*(groupHeight+10)+75);
+ const label=(x:number,y:number,t:string)=>'<text x="'+x+'" y="'+y+'" fill="var(--subtle)" font-size="10">'+esc(t)+'</text>';
+ const palette={agent:["#29263b","#a99ad9"],claude:["#352821","#d97757"],codex:["#27272a","#d4d4d8"],execution:["#242e3b","#79a7d7"],evidence:["#332e23","#c5ac72"]};
+ const box=(x:number,y:number,w:number,h:number,t:string,sub:string,colors:string[])=>'<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" rx="7" fill="'+colors[0]+'" stroke="'+colors[1]+'"/><text x="'+(x+12)+'" y="'+(y+22)+'" fill="var(--ink)" font-size="13">'+esc(t)+'</text>'+label(x+12,y+40,sub);
+ const node=(e:typeof entries[number],x:number,y:number,w:number)=>{
+  const active=e.phase<=step;
+  return '<rect data-knowledge-node="'+e.phase+'" class="'+(active&&e.phase===step?'knowledge-node-active':'')+'" x="'+x+'" y="'+y+'" width="'+w+'" height="52" rx="6" fill="'+(active?'#25332d':'var(--raised)')+'" stroke="'+(active?'#79a98e':'var(--edge)')+'"/><text x="'+(x+10)+'" y="'+(y+19)+'" fill="var(--ink)" font-size="12">'+esc(e.name.length>34?e.name.slice(0,31)+"…":e.name)+'</text><text data-knowledge-label="'+e.phase+'" data-tokens="'+e.tokens+'" x="'+(x+10)+'" y="'+(y+37)+'" fill="var(--subtle)" font-size="10">'+(active?'Loaded · '+e.tokens+' est. tokens':'Available')+'</text>';
+ };
+ const groupNode=(g:typeof foundation[number],x:number,y:number,w:number)=>{
+  const phase=Math.min(...g.docs.map(e=>e.phase));
+  const active=phase<=step;
+  const tokens=g.docs.reduce((sum,e)=>sum+e.tokens,0);
+  return '<rect data-knowledge-node="'+phase+'" class="'+(active&&phase===step?'knowledge-node-active':'')+'" x="'+x+'" y="'+y+'" width="'+w+'" height="'+groupHeight+'" rx="6" fill="'+(active?'#25332d':'var(--raised)')+'" stroke="'+(active?'#79a98e':'var(--edge)')+'"/>'+
+   '<foreignObject x="'+(x+8)+'" y="'+(y+6)+'" width="'+(w-16)+'" height="'+(groupHeight-12)+'"><div xmlns="http://www.w3.org/1999/xhtml" style="height:100%;overflow:auto;color:var(--ink);font-size:12px"><details><summary style="cursor:pointer;color:var(--ink);padding:4px 0">'+esc(g.title)+'</summary><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 '+(w-24)+' '+(g.docs.length*62)+'" style="width:100%;display:block">'+g.docs.map((e,i)=>node(e,1,i*62,w-26)).join("")+'</svg></details><div style="font-size:10px;color:var(--subtle)">'+g.docs.length+' documents · '+tokens.toLocaleString()+' est. tokens</div></div></foreignObject>';
+ };
+ const edge=(phase:number,d:string)=>'<path data-knowledge-edge="'+phase+'" class="'+(phase===step?'knowledge-flow-active':'')+'" d="'+d+'" fill="none" stroke="'+(phase<=step?'#79a98e':'var(--edge)')+'" stroke-dasharray="'+(phase<=step?'none':'4 4')+'"/>';
+ const graph='<div class="overflow"><svg role="img" aria-label="Target knowledge runtime flow, simulated preview" viewBox="0 0 660 '+height+'" style="width:100%;min-width:460px;display:block;background:radial-gradient(var(--edge) 1px,transparent 1px);background-size:15px 15px;border:1px solid var(--edge);border-radius:7px">'+
+ box(220,18,220,58,agent.name,agent.role+" · "+(agent.harness==="Claude"?"Claude Code":agent.harness),palette.agent)+
+ edge(1,"M330 76V99")+
+ '<rect x="24" y="99" width="612" height="'+(bootstrapBottom-99)+'" rx="8" fill="#25332d22" stroke="#455c4e"/>'+
+ label(40,120,"01 · BOOTSTRAP CONTEXT")+
+ foundation.map((g,i)=>groupNode(g,40+(i%2)*294,134+Math.floor(i/2)*(groupHeight+10),286)).join("")+
+ label(40,bootstrapBottom-20,"Task objective · Compact knowledge index (target)")+
+ edge(2,"M330 "+bootstrapBottom+"V"+(harnessY-22)+"H157V"+harnessY)+
+ label(24,harnessY-10,"02 · NATIVE HARNESS")+label(362,harnessY-10,"03 · LOCAL KNOWLEDGE")+
+ box(24,harnessY,266,60,agent.harness==="Claude"?"Claude Code":agent.harness,"Native read / search tools (target)",agent.harness==="Claude"?palette.claude:palette.codex)+
+ local.map((g,i)=>[...new Set(g.docs.map(e=>e.phase))].map(phase=>edge(phase,"M290 "+(harnessY+30)+"H340V"+(harnessY+i*(groupHeight+10)+26)+"H362")).join("")+groupNode(g,362,harnessY+i*(groupHeight+10),274)).join("")+
+ (!local.length?label(362,harnessY+25,"No assigned documents"):"")+
+ edge(3,"M157 "+(harnessY+60)+"V"+(harnessY+94))+
+ label(24,harnessY+86,"04 · EXECUTION")+
+ box(24,harnessY+94,266,58,"Task execution","Planning · Implementation",palette.execution)+
+ edge(6,"M157 "+(harnessY+152)+"V"+(harnessY+176))+
+ box(24,harnessY+176,266,58,"Response & evidence","Verification · Runtime events (target)",palette.evidence)+
+ '<text x="36" y="'+(harnessY+254)+'" fill="var(--subtle)" font-size="11" data-knowledge-total-svg>'+total.toLocaleString()+' est. tokens</text>'+
+ label(24,height-12,"Configuration preview · Simulated execution")+'</svg></div>';
  const timeline='<div class="overflow"><table><thead><tr><th>Phase</th><th>Knowledge</th><th>Source</th><th>Status</th></tr></thead><tbody>'+entries.map(e=>'<tr><td>'+esc(phases[e.phase])+'</td><td>'+esc(e.name)+'</td><td>'+esc(e.reason)+'</td><td data-knowledge-status="'+e.phase+'">'+(e.phase<=step?'Loaded':'Available')+'</td></tr>').join("")+'</tbody></table></div>';
  const usage=["DNA","Role","Standard","Skill","Reference"].map(k=>{const n=loaded.filter(e=>e.kind===k).reduce((sum,e)=>sum+e.tokens,0);return line(esc(k),'<span data-knowledge-category="'+k+'">'+n.toLocaleString()+' tokens</span>')+'<div class="progress"><i data-knowledge-bar="'+k+'" style="width:'+(total?100*n/total:0)+'%"></i></div>';}).join("");
- return '<div data-knowledge-preview data-knowledge-entries="'+esc(JSON.stringify(entries))+'">'+motion+'<section class="panel"><div class="between"><h3>Knowledge preview</h3><small class="muted" title="Selected files from '+esc(pack.id)+' '+esc(pack.version)+'; playback is illustrative, not native read telemetry">Preview</small></div><div class="chips" role="group" aria-label="Knowledge view">'+["Graph","Timeline","Context"].map(v=>'<button data-tab="Knowledge '+v+' '+step+'" aria-pressed="'+(v===view)+'" style="padding:5px 10px;'+(v===view?'background:var(--raised);':'')+'">'+v+'</button>').join("")+'</div><div class="between space" style="flex-wrap:wrap;gap:8px"><span data-knowledge-phase>'+esc(phases[step])+'</span><span class="muted"><span data-knowledge-count>'+loaded.length+" / "+entries.length+'</span> simulated phase · <span title="Size-derived estimate (bytes / 4); not actual model token usage"><span data-knowledge-total>'+total.toLocaleString()+'</span> est. tokens</span></span></div>'+(view==="Graph"?graph:view==="Timeline"?timeline:usage)+'<div class="between space"><small class="muted">File-first knowledge · No model calls</small><button data-knowledge-replay>↻ Replay</button></div></section></div>';
+ return '<div data-knowledge-preview data-knowledge-entries="'+esc(JSON.stringify(entries))+'">'+motion+'<section class="panel"><div class="between"><h3>Knowledge preview</h3><small class="muted" title="Selected files from '+esc(pack.id)+' '+esc(pack.version)+'; playback is illustrative, not native read telemetry">Preview</small></div><div class="chips" role="group" aria-label="Knowledge view">'+["Graph","Timeline","Context"].map(v=>'<button data-tab="Knowledge '+v+' '+step+'" aria-pressed="'+(v===view)+'" style="padding:5px 10px;'+(v===view?'background:var(--raised);':'')+'">'+v+'</button>').join("")+'</div><div class="between space" style="flex-wrap:wrap;gap:8px"><span data-knowledge-phase>'+esc(phases[step])+'</span><span class="muted"><span data-knowledge-count>'+loaded.length+" / "+entries.length+'</span> loaded · <span title="Size-derived estimate (bytes / 4); not actual model token usage"><span data-knowledge-total>'+total.toLocaleString()+'</span> est. tokens</span></span></div>'+(view==="Graph"?graph:view==="Timeline"?timeline:usage)+'<div class="between space"><small class="muted">File-first knowledge · No model calls</small><button data-knowledge-replay>↻ Replay</button></div></section></div>';
 }
 
 // Agents refer to document IDs, not copied skill or standard contents.
