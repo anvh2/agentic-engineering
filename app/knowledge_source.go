@@ -16,6 +16,8 @@ const knowledgeRepository = "https://github.com/anvh2/engineering-knowledge.git"
 
 type KnowledgeEntry struct {
  ID string `json:"id"`
+ Title string `json:"title,omitempty"`
+ Description string `json:"description,omitempty"`
  Path string `json:"path"`
  Kind string `json:"kind"`
  Load string `json:"load,omitempty"`
