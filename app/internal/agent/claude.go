@@ -109,6 +109,10 @@ func (ClaudeAdapter) Run(ctx context.Context, spec TurnSpec, emit func(Event)) (
 		Stdin: []byte(spec.Prompt), OnLine: stream.line,
 	})
 	if err != nil {
+		if ctx.Err() != nil {
+			stream.result.Interrupted = true
+			return stream.result, nil
+		}
 		return stream.result, fmt.Errorf("run claude: %w", err)
 	}
 	stream.result.ExitCode = result.ExitCode
