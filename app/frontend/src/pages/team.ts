@@ -35,7 +35,7 @@ function knowledgePreview(agent:{id:string;name:string;role:string;harness:strin
  const harnessY=bootstrapBottom+48;
  const height=Math.max(harnessY+280,harnessY+local.length*62+75);
  const label=(x:number,y:number,t:string)=>'<text x="'+x+'" y="'+y+'" fill="var(--subtle)" font-size="10">'+esc(t)+'</text>';
- const palette={agent:["#252a39","#8496c5"],claude:["#352821","#d49a78"],codex:["#29263b","#a99ad9"],execution:["#242e3b","#79a7d7"],evidence:["#332e23","#c5ac72"]};
+ const palette={agent:["#29263b","#a99ad9"],claude:["#352821","#d97757"],codex:["#27272a","#d4d4d8"],execution:["#242e3b","#79a7d7"],evidence:["#332e23","#c5ac72"]};
  const box=(x:number,y:number,w:number,h:number,t:string,sub:string,colors:string[])=>'<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" rx="7" fill="'+colors[0]+'" stroke="'+colors[1]+'"/><text x="'+(x+12)+'" y="'+(y+22)+'" fill="var(--ink)" font-size="13">'+esc(t)+'</text>'+label(x+12,y+40,sub);
  const node=(e:typeof entries[number],x:number,y:number,w:number)=>{
   const active=e.phase<=step;
