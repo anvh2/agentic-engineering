@@ -45,7 +45,9 @@ type Principal struct {
 	Handle        string // participant handle visible to agents, e.g. "codex-developer"
 	ObjectiveID   string
 	ProjectID     string
-	Agent         string // "claude" | "codex"
+	Agent         string // native harness (legacy field)
+	AgentID       string // stable Team agent identity
+	AgentName     string
 	Role          string
 }
 
@@ -81,7 +83,9 @@ type MessagePage struct {
 // attempts of a participant, so mail survives a replacement session.
 type Participant struct {
 	Handle string `json:"handle"`
-	Agent  string `json:"agent"`
+	Agent  string `json:"agent"` // native harness
+	AgentID string `json:"agentId,omitempty"`
+	Name string `json:"name,omitempty"`
 	Role   string `json:"role"`
 }
 

@@ -24,7 +24,9 @@ type TurnSummary struct {
 	SessionID string `json:"sessionId"`
 	ParticipantID string `json:"participantId"`
 	Handle string `json:"handle"`
-	Agent string `json:"agent"`
+	Agent string `json:"agent"` // native harness
+	AgentID string `json:"agentId,omitempty"`
+	Name string `json:"name,omitempty"`
 	Role string `json:"role"`
 	Trigger string `json:"trigger"`
 	State string `json:"state"`
@@ -42,7 +44,7 @@ func (s *Service) ListTurns(ctx context.Context, objectiveID string, limit int) 
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT t.id, t.session_id, p.id, p.handle, p.agent, p.role,
+	rows, err := s.db.QueryContext(ctx, `SELECT t.id, t.session_id, p.id, p.handle, p.agent, p.agent_id, p.agent_name, p.role,
 		t.trigger, t.state, t.started_at, t.ended_at, t.tool_failures, t.log_path, t.log_sha256
 		FROM turns t JOIN sessions se ON se.id = t.session_id
 		JOIN participants p ON p.id = se.participant_id
@@ -57,7 +59,7 @@ func (s *Service) ListTurns(ctx context.Context, objectiveID string, limit int) 
 			ended sql.NullString
 		)
 		if err := rows.Scan(&turn.TurnID, &turn.SessionID, &turn.ParticipantID,
-			&turn.Handle, &turn.Agent, &turn.Role, &turn.Trigger, &turn.State,
+			&turn.Handle, &turn.Agent, &turn.AgentID, &turn.Name, &turn.Role, &turn.Trigger, &turn.State,
 			&started, &ended, &turn.ToolFailures, &turn.LogPath, &turn.LogSHA256); err != nil {
 			_ = rows.Close()
 			return nil, err

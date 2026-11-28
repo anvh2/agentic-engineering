@@ -274,14 +274,14 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Principal, er
 	}
 	var p Principal
 	var expires string
-	err := s.db.QueryRowContext(ctx, `SELECT t.id, se.id, pa.id, pa.handle, pa.agent, pa.role, o.id, o.project_id, k.expires_at
+	err := s.db.QueryRowContext(ctx, `SELECT t.id, se.id, pa.id, pa.handle, pa.agent, pa.agent_id, pa.agent_name, pa.role, o.id, o.project_id, k.expires_at
 		FROM turn_tokens k
 		JOIN turns t ON t.id = k.turn_id
 		JOIN sessions se ON se.id = t.session_id
 		JOIN participants pa ON pa.id = se.participant_id
 		JOIN objectives o ON o.id = pa.objective_id
 		WHERE k.token_sha256 = ? AND k.revoked_at IS NULL AND t.state = 'running' AND se.state = 'active' AND o.status = 'active'`,
-		sha256Hex(token)).Scan(&p.TurnID, &p.SessionID, &p.ParticipantID, &p.Handle, &p.Agent, &p.Role, &p.ObjectiveID, &p.ProjectID, &expires)
+		sha256Hex(token)).Scan(&p.TurnID, &p.SessionID, &p.ParticipantID, &p.Handle, &p.Agent, &p.AgentID, &p.AgentName, &p.Role, &p.ObjectiveID, &p.ProjectID, &expires)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Principal{}, ErrUnauthenticated
 	}

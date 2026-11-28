@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"encoding/json"
+	"regexp"
 	"strings"
 )
 
@@ -30,10 +32,52 @@ func (s *Service) CreateProject(ctx context.Context, name, description string) (
 // ParticipantInput assigns an agent in a role. Workdir is the worktree the
 // participant's sessions run in; it must be absolute.
 type ParticipantInput struct {
-	Agent   string
-	Role    string
+	Agent string // native harness: claude or codex
+	AgentID string
+	Name string
+	Handle string
+	Role string
+	Model string
+	KnowledgeRoot string
+	Languages []string
+	Assigned []string
 	Workdir string
 }
+
+var participantHandlePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,39}package core
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"path/filepath"
+	"encoding/json"
+	"regexp"
+	"strings"
+)
+
+// Project is the business boundary.
+type Project struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// CreateProject is a trusted (desktop) operation.
+func (s *Service) CreateProject(ctx context.Context, name, description string) (Project, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return Project{}, invalid("project name is required")
+	}
+	p := Project{ID: newID("prj"), Name: name, Description: description}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO projects(id, name, description, created_at) VALUES (?, ?, ?, ?)`,
+		p.ID, p.Name, p.Description, s.ts())
+	return p, err
+}
+
+// ParticipantInput assigns an agent in a role. Workdir is the worktree the
+// participant's sessions run in; it must be absolute.
+)
 
 // TaskInput seeds a task. Agents may add none in M1; tasks come from the
 // Director or a planning turn through trusted calls.
@@ -90,9 +134,10 @@ func (s *Service) CreateObjective(ctx context.Context, in ObjectiveInput) (Objec
 			rec.ID, in.ProjectID, in.Title, in.Description, in.AcceptanceCriteria, budget, now, now); err != nil {
 			return err
 		}
+		seenAgentIDs := make(map[string]bool, len(in.Participants))
 		for _, p := range in.Participants {
 			if p.Agent != "claude" && p.Agent != "codex" {
-				return invalid("unknown agent %q", p.Agent)
+				return invalid("unsupported harness %q", p.Agent)
 			}
 			if strings.TrimSpace(p.Role) == "" {
 				return invalid("participant role is required")
@@ -100,17 +145,38 @@ func (s *Service) CreateObjective(ctx context.Context, in ObjectiveInput) (Objec
 			if !filepath.IsAbs(p.Workdir) {
 				return invalid("participant workdir must be absolute")
 			}
-			h := handleFor(p.Agent, p.Role)
+			h := handleFor(p.Agent, p.Role) // legacy sessions
+			if p.AgentID != "" {
+				if len(p.AgentID) > 128 || strings.TrimSpace(p.AgentID) != p.AgentID ||
+					strings.TrimSpace(p.Name) == "" || !participantHandlePattern.MatchString(p.Handle) {
+					return invalid("valid Team agent ID, name and handle are required")
+				}
+				if seenAgentIDs[p.AgentID] {
+					return invalid("Team agent %q assigned twice", p.AgentID)
+				}
+				seenAgentIDs[p.AgentID] = true
+				h = p.Handle
+				if !filepath.IsAbs(p.KnowledgeRoot) {
+					return invalid("Team agent knowledge source must be an absolute path")
+				}
+			}
 			if h == HandleHuman || h == HandleSystem {
 				return invalid("reserved handle %q", h)
 			}
 			if _, dup := rec.Participants[h]; dup {
 				return invalid("duplicate participant %q", h)
 			}
+			languages, err := json.Marshal(p.Languages)
+			if err != nil { return err }
+			assigned, err := json.Marshal(p.Assigned)
+			if err != nil { return err }
 			id := newID("par")
 			rec.Participants[h] = id
-			if _, err := tx.ExecContext(ctx, `INSERT INTO participants(id, objective_id, handle, agent, role, workdir, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				id, rec.ID, h, p.Agent, p.Role, p.Workdir, now); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO participants
+				(id, objective_id, handle, agent, role, workdir, created_at, agent_id, agent_name, model, knowledge_root, languages_json, assigned_json)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				id, rec.ID, h, p.Agent, p.Role, p.Workdir, now, p.AgentID, p.Name,
+				p.Model, p.KnowledgeRoot, string(languages), string(assigned)); err != nil {
 				return err
 			}
 		}
@@ -144,15 +210,15 @@ func (s *Service) GetObjective(ctx context.Context, p Principal) (ObjectiveView,
 	if err != nil {
 		return v, err
 	}
-	v.You = Participant{Handle: p.Handle, Agent: p.Agent, Role: p.Role}
-	rows, err := s.db.QueryContext(ctx, `SELECT handle, agent, role FROM participants WHERE objective_id = ? ORDER BY handle`, p.ObjectiveID)
+	v.You = Participant{Handle: p.Handle, Agent: p.Agent, AgentID: p.AgentID, Name: p.AgentName, Role: p.Role}
+	rows, err := s.db.QueryContext(ctx, `SELECT handle, agent, agent_id, agent_name, role FROM participants WHERE objective_id = ? ORDER BY handle`, p.ObjectiveID)
 	if err != nil {
 		return v, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var pt Participant
-		if err := rows.Scan(&pt.Handle, &pt.Agent, &pt.Role); err != nil {
+		if err := rows.Scan(&pt.Handle, &pt.Agent, &pt.AgentID, &pt.Name, &pt.Role); err != nil {
 			return v, err
 		}
 		v.Participants = append(v.Participants, pt)
