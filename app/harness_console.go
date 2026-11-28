@@ -31,9 +31,9 @@ func (h *HarnessConsole) BrowseRepository() (string,error) {if h.ctx==nil{return
 func (h *HarnessConsole) CurrentRepository() string {
  out,err:=exec.Command("git","rev-parse","--show-toplevel").Output();if err!=nil{return ""};return strings.TrimSpace(string(out))
 }
-func (h *HarnessConsole) RunPrompt(name,path,dir,prompt string) ConsoleResult { return h.runPrompt(name,path,dir,prompt,"","","") }
-func (h *HarnessConsole) RunIssuePrompt(name,path,dir,key,prompt string) ConsoleResult { if strings.TrimSpace(dir)==""||strings.TrimSpace(key)==""{return ConsoleResult{Error:"Issue repository and key required"}};return h.runPrompt(name,path,dir,prompt,key,"","") }
-func (h *HarnessConsole) runPrompt(name,path,dir,prompt,key,model,knowledgeDir string) ConsoleResult {
+func (h *HarnessConsole) RunPrompt(name,path,dir,prompt string) ConsoleResult { return h.runPrompt(name,path,dir,prompt,"","","",nil) }
+func (h *HarnessConsole) RunIssuePrompt(name,path,dir,key,prompt string) ConsoleResult { if strings.TrimSpace(dir)==""||strings.TrimSpace(key)==""{return ConsoleResult{Error:"Issue repository and key required"}};return h.runPrompt(name,path,dir,prompt,key,"","",nil) }
+func (h *HarnessConsole) runPrompt(name,path,dir,prompt,key,model,knowledgeDir string,onStart func()) ConsoleResult {
  if strings.TrimSpace(prompt)==""||len(prompt)>262144{return ConsoleResult{Error:"Prompt is empty or too long"}}
  parent:=h.ctx
  if parent==nil{parent=context.TODO()}
@@ -60,7 +60,11 @@ func (h *HarnessConsole) runPrompt(name,path,dir,prompt,key,model,knowledgeDir s
  var stderr bytes.Buffer
  stream:=&chatStream{name:name,emit:func(kind,body string){if h.ctx!=nil{runtime.EventsEmit(h.ctx,"native-chat",map[string]string{"name":name,"kind":kind,"body":body})}}}
  cmd.Stdout=stream;cmd.Stderr=&stderr
- err=cmd.Run()
+ err=cmd.Start()
+ if err==nil{
+  if onStart!=nil{onStart()}
+  err=cmd.Wait()
+ }
  stream.flush()
  result:=ConsoleResult{Output:stream.answer.String(),Usage:stream.usage};if key!=""{result.Output+="\n\nWorktree: "+dir}
  if ctx.Err()!=nil{result.Error="Prompt cancelled or timed out"}else if err!=nil{result.Error="Native CLI failed. Use interactive Terminal for diagnostics and approvals."; if diagnostic:=strings.TrimSpace(stderr.String());diagnostic!=""{if len(diagnostic)>2000{diagnostic=diagnostic[:2000]};result.Error+="\n"+diagnostic}}
@@ -93,8 +97,10 @@ func(h *HarnessConsole) RunAgentContextTest(name,path,model string,req Knowledge
  }
  initial:=contextPack.Events
  contextPack.Events=nil
- for _,event:=range initial{record(event)}
- record(KnowledgeTraceEvent{Kind:"execution.started"})
+ for _,event:=range initial{
+  if event.Kind=="knowledge.injected"{event.Kind="knowledge.selected"}
+  record(event)
+ }
  var b strings.Builder
  b.WriteString("Role: "+req.Role+"\n")
  b.WriteString("Knowledge document status: draft means not owner-approved; treat draft rules as provisional guidance, never as runtime authorization.\n")
@@ -114,12 +120,19 @@ func(h *HarnessConsole) RunAgentContextTest(name,path,model string,req Knowledge
    defer os.RemoveAll(temp)
    contextPack.Directory=temp
  }
- result:=h.runPrompt(name,path,"",b.String(),"",model,contextPack.Directory)
+ started:=func(){
+  for _,event:=range initial{
+   if event.Kind!="knowledge.injected"{continue}
+   record(event)
+  }
+  record(KnowledgeTraceEvent{Kind:"execution.started"})
+ }
+ result:=h.runPrompt(name,path,"",b.String(),"",model,contextPack.Directory,started)
  result.RunID=runID
  result.EstimatedContextTokens=int64((b.Len()+3)/4)
  if result.Usage!=nil{record(KnowledgeTraceEvent{Kind:"usage.reported",InputTokens:result.Usage.InputTokens,OutputTokens:result.Usage.OutputTokens,CacheReadTokens:result.Usage.CacheReadTokens,CacheWriteTokens:result.Usage.CacheWriteTokens})}
  outcome:="execution.completed";if result.Error!=""{outcome="execution.failed"}
- record(KnowledgeTraceEvent{Kind:outcome,Reason:result.Error})
+ record(KnowledgeTraceEvent{Kind:outcome})
  result.KnowledgeEvents=contextPack.Events
  return result
 }
