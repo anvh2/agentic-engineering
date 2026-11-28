@@ -36,9 +36,9 @@ export function renderEngineeringDNA(ctx: ViewContext): string {
  else {
   const base="https://github.com/anvh2/engineering-knowledge";
   const sourceURL=pack?.repository?pack.repository+(pack.ref&&pack.ref!=="main"&&pack.ref!=="inline-json"&&pack.ref!=="local"?"/tree/"+pack.ref:""):base;
-  body=\`<h1>Import / Export</h1><p>Import a knowledge pack from GitHub or paste a self-contained JSON manifest.</p>
+  body=`<h1>Import / Export</h1><p>Import a knowledge pack from GitHub or paste a self-contained JSON manifest.</p>
   <section>
-   \${pack?row("Connected source",pack.id+" · v"+pack.version+" · "+pack.status+" · "+entries.length+" documents"):""}
+   ${pack?row("Connected source",pack.id+" · v"+pack.version+" · "+pack.status+" · "+entries.length+" documents"):""}
    <div class="kn-docs" role="group" aria-label="Import source">
     <button type="button" class="kn-btn" data-knowledge-import-mode="github" aria-pressed="true">GitHub URL</button>
     <button type="button" class="kn-btn" data-knowledge-import-mode="json" aria-pressed="false">Paste JSON</button>
@@ -46,10 +46,10 @@ export function renderEngineeringDNA(ctx: ViewContext): string {
    <div data-knowledge-pane="github">
     <p>Paste a repository URL, a branch URL (/tree/...), or a release tag URL. Defaults to main.</p>
     <label for="knowledge-github-url">GitHub URL</label>
-    <input id="knowledge-github-url" value="\${esc(sourceURL)}" placeholder="https://github.com/owner/repo/tree/branch">
+    <input id="knowledge-github-url" value="${esc(sourceURL)}" placeholder="https://github.com/owner/repo/tree/branch">
     <div class="kn-actions" style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:12px">
-      \${btn("Browse branches & tags",'data-knowledge-refs')}
-      \${btn("Sync repository",'data-knowledge-sync')}
+      ${btn("Browse branches & tags",'data-knowledge-refs')}
+      ${btn("Sync repository",'data-knowledge-sync')}
     </div>
     <select id="knowledge-discovered-ref" aria-label="Choose discovered branch or tag" hidden style="width:100%;margin-top:12px"><option value="">Use ref from URL</option></select>
    </div>
@@ -57,11 +57,11 @@ export function renderEngineeringDNA(ctx: ViewContext): string {
     <p>Paste the full JSON pack, including each document's <code>content</code>. A path-only manifest must be imported through GitHub.</p>
     <label for="knowledge-json-input">JSON manifest</label>
     <textarea id="knowledge-json-input" rows="12" spellcheck="false" placeholder='{"schemaVersion":1,"id":"my-pack","version":"1.0.0","status":"draft","entries":[{"id":"sample","path":"skills/sample/SKILL.md","kind":"skills","content":"# Sample skill"}]}'></textarea>
-    <div class="kn-actions">\${btn("Import JSON",'data-knowledge-json')}</div>
+    <div class="kn-actions">${btn("Import JSON",'data-knowledge-json')}</div>
    </div>
    <p class="kn-muted" role="status" aria-live="polite" data-knowledge-source-status></p>
    <p class="kn-muted">GitHub import reads manifest.json at the repository root. Sources are read-only; draft content requires review before production use.</p>
-  </section>\`;
+  </section>`;
  }
  return `<style>
  .kn-page input,.kn-page textarea,.kn-page select{box-sizing:border-box;display:block;width:100%;padding:9px 10px;border:1px solid rgba(128,128,128,.25);border-radius:5px;background:rgba(128,128,128,.06);color:inherit;font:12px ui-monospace,monospace}.kn-page textarea{resize:vertical;min-height:190px}.kn-page label{display:block;font-size:12px;margin:12px 0 6px}.kn-page [data-knowledge-import-mode][aria-pressed="true"]{background:rgba(121,169,142,.16);border-color:rgba(121,169,142,.5)}
