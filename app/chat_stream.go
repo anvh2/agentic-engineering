@@ -17,6 +17,7 @@ type TokenUsage struct {
 
 type nativeChatEvent struct {
 	Type   string          `json:"type"`
+	Subtype string `json:"subtype"`
 	Result string          `json:"result"`
 	Usage  json.RawMessage `json:"usage"`
 	ModelUsage map[string]struct {
@@ -31,6 +32,8 @@ type nativeChatEvent struct {
 		ContentBlock struct{ Type, Name string } `json:"content_block"`
 	} `json:"event"`
 	Item struct {
+		ID string `json:"id"`
+		Status string `json:"status"`
 		Type string `json:"type"`
 		Text string `json:"text"`
 		Command string `json:"command"`
@@ -39,6 +42,10 @@ type nativeChatEvent struct {
 	} `json:"item"`
 	Message struct {
 		Content []struct {
+		ID string `json:"id"`
+		ToolUseID string `json:"tool_use_id"`
+		IsError bool `json:"is_error"`
+		Content json.RawMessage `json:"content"`
 			Type string `json:"type"`
 			Text string `json:"text"`
 			Name string `json:"name"`
@@ -81,6 +88,13 @@ func (s *chatStream) text(body string) {
 	}
 }
 
+func (s *chatStream) tool(id, label, status, output string) {
+	if s.emit == nil || id == "" { return }
+	if len(output) > 4096 { output = output[:4096] + " …" }
+	body, err := json.Marshal(map[string]string{"id":id,"label":label,"status":status,"output":output})
+	if err == nil { s.emit("tool", string(body)) }
+}
+
 func (s *chatStream) console(message string) {
 	if s.emit != nil && message != "" {
 		if len(message) > 4096 { message = message[:4096] + " …" }
@@ -89,8 +103,7 @@ func (s *chatStream) console(message string) {
 }
 
 func (s *chatStream) activity(message string) {
-	s.console(message)
-	if s.emit != nil {
+		if s.emit != nil {
 		s.emit("activity", message)
 	}
 }
@@ -143,7 +156,7 @@ func (s *chatStream) recordUsage(event nativeChatEvent) {
 func (s *chatStream) readClaudeEvent(event nativeChatEvent) {
 	switch event.Type {
 	case "system":
-		s.activity("Claude session initialized")
+		if event.Subtype == "init" { s.activity("Session initialized") }
 	case "stream_event":
 		if event.Event.Type == "message_start" {
 			s.activity("Receiving Claude response")
@@ -160,20 +173,20 @@ func (s *chatStream) readClaudeEvent(event nativeChatEvent) {
 		}
 	case "assistant":
 		for _, block := range event.Message.Content {
+			if block.Type == "text" && !s.partial { s.text(block.Text) }
 			if block.Type == "tool_use" {
-				s.console(block.Name + " " + strings.TrimSpace(block.Input.FilePath + " " + block.Input.Command + " " + block.Input.Pattern))
-			}
-		}
-		if !s.partial {
-			for _, block := range event.Message.Content {
-				if block.Type == "text" {
-					s.text(block.Text)
-				} else if block.Type == "tool_use" {
-					s.activity("Using " + block.Name)
-				}
+				s.tool(block.ID, block.Name+" "+strings.TrimSpace(block.Input.FilePath+" "+block.Input.Command+" "+block.Input.Pattern), "running", "")
 			}
 		}
 		s.partial = false
+	case "user":
+		for _, block := range event.Message.Content {
+			if block.Type == "tool_result" {
+				status := "completed"
+				if block.IsError { status = "failed" }
+				s.tool(block.ToolUseID, "", status, string(block.Content))
+			}
+		}
 	case "result":
 		if s.answer.Len() == 0 {
 			s.text(event.Result)
@@ -183,8 +196,12 @@ func (s *chatStream) readClaudeEvent(event nativeChatEvent) {
 
 func (s *chatStream) readCodexEvent(event nativeChatEvent) {
 	if event.Item.Type == "command_execution" {
-		if event.Type == "item.started" { s.console("$ " + event.Item.Command) }
-		if event.Type == "item.completed" { s.console(event.Item.AggregatedOutput) }
+		status := "running"
+		if event.Type == "item.completed" {
+			status = "completed"
+			if event.Item.Status == "failed" || (event.Item.ExitCode != nil && *event.Item.ExitCode != 0) { status = "failed" }
+		}
+		s.tool(event.Item.ID, event.Item.Command, status, event.Item.AggregatedOutput)
 	}
 	if event.Type == "item.completed" && event.Item.Type == "agent_message" {
 		if s.answer.Len() > 0 {
