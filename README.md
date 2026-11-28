@@ -19,16 +19,27 @@ wails dev
 
 See [app/README.md](app/README.md) and [V2 progress](docs/v2/PROGRESS.md). The desktop still includes demo data; native end-to-end execution is not verified. V1 documentation and source history are preserved; see [archive](docs/archive/v1/README-ARCHIVE.md).
 
-## Target knowledge runtime architecture
+## Knowledge Runtime (draft PR #77)
 
-The following is the intended architecture, not the current implementation. The knowledge loading contract will be finalized after engineering-knowledge is approved.
+The backend integration follows the authoritative [engineering-knowledge/main](https://github.com/anvh2/engineering-knowledge/tree/main) manifest v1.0.0. The Go runtime owns applicability, context selection, native process execution and evidence:
 
 ```mermaid
 flowchart TD
-    A[Agent Runtime] --> B[Bootstrap context: DNA, Role, Task, compact knowledge index]
-    B --> H[Native harness: Claude Code or Codex]
-    H -->|Native read/search tools| K[Local knowledge: Standards, Skills, References, Guides]
-    H --> E[Execution: response and runtime events]
+    A[Agent role + language + assignment] --> B[Go context selector]
+    K[Knowledge manifest: load / roles / languages / status] --> B
+    B --> C[Applicable bootstrap: DNA + role + standards]
+    B --> D[Scoped on-demand files and compact path index]
+    C --> H[Claude Code or Codex native CLI]
+    D -->|Native Read / Grep / Glob / read-only shell| H
+    H --> E[Actual stream usage and execution events]
+    B --> E
+    E --> F[Team Graph / Timeline / Context]
 ```
 
-Keep bootstrap compact and include applicable mandatory standards before execution. Read optional knowledge on demand through native tools, subject to verified sandbox permissions. No mandatory MCP or additional retrieval infrastructure. Runtime trace must distinguish selection, successful reads, prompt injection and observed native tool reads; estimated tokens are not billed usage. Session reuse, lazy loading and persistence are deferred until the knowledge contract is finalized.
+- Bootstrap document bodies are bounded by **24 KB per execution**. Skills, references, guides, project profiles and lessons are **not** injected wholesale; only explicitly assigned and applicable on-demand documents are available in a temporary run directory.
+- Eligibility comes from manifest `roles` and `languages` rather than file naming. Entry `status: draft` stays provisional even when the pack is `approved`.
+- Native CLI token usage is reported separately from size-derived context estimates. For Claude, invocation totals are aggregated from `result.modelUsage` when present; `result.usage` is only a result-level fallback.
+- Knowledge trace distinguishes document selection, native-process-start injection, on-demand availability and execution status. **Availability is not proof of a native document read**; observed individual read tracing is not yet implemented.
+- Execution evidence currently lives in memory. Session persistence, resume, direct tool-read evidence and an authenticated macOS Claude/Codex E2E remain open; do not describe this feature as production-complete.
+
+The work is isolated in draft [PR #77](https://github.com/anvh2/agentic-engineering/pull/77). No SQLite migrations, mandatory MCP knowledge adapter or unrelated collaboration changes are introduced by this PR.
