@@ -1,9 +1,11 @@
 // File-first source adapter. GitHub is cloned through the user's native Git credentials.
 // No MCP, network requests from the frontend, or model calls are required.
 export interface KnowledgeEntry {
+ group?:string; capabilities?:string[];
  id:string; title?:string; description?:string; path:string; kind:string; load?:string; status?:string; roles?:string[]; languages?:string[]; sha256?:string; bytes:number; tokens:number;
 }
 export interface KnowledgePack {
+ groups?:Array<{id:string;title:string}>;
  schemaVersion:number; id:string; version:string; status:string; language:string;
  entries:KnowledgeEntry[]; root:string; ref:string; repository?:string; manifest?:string;
 }
