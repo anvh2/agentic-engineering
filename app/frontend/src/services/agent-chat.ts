@@ -1,5 +1,5 @@
 import type {AppState,Agent} from "../types";
-import {knowledgeForAgent} from "./knowledge-source";
+import {storeKnowledgeResult} from "./knowledge-trace";
 import {runPrompt,consoles,stopPrompt} from "./harness-console";
 export const profiles=(state:AppState)=>[...new Set(["alex","emma","noah",...Object.keys(state.agentProfiles??{})])].map(id=>({id,name:id[0].toUpperCase()+id.slice(1),handle:id,role:id==="alex"?"Architect":id==="emma"?"Developer":"Reviewer",harness:(id==="emma"?"Codex":"Claude") as Agent,model:"Default",...state.agentProfiles?.[id]}));
 type Message={author:string;body:string};
@@ -16,10 +16,10 @@ export async function sendAgentChat(state:AppState,id:string,prompt:string,updat
  try{for(const a of targets){
  if(c.cancelled)break;
  if(consoles[a.harness].running){c.error=a.name+": harness busy";continue;}
- const entries=knowledgeForAgent(pack,a.role,state.agentKnowledge?.[a.id]??[]);
  c.active={harness:a.harness,name:a.name};
- const pending=runPrompt(a.harness,prompt,{root:pack.root,ids:entries.map(e=>e.id),model:a.model,author:a.name});
+ const pending=runPrompt(a.harness,prompt,{request:{agentId:a.id,root:pack.root,role:a.role,languages:state.agentLanguages?.[a.id]??[],assigned:state.agentKnowledge?.[a.id]??[],task:prompt},model:a.model,author:a.name});
  update();const r=await pending;c.active=undefined;
+ if(r)storeKnowledgeResult(a.id,r);
  if(r?.error)c.error=a.name+": "+r.error;
  if(r?.output)c.messages.push({author:a.name,body:r.output});
  update();
