@@ -15,6 +15,7 @@ function renderHarnesses(ctx:ViewContext):string {
 
 // Trace uses the connected local source manifest and this agent's assignments.
 // The playback is illustrative until native file-read events are connected.
+const expandedKnowledgeGroups=new Set<string>();
 function knowledgePreview(agent:{id:string;name:string;role:string;harness:string},ctx:ViewContext):string{
  const esc=escapeHTML;
  const pack=ctx.state.knowledgePack;
@@ -44,10 +45,13 @@ function knowledgePreview(agent:{id:string;name:string;role:string;harness:strin
  };
  const foundation=groupEntries(entries.filter(e=>e.phase===1));
  const local=groupEntries(entries.filter(e=>e.phase!==1));
- const groupHeight=112;
- const bootstrapBottom=170+Math.max(1,Math.ceil(foundation.length/2))*(groupHeight+10);
+ const groupKey=(g:typeof foundation[number],section:string)=>JSON.stringify([agent.id,section,g.docs[0].id]);
+ const groupHeight=(g:typeof foundation[number],section:string)=>expandedKnowledgeGroups.has(groupKey(g,section))?62+g.docs.length*62:52;
+ const rowHeights=Array.from({length:Math.ceil(foundation.length/2)},(_,i)=>Math.max(...foundation.slice(i*2,i*2+2).map(g=>groupHeight(g,"bootstrap")))+10);
+ const bootstrapBottom=170+Math.max(62,rowHeights.reduce((a,b)=>a+b,0));
  const harnessY=bootstrapBottom+48;
- const height=Math.max(harnessY+280,harnessY+local.length*(groupHeight+10)+75);
+ const localOffsets=local.map((_,i)=>local.slice(0,i).reduce((sum,g)=>sum+groupHeight(g,"local")+10,0));
+ const height=Math.max(harnessY+280,harnessY+local.reduce((sum,g)=>sum+groupHeight(g,"local")+10,0)+75);
  const label=(x:number,y:number,t:string)=>'<text x="'+x+'" y="'+y+'" fill="var(--subtle)" font-size="10">'+esc(t)+'</text>';
  const palette={agent:["#29263b","#a99ad9"],claude:["#352821","#d97757"],codex:["#27272a","#d4d4d8"],execution:["#242e3b","#79a7d7"],evidence:["#332e23","#c5ac72"]};
  const box=(x:number,y:number,w:number,h:number,t:string,sub:string,colors:string[])=>'<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" rx="7" fill="'+colors[0]+'" stroke="'+colors[1]+'"/><text x="'+(x+12)+'" y="'+(y+22)+'" fill="var(--ink)" font-size="13">'+esc(t)+'</text>'+label(x+12,y+40,sub);
@@ -55,12 +59,14 @@ function knowledgePreview(agent:{id:string;name:string;role:string;harness:strin
   const active=e.phase<=step;
   return '<rect data-knowledge-node="'+e.phase+'" class="'+(active&&e.phase===step?'knowledge-node-active':'')+'" x="'+x+'" y="'+y+'" width="'+w+'" height="52" rx="6" fill="'+(active?'#25332d':'var(--raised)')+'" stroke="'+(active?'#79a98e':'var(--edge)')+'"/><text x="'+(x+10)+'" y="'+(y+19)+'" fill="var(--ink)" font-size="12">'+esc(e.name.length>34?e.name.slice(0,31)+"…":e.name)+'</text><text data-knowledge-label="'+e.phase+'" data-tokens="'+e.tokens+'" x="'+(x+10)+'" y="'+(y+37)+'" fill="var(--subtle)" font-size="10">'+(active?'Loaded · '+e.tokens+' est. tokens':'Available')+'</text>';
  };
- const groupNode=(g:typeof foundation[number],x:number,y:number,w:number)=>{
+ const groupNode=(g:typeof foundation[number],x:number,y:number,w:number,section:string)=>{
   const phase=Math.min(...g.docs.map(e=>e.phase));
   const active=phase<=step;
   const tokens=g.docs.reduce((sum,e)=>sum+e.tokens,0);
-  return '<rect data-knowledge-node="'+phase+'" class="'+(active&&phase===step?'knowledge-node-active':'')+'" x="'+x+'" y="'+y+'" width="'+w+'" height="'+groupHeight+'" rx="6" fill="'+(active?'#25332d':'var(--raised)')+'" stroke="'+(active?'#79a98e':'var(--edge)')+'"/>'+
-   '<foreignObject x="'+(x+8)+'" y="'+(y+6)+'" width="'+(w-16)+'" height="'+(groupHeight-12)+'"><div xmlns="http://www.w3.org/1999/xhtml" style="height:100%;overflow:auto;color:var(--ink);font-size:12px"><details><summary style="cursor:pointer;color:var(--ink);padding:4px 0">'+esc(g.title)+'</summary><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 '+(w-24)+' '+(g.docs.length*62)+'" style="width:100%;display:block">'+g.docs.map((e,i)=>node(e,1,i*62,w-26)).join("")+'</svg></details><div style="font-size:10px;color:var(--subtle)">'+g.docs.length+' documents · '+tokens.toLocaleString()+' est. tokens</div></div></foreignObject>';
+  const key=groupKey(g,section),open=expandedKnowledgeGroups.has(key);
+  return '<rect data-knowledge-node="'+phase+'" class="'+(active&&phase===step?'knowledge-node-active':'')+'" x="'+x+'" y="'+y+'" width="'+w+'" height="'+groupHeight(g,section)+'" rx="6" fill="'+(active?'#25332d':'var(--raised)')+'" stroke="'+(active?'#79a98e':'var(--edge)')+'"/>'+
+   '<g data-knowledge-group-toggle="'+esc(key)+'" role="button" tabindex="0" aria-expanded="'+open+'" aria-label="'+esc(g.title)+'" style="cursor:pointer"><rect x="'+x+'" y="'+y+'" width="'+w+'" height="52" fill="transparent"/><text x="'+(x+10)+'" y="'+(y+19)+'" fill="var(--ink)" font-size="12">'+esc(g.title)+'</text>'+label(x+10,y+37,g.docs.length+' documents · '+tokens.toLocaleString()+' est. tokens')+'<text x="'+(x+w-18)+'" y="'+(y+19)+'" fill="var(--subtle)" font-size="12">'+(open?'⌃':'⌄')+'</text></g>'+
+   (open?g.docs.map((e,i)=>node(e,x+8,y+54+i*62,w-16)).join(""):"");
  };
  const edge=(phase:number,d:string)=>'<path data-knowledge-edge="'+phase+'" class="'+(phase===step?'knowledge-flow-active':'')+'" d="'+d+'" fill="none" stroke="'+(phase<=step?'#79a98e':'var(--edge)')+'" stroke-dasharray="'+(phase<=step?'none':'4 4')+'"/>';
  const graph='<div class="overflow"><svg role="img" aria-label="Target knowledge runtime flow, simulated preview" viewBox="0 0 660 '+height+'" style="width:100%;min-width:460px;display:block;background:radial-gradient(var(--edge) 1px,transparent 1px);background-size:15px 15px;border:1px solid var(--edge);border-radius:7px">'+
@@ -68,12 +74,12 @@ function knowledgePreview(agent:{id:string;name:string;role:string;harness:strin
  edge(1,"M330 76V99")+
  '<rect x="24" y="99" width="612" height="'+(bootstrapBottom-99)+'" rx="8" fill="#25332d22" stroke="#455c4e"/>'+
  label(40,120,"01 · BOOTSTRAP CONTEXT")+
- foundation.map((g,i)=>groupNode(g,40+(i%2)*294,134+Math.floor(i/2)*(groupHeight+10),286)).join("")+
+ foundation.map((g,i)=>groupNode(g,40+(i%2)*294,134+rowHeights.slice(0,Math.floor(i/2)).reduce((a,b)=>a+b,0),286,"bootstrap")).join("")+
  label(40,bootstrapBottom-20,"Task objective · Compact knowledge index (target)")+
  edge(2,"M330 "+bootstrapBottom+"V"+(harnessY-22)+"H157V"+harnessY)+
  label(24,harnessY-10,"02 · NATIVE HARNESS")+label(362,harnessY-10,"03 · LOCAL KNOWLEDGE")+
  box(24,harnessY,266,60,agent.harness==="Claude"?"Claude Code":agent.harness,"Native read / search tools (target)",agent.harness==="Claude"?palette.claude:palette.codex)+
- local.map((g,i)=>[...new Set(g.docs.map(e=>e.phase))].map(phase=>edge(phase,"M290 "+(harnessY+30)+"H340V"+(harnessY+i*(groupHeight+10)+26)+"H362")).join("")+groupNode(g,362,harnessY+i*(groupHeight+10),274)).join("")+
+ local.map((g,i)=>[...new Set(g.docs.map(e=>e.phase))].map(phase=>edge(phase,"M290 "+(harnessY+30)+"H340V"+(harnessY+localOffsets[i]+26)+"H362")).join("")+groupNode(g,362,harnessY+localOffsets[i],274,"local")).join("")+
  (!local.length?label(362,harnessY+25,"No assigned documents"):"")+
  edge(3,"M157 "+(harnessY+60)+"V"+(harnessY+94))+
  label(24,harnessY+86,"04 · EXECUTION")+
@@ -112,6 +118,22 @@ function assignmentPanel(ctx:ViewContext,id:string,role:string):string{
  inherited.map(e=>'<div class="team-assignment-row"><span title="'+esc(e.path)+'">'+esc(knowledgeDisplayName(e))+'</span><small>'+esc(e.status||"unknown")+'</small></div>').join("")+'</section>'+
  group("Skills",["skills"])+group("References",["references","guides","profiles","lesson","standards"])+
  '<section class="team-assignment"><strong>Source</strong><p class="team-note">'+esc(pack.id)+' · '+esc(pack.version)+' · '+esc(pack.status)+'</p><p class="team-note">Role and language applicability from manifest.json</p><button data-page="Engineering DNA">Open knowledge library</button></section>';
+}
+
+export function toggleKnowledgeGroup(target:Element,ctx:ViewContext):boolean {
+ const toggle=target.closest("[data-knowledge-group-toggle]");
+ if(!toggle)return false;
+ const key=toggle.getAttribute("data-knowledge-group-toggle");
+ const preview=toggle.closest("[data-knowledge-preview]");
+ const agent=profiles(ctx.state).find(a=>a.id===ctx.nav.detail);
+ if(!key||!preview||!agent)return false;
+ if(expandedKnowledgeGroups.has(key))expandedKnowledgeGroups.delete(key);else expandedKnowledgeGroups.add(key);
+ const template=document.createElement("template");
+ template.innerHTML=knowledgePreview(agent,ctx);
+ const next=template.content.querySelector("svg");
+ const current=preview.querySelector("svg");
+ if(next&&current){current.replaceWith(next);Array.from(next.querySelectorAll("[data-knowledge-group-toggle]")).find(el=>el.getAttribute("data-knowledge-group-toggle")===key)?.dispatchEvent(new Event("focus"));}
+ return true;
 }
 
 export function renderTeam(ctx:ViewContext):string {
