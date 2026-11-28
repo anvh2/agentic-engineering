@@ -138,9 +138,11 @@ func (r *Runner) Close(ctx context.Context) error {
 	// before owned processes stop would leave a background writer on a closed DB.
 	r.wg.Wait()
 	if err := ctx.Err(); err != nil {
-		// Timeout was exceeded only after all goroutines joined. Continue
-		// closing resources and report the deadline to the caller.
-		_ = r.endpoint.Close(context.WithoutCancel(ctx))
+		// Close transport with a fresh bounded cleanup context when the
+		// initiating shutdown context has already expired.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finishDeadline)
+		defer cancel()
+		_ = r.endpoint.Close(cleanupCtx)
 		_ = r.db.Close()
 		return err
 	}
